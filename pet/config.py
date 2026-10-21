@@ -1271,6 +1271,7 @@ class Config:
             "voice_chime_show_quote": True,  # 台词/歌词开关
             "voice_chime_custom_quotes_zh": "",  # 自定义中文台词/歌词（一行一条，留空回退内置库）
             "voice_chime_custom_quotes_en": "",  # 自定义英文台词/歌词（一行一条，留空回退内置库）
+            "chat_reply_voice_enabled": False,  # 助手回复朗读（默认关：主动打扰型；复用报时服务的音频通道）
             # 合成后端：edge（edge-tts，免 Key）/ mimo（小米 MiMo TTS，OpenAI 兼容接口，
             # API Key 存系统钥匙串）/ sapi（Windows 本地语音）/ doubao（豆包 2.0）；
             # 主后端失败时按 fallback 自动回退另一个。
@@ -1554,6 +1555,7 @@ class Config:
             "todo_reminder_lead_minutes",
             "todo_reminder_speak",
             "voice_chime_enabled",
+            "chat_reply_voice_enabled",
             "voice_chime_schedule",
             "voice_chime_custom_times",
             "voice_chime_voice",

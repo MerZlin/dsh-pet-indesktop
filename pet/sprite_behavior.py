@@ -1715,20 +1715,26 @@ class BehaviorController:
         drag 在 catalog 侧是**单值 name 或 None**（一个角色只有一段悬空
         素材），这里统一规范化成列表，调用方按池处理（F1）。
         """
-        cats = self._cats_cache.get(lib)
-        if cats is None:
-            names = getattr(lib, "names", None)
-            if callable(names):
-                raw = catalog.build_categories(
-                    names(), getattr(lib, "manifest", None),
-                    getattr(lib, "folder_map", None), getattr(lib, "folder_files", None))
-                cats = {k: list(raw[k]) for k in ("idles", "turns", "moves", "clicks", "acts")}
-                cats["drag"] = [raw["drag"]] if raw.get("drag") else []
-            else:
-                cats = {k: list(getattr(lib, k, None) or []) for k in ("idles", "turns", "moves", "clicks", "acts")}
-                drag = getattr(lib, "drag", None)
-                cats["drag"] = [drag] if drag else []
-            self._cats_cache[lib] = cats
+        # 缓存与库的「可播放集合」版本号绑定：`_prune_to_playable` 收敛时 stamp+1
+        # （首跑帧序列供给落地、角色包目录变化后的重扫都会触发），新段进池、
+        # 播不动的段出池；只按库对象缓存会让这些变化等到换库才生效（终审：装配层
+        # 缓存未失效）。
+        stamp = getattr(lib, "playable_stamp", 0)
+        cached = self._cats_cache.get(lib)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        names = getattr(lib, "names", None)
+        if callable(names):
+            raw = catalog.build_categories(
+                names(), getattr(lib, "manifest", None),
+                getattr(lib, "folder_map", None), getattr(lib, "folder_files", None))
+            cats = {k: list(raw[k]) for k in ("idles", "turns", "moves", "clicks", "acts")}
+            cats["drag"] = [raw["drag"]] if raw.get("drag") else []
+        else:
+            cats = {k: list(getattr(lib, k, None) or []) for k in ("idles", "turns", "moves", "clicks", "acts")}
+            drag = getattr(lib, "drag", None)
+            cats["drag"] = [drag] if drag else []
+        self._cats_cache[lib] = (stamp, cats)
         return cats
 
     def _body_geometry(self, sprite) -> tuple[float, float, float, float]:
@@ -1742,7 +1748,8 @@ class BehaviorController:
         lib = getattr(sprite, "library", None)
         cid = getattr(lib, "character_id", None)
         if cid:
-            box = catalog.character_body_box(cid)
+            # 几何绑定**在播库**的素材根（P1：与 pet_sprite 同口径）
+            box = catalog.character_body_box(cid, getattr(lib, "geometry_root", None))
             if box is not None:
                 s = float(getattr(sprite, "scale", 1.0))
                 x1, y1, x2, y2 = box

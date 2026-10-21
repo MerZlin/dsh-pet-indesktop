@@ -915,3 +915,107 @@ def test_play_clip_skips_scaled_cache_for_large_clip(tmp_path, monkeypatch):
     assert len(calls) == 2, "超过上限的素材不得钉进缓存"
     assert api.writes[1][1] == real_scale(big.data, 0.5)
     pool.clear()
+
+
+def test_pool_follows_default_device_change(tmp_path, monkeypatch):
+    """issue #315：默认设备一切换，整池关闭并按需在**新**设备重建句柄。
+
+    旧行为：切了默认输出，已开句柄继续往旧设备播（waveOutOpen 只在打开
+    那一刻解析默认设备）。现在每次播放前限频对一次默认端点 ID。
+    """
+    import pet.sound_winmm as sm
+
+    api = FakeWinmmApi()
+    pool = sm.WinmmSoundPool(api=api)
+    device = {"id": "{DEV-A}"}
+    monkeypatch.setattr(sm, "_default_render_device_id", lambda: device["id"])
+    wav = _pcm16_wav(tmp_path / "a.wav")
+    try:
+        assert pool.play(wav) is True
+        assert pool._device_id == "{DEV-A}"
+        handles_a = list(api.opened)
+        assert handles_a, "首次播放必须开过句柄"
+
+        device["id"] = "{DEV-B}"
+        real_now = sm.time.monotonic()
+        monkeypatch.setattr(sm.time, "monotonic", lambda: real_now + 100.0)  # 越过限频
+        assert pool.play(wav) is True
+        assert pool._device_id == "{DEV-B}"
+        assert api.closed == [h for (h, _c, _r) in handles_a], "旧句柄必须全部关闭"
+        assert len(api.opened) > len(handles_a), "新设备上要按需重开句柄"
+
+        # 查询失败（返回 None）：绝不动池
+        closed_before = list(api.closed)
+        monkeypatch.setattr(sm, "_default_render_device_id", lambda: None)
+        assert pool.play(wav) is True
+        assert api.closed == closed_before, "查询失败不许误清池"
+    finally:
+        pool.close()
+
+
+def test_pool_device_check_is_rate_limited(tmp_path, monkeypatch):
+    """默认设备对账限频：热路径不许每次播放都走 COM 往返。"""
+    import pet.sound_winmm as sm
+
+    api = FakeWinmmApi()
+    pool = sm.WinmmSoundPool(api=api)
+    calls = []
+    monkeypatch.setattr(sm, "_default_render_device_id", lambda: calls.append(1) or "{DEV-A}")
+    wav = _pcm16_wav(tmp_path / "b.wav")
+    try:
+        pool.play(wav)
+        pool.play(wav)
+        pool.play(wav)
+        assert len(calls) == 1, "限频窗口内只查一次"
+    finally:
+        pool.close()
+
+
+# ---------------------------------------------------------------------------
+# COM 计数配平：CoInitializeEx 只在真正初始化成功时才配平 CoUninitialize
+# ---------------------------------------------------------------------------
+
+class _FakeOle32:
+    """ole32 最小替身：CoCreateInstance 直接失败，让探测提前返回，
+    测试专注 CoInitializeEx/CoUninitialize 的计数配平。"""
+
+    def __init__(self, init_hr: int) -> None:
+        self.init_hr = init_hr
+        self.uninit_calls = 0
+
+    def CoInitializeEx(self, _reserved, _model):
+        return self.init_hr
+
+    def CoCreateInstance(self, *_args):
+        return -1  # 失败 → _default_render_device_id 提前 return None
+
+    def CoTaskMemFree(self, _ptr):
+        pass
+
+    def CoUninitialize(self):
+        self.uninit_calls += 1
+
+
+@pytest.mark.parametrize(
+    "init_hr, expected_uninit",
+    [
+        (0, 1),                    # S_OK：本函数初始化了 COM，必须配平
+        (1, 1),                    # S_FALSE：已初始化但计数仍 +1，必须配平
+        (-2147024634, 0),          # RPC_E_CHANGED_MODE(0x80010106 有符号)：不增加计数，禁止配平
+        (-1, 0),                   # 其它失败值：不增加计数，禁止配平
+    ],
+)
+def test_default_render_device_id_com_init_balance(monkeypatch, init_hr, expected_uninit):
+    """GUI 线程通常已是 STA：CoInitializeEx(MTA) 返回 RPC_E_CHANGED_MODE 且
+    **不**增加引用计数，此时无条件 CoUninitialize 会错扣别人的 COM 计数
+    （播放热路径每 2s 一次，是无 traceback native 崩溃的隐患）。"""
+    import pet.sound_winmm as sm
+
+    monkeypatch.setattr(sm.sys, "platform", "win32")
+    fake = _FakeOle32(init_hr)
+    monkeypatch.setattr(sm.ctypes, "windll", SimpleNamespace(ole32=fake), raising=False)
+    assert sm._default_render_device_id() is None
+    assert fake.uninit_calls == expected_uninit, (
+        f"CoInitializeEx 返回 {init_hr:#x} 时 CoUninitialize 应被调 {expected_uninit} 次，"
+        f"实调 {fake.uninit_calls} 次"
+    )

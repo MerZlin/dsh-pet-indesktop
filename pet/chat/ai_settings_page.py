@@ -113,6 +113,9 @@ class _AiSettingsPage(QWidget):
         self.web_search_results.setValue(int(web.max_results))
         self.web_search_fetch = ToggleSwitch()
         self.web_search_fetch.setChecked(bool(web.fetch_pages))
+        # 助手回复朗读（全局，默认关）：复用语音报时那条音频通道，只念对话不念歌词。
+        self.chat_reply_voice = ToggleSwitch()
+        self.chat_reply_voice.setChecked(bool(config.get("chat_reply_voice_enabled", False)))
         self.system_notify_check = ToggleSwitch()
         # 系统通知键：构造期快照无条件回写会把打开期间外部（老聊天设置即存入口
         # settings_dialog.py:437）对该键的改动静默回滚，所以只在用户实际拨动过
@@ -249,6 +252,14 @@ class _AiSettingsPage(QWidget):
                 "system_notifications_enabled", "系统通知",
                 "对话完成 / 生成失败 / 需要授权时，即使切走窗口也会在桌面右下角提醒。",
                 self.system_notify_check,
+            ),
+        ], self))
+        root.addWidget(SettingsSection("助手回复朗读", [
+            SettingRow(
+                "chat_reply_voice_enabled", "念出回复",
+                "AI 回复到达后按句念出来（含识图提问的回答）。与语音报时共用同一条"
+                "音频通道，因此不会叠音；只念对话内容，不念歌词与代码。默认关闭。",
+                self.chat_reply_voice,
             ),
         ], self))
         vision_rows = [
@@ -740,4 +751,5 @@ class _AiSettingsPage(QWidget):
         # 打开期间外部（老聊天设置即存）对该键的改动不被构造期快照回滚。
         if self._system_notify_dirty:
             self.config.set("system_notifications_enabled", self.system_notify_check.isChecked())
+        self.config.set("chat_reply_voice_enabled", self.chat_reply_voice.isChecked())
         self.config.set_chat_settings(self.settings)

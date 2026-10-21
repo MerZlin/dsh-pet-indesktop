@@ -226,8 +226,12 @@ exact breakpoint there; see `docs/agents/handoff.md`.
   `floor_faint_alpha`), the build-time material gate
   (`scripts/check_frameseq_bundle.py`, whose grade constants must stay
   byte-identical to the runtime ones), or when deciding whether frame-sequence
-  material must be re-generated. Current grade is `unblend-white-v5` (v3 is
-  history); v4 (hole restore) is suspended and is **not** a grade.
+  material must be re-generated. Current grade is `unblend-white-v6`
+  (**lossless**, 2026-10-20 起；v5/v3 are history — see
+  `docs/PR-REPORT-ASSET-ARCH-LOSSLESS-2026-10-19.md` for the lossless switch and
+  its bit-exact verification); v4 (hole restore) is suspended and is **not** a
+  grade. The runtime grade string, the build gate, and the material on disk must
+  all agree — a mismatch means the material is re-generated, never the constant.
 - Read `docs/ONEDIR_PACKAGING.md` §「随包分发的第三方二进制」and
   `docs/PR-REPORT-GAME-FPS-2026-10-11.md` when touching the game-FPS chain
   (`pet/game_fps.py`, `pet/fps_monitor.py`, `pet/island_fps.py`), the bundled

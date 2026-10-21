@@ -72,7 +72,7 @@ class FakeLibrary:
         self.moves: list = []
         self.clicks: list = []
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clip
 
 

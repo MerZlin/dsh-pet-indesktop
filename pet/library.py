@@ -31,7 +31,8 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QImage, QMovie
 
 from . import catalog
-from . import frameseq_provision
+from . import character_pack, frameseq_provision
+from . import pack_download
 from . import perfstats
 from . import webm_clip
 from .webm_clip import WebMClip, session_ending
@@ -233,12 +234,14 @@ class SharedCharacterMedia:
     __slots__ = (
         'character_id', 'asset_dir', 'manifest', 'name_paths', 'folder_map',
         'folder_files', 'media_type', 'no_mirror', 'move_strides', 'move_curves',
-        'paths', 'frameseq_dirs', 'priority', '_warm_owner', '__weakref__',
+        'paths', 'frameseq_dirs', 'priority', '_warm_owner', 'pack_index',
+        'pack_root', '__weakref__',
     )
 
     def __init__(self, *, character_id, asset_dir, manifest, name_paths,
                  folder_map, folder_files, media_type, no_mirror, move_strides,
-                 move_curves, paths, frameseq_dirs, priority):
+                 move_curves, paths, frameseq_dirs, priority,
+                 pack_index=None, pack_root=None):
         self.character_id = character_id
         self.asset_dir = asset_dir
         self.manifest = manifest
@@ -251,6 +254,10 @@ class SharedCharacterMedia:
         self.move_curves = move_curves
         self.paths = paths
         self.frameseq_dirs = frameseq_dirs
+        #: 角色包索引与根目录（无源角色包用）。终审 B3：兄弟库若拿不到它，
+        #: 任一库 rescan 先清空共享映射后就没法重新采纳 → 无源包在多宠下失效。
+        self.pack_index = pack_index
+        self.pack_root = pack_root
         self.priority = priority
         self._warm_owner = None
 
@@ -317,12 +324,32 @@ class MovieLibrary(QObject):
         if asset_dir is not None:
             self._asset_dir = Path(asset_dir)
         else:
+            # 启动期**先收口崩溃的安装事务，再解析素材根**（终审第七轮）：
+            # 顺序反了的话，活动包因「恢复前 core 暂时缺失」被指针复核回退，
+            # 本次启动就一直用回退包——即使随后恢复成功也换不回来；
+            # 没有内置兜底的角色还会因此起库失败。
+            for pending in catalog.character_pack_pending_dirs(self.character_id):
+                try:
+                    pack_download.recover_installs(pending)
+                except Exception:      # noqa: BLE001 - 收口失败不该挡住起库
+                    logging.getLogger(__name__).warning(
+                        '安装事务收口失败: %s', pending, exc_info=True)
             self._asset_dir = catalog.resolve_character_video_dir(self.character_id)
         self._manifest = None
         self.manifest = catalog.load_character_manifest(self.character_id, self._asset_dir)
         self.folder_map: dict[str, str] = {}
         self.folder_files: dict[str, list[str]] = {}
+        #: 「可播放集合」版本号：``_prune_to_playable`` 每收敛一次 +1。装配层
+        #: （行为层分类池缓存、窗口菜单缓存）据此判陈旧（首跑帧序列供给落地也会
+        #: 改变可播放集合，同样走这个版本号）。
+        self.playable_stamp: int = 0
         self._movies: dict[str, object] = {}
+        #: 每个已缓存 clip 是用哪个后端建的（frameseq / gif / webm）。只在显式
+        #: 绑定（``movie(..., allow_swap=True)``）时允许换代，见 movie() 的注释。
+        self._movie_kinds: dict[str, tuple[str, str]] = {}
+        #: 角色包索引（``character.json``）；None = 传统 webm/gif 素材树。
+        self._pack_index = None
+        self._pack_root = None
         self._paths: dict[str, Path] = {}
         # 帧序列世代映射（rescan_frameseq 填充；同角色共享同一份 dict 对象，
         # 见该方法"就地更新共享映射"说明）
@@ -411,6 +438,8 @@ class MovieLibrary(QObject):
         自己按需创建（播放态隔离）。
         """
         self._shared = shared
+        self._pack_index = getattr(shared, 'pack_index', None)
+        self._pack_root = getattr(shared, 'pack_root', None)
         self.manifest = shared.manifest
         self._manifest = shared.name_paths
         self.folder_map = shared.folder_map
@@ -439,6 +468,8 @@ class MovieLibrary(QObject):
             paths=self._paths,
             frameseq_dirs=self._frameseq_dirs,
             priority=self._build_priority_names(),
+            pack_index=self._pack_index,
+            pack_root=self._pack_root,
         )
         publish_shared_media(self._shared)
 
@@ -533,13 +564,60 @@ class MovieLibrary(QObject):
             return {}
         return data if isinstance(data, dict) else {}
 
+    def _find_pack_index(self):
+        """找角色包索引 ``character.json``：返回 ``(index, 根目录)`` 或 ``(None, None)``。
+
+        查找顺序（只认这两种布局，避免在共享父目录里误捡别的角色的索引）：
+        1. ``<asset_dir>/character.json``——包根目录 == 素材目录（开发树/自定义布局）；
+        2. ``<asset_dir 的父目录>/character.json``，但**仅当**素材目录名叫 ``videos``
+           （传统布局：``<角色>/videos/`` 与 ``<角色>/character.json`` 同级）。
+        """
+        # 先收口"有事务日志但没有索引"的版本目录（首次装包崩在合并前）：
+        # 不收口的话常规发现链看不见它，那次事务永远修不回来（终审 B3）。
+        for pending in catalog.character_pack_pending_dirs(self.character_id):
+            try:
+                pack_download.recover_installs(pending)
+            except Exception:      # noqa: BLE001 - 收口失败不该挡住起库
+                logging.getLogger(__name__).warning(
+                    '首次安装事务收口失败: %s', pending, exc_info=True)
+
+        for root in (self._asset_dir, self._asset_dir.parent):
+            if root is not self._asset_dir and self._asset_dir.name != 'videos':
+                continue
+            try:
+                index = character_pack.load_index(root)
+            except character_pack.IndexError_ as exc:
+                raise FileNotFoundError(
+                    f"角色包索引非法（{root / character_pack.INDEX_NAME}）: {exc}"
+                ) from exc
+            if index is not None:
+                return index, root
+        return None, None
+
     def _load_all(self) -> None:
         if self._manifest is None:
+            index, index_root = self._find_pack_index()
+            self._pack_index = index
+            self._pack_root = index_root
+            if index is not None:
+                # 崩溃残留的安装事务先收口：否则那段素材会以 ``X.__old__`` 的
+                # 形态缺席（动画凭空消失）直到下一次安装才被修 —— 终审点名的
+                # 「无启动恢复」。常规启动只多一次 is_file()。
+                try:
+                    recovered = pack_download.recover_installs(index_root)
+                except Exception:      # noqa: BLE001 - 素材收口失败不该挡住起库
+                    logging.getLogger(__name__).warning(
+                        '启动期安装事务收口失败（按未收口继续）', exc_info=True)
+                    recovered = {}
+                if recovered.get('merged'):
+                    self._pack_index = character_pack.load_index(index_root) or index
+                self._apply_pack_index()
             # 自动扫描该形象目录下的 webm 或 gif，支持不同角色有不同动作集
-            if not self._asset_dir.is_dir():
+            elif not self._asset_dir.is_dir():
                 raise FileNotFoundError(
                     f"角色素材目录不存在: {self._asset_dir}（character_id={self.character_id}）"
                 )
+        if self._manifest is None:
             webm_files = sorted(self._asset_dir.rglob('*.webm'))
             gif_files = sorted(self._asset_dir.rglob('*.gif'))
             files = webm_files + gif_files
@@ -566,7 +644,11 @@ class MovieLibrary(QObject):
 
         missing: list[str] = []
         resolved: dict[str, Path] = {}
+        index_names = ({c.name for c in self._pack_index.clips}
+                       if self._pack_index is not None else set())
         for name, fname in self._manifest.items():
+            if name in index_names:      # 无源：内容是帧序列目录，不在这里解析
+                continue
             path = self._asset_dir / fname
             if not path.exists():
                 missing.append(f"{name}: {path}")
@@ -579,6 +661,11 @@ class MovieLibrary(QObject):
         self._paths = resolved
         # 帧序列化 B 档（热集）映射：见 rescan_frameseq()
         self.rescan_frameseq()
+        # 动作分类必须与"可播放"取交集（终审 B1）：``folder_files`` 直接来自索引
+        # 声明时会包含**不可播放**的条目（分件未装、校验不过、世代缺失），
+        # 而 ``catalog.build_categories`` 会把它原样搬进动作池 —— 于是调度器可能
+        # 选中一个播不动的动画。``names()`` 是唯一可播放口径，这里跟着它收敛。
+        self._prune_to_playable()
 
         # 高优先级 clip 必须在主线程创建（QObject 线程亲和），再交给后台线程预热；
         # 低优先级由 QTimer 在主线程触发 _warm_low_priority_background 创建。
@@ -588,6 +675,62 @@ class MovieLibrary(QObject):
         # 预热线程由应用层在 UI 就绪后统一调度（schedule_high_priority_warm /
         # schedule_low_priority_warm），避免库构造时在测试/非事件循环环境里
         # 凭空拉起 ffmpeg 预热线程。
+
+    def _apply_pack_index(self) -> None:
+        """把角色包索引铺成 manifest/分类（**唯一实现**，初始加载与刷新共用）。
+
+        无源视频的角色包：动画以完好帧序列随包下发，目录里没有 webm/gif。
+        manifest 的"相对路径"一栏改指帧序列目录，分类直接取索引声明
+        （不能从路径首段推——那一层叫 anim，不是 idle/click）。
+        """
+        index = self._pack_index
+        if index is None:
+            return
+        self._manifest = {c.name: c.dir for c in index.clips}
+        self.folder_map = {c.name: c.category for c in index.clips}
+        self.folder_files = index.categories()
+        self.media_type = 'frameseq'
+
+    def _prune_to_playable(self) -> None:
+        """把动作分类收敛到「可播放」集合（终审 B1）。
+
+        ``folder_files`` 来自索引声明时会含不可播放条目（分件未装、校验不过、
+        世代缺失），而 ``catalog.build_categories`` 会原样搬进动作池/菜单。
+        世代就绪后（首跑帧序列供给、库重扫）也要再调一次，否则新素材不进池。
+        """
+        playable = set(self.names())
+        pruned = {}
+        for folder, names in self.folder_files.items():
+            kept = [n for n in names if n in playable]
+            if kept:
+                pruned[folder] = kept
+        self.folder_files = pruned
+        self.folder_map = {n: f for f, names in pruned.items() for n in names}
+        # 版本号 +1：装配层的分类池缓存（sprite_behavior._categories）据此重建
+        self.playable_stamp += 1
+        self._sync_shared_media()
+
+    def _sync_shared_media(self) -> None:
+        """把刷新后的表写回共享视图（后建的同角色库才看得到新装的段）。
+
+        刷新走「重读索引 → 重扫世代 → 重新收敛」，manifest/paths/frameseq_dirs
+        都换成新对象；共享视图若还挂着旧对象，之后新建的兄弟库会采用一份陈旧表
+        —— 多宠下表现为「新装的段只在一个宠物身上生效」（终审：缓存未失效）。
+        已被注册表取代的旧视图不再回写，避免把新表覆盖成旧表。
+        """
+        shared = getattr(self, '_shared', None)
+        if shared is None:
+            return
+        if lookup_shared_media(self.character_id, self._asset_dir) is not shared:
+            return
+        shared.manifest = self.manifest
+        shared.name_paths = self._manifest
+        shared.folder_map = self.folder_map
+        shared.folder_files = self.folder_files
+        shared.media_type = self.media_type
+        shared.paths = self._paths
+        shared.frameseq_dirs = self._frameseq_dirs
+        shared.pack_index = self._pack_index
 
     def _register_high_priority(self) -> None:
         """建高优先级（瞬时交互核）clip 并 pinned 其首帧。
@@ -628,7 +771,10 @@ class MovieLibrary(QObject):
 
     def _build_priority_names(self) -> tuple[list[str], list[str]]:
         """按本库自己的 manifest/目录分类算出优先级（只在本库为首个库时跑）。"""
-        names = list(self._manifest)
+        # 预热/优先级名单必须以**可播放**名为输入（终审 B1）：用 `_manifest`
+        # 会把索引里声明但播不动的段也送进分类，随后 `_register_high_priority`
+        # 调 `movie()` 直接抛 KeyError，整库建不起来。
+        names = list(self.names())
         cats = catalog.build_categories(
             names,
             # 与运行分类（window.py 建 cats）同一 manifest 口径：外部角色包
@@ -1414,7 +1560,7 @@ class MovieLibrary(QObject):
         dirs.clear()
         frameseq_root = self._asset_dir.parent / 'frameseq'
         generations = frameseq_provision.scan_generations(frameseq_root)
-        if not generations:
+        if not generations and self._pack_index is None:
             return
         for name in self._manifest:
             source = self._paths.get(name)
@@ -1428,8 +1574,34 @@ class MovieLibrary(QObject):
                 source, self._asset_dir, frameseq_root)
             if generation is not None:
                 dirs[name] = generation
+        # 无源视频的角色包：采纳身份来自 character.json 的 content_sha + 帧数契约，
+        # 不存在"源 webm 的 sha256"可算——这是新增支持的路径（见
+        # .scratch/asset-arch/RESOURCE-CONTRACT.md）。
+        if self._pack_index is not None:
+            root = Path(self._pack_root or self._asset_dir)
+            for entry in self._pack_index.clips:
+                clip_dir = root / entry.dir
+                if entry.name in dirs or not clip_dir.is_dir():
+                    continue
+                meta = frameseq_provision.read_meta(clip_dir)
+                names = sorted(p.name for p in clip_dir.glob("f_*.webp"))
+                ok, _why = character_pack.admissible(
+                    entry, meta, names,
+                    encoder=frameseq_provision.ENCODER_DESC,
+                    fps=float(self._pack_index.fps),
+                    canvas=self._pack_index.canvas)
+                if not ok:
+                    # 失败关闭：违规目录记一条 warning 就不采纳（不许把旧档/错链
+                    # 产物交给无损播放器，也不许让一条坏 clip 掀翻整库）。
+                    logging.getLogger(__name__).warning(
+                        "角色包 clip 未通过采纳闸门: %s (%s)", entry.name, _why)
+                    continue
+                dirs[entry.name] = clip_dir
         if dirs:
             frameseq_provision.protect_generations(dirs.values())
+        # 重扫会改变"哪些段能播"，动作池必须跟着收敛——供给收尾直接调本方法，
+        # 不经过 `_load_all`（终审 B1）。
+        self._prune_to_playable()
 
     # ------------------------------------------------------------ 首跑帧序列供给
     def maybe_provision_frameseq(self) -> None:
@@ -1548,16 +1720,47 @@ class MovieLibrary(QObject):
             frameseq_provision.lock_retry_delay_ms(self._frameseq_lock_retries),
             self, self._start_frameseq_provision)
 
-    def movie(self, name: str):
+    def _movie_kind(self, name: str) -> tuple[str, str]:
+        """这个名字**现在**该用哪个后端，以及它的**资源身份**。
+
+        终审 B5：只比 ``frameseq/webm/gif`` 类型是不够的——两个不同世代
+        （不同目录、不同内容）的 FrameSeqClip 类型相同，永远判成"没变"，
+        于是帧序列升级/重出后播放器永远停在旧世代。身份里必须带资源本身。
+        """
+        if name in self._frameseq_dirs:
+            return ("frameseq", str(self._frameseq_dirs[name]))
+        path = self._paths.get(name)
+        if path is not None:
+            kind = "gif" if path.suffix.lower() == ".gif" else "webm"
+            return (kind, str(path))
+        return ("webm", "")
+
+    def movie(self, name: str, *, allow_swap: bool = False):
         """按需创建并缓存 clip（懒加载）：启动时只创建实际用到/预热的动画。
 
         这样多开实例不会在启动瞬间一次性 new 出 91 个播放器对象；
         随机动作池由 _warm_low_priority_background 在启动后 2s 补全。
 
+        **后端切换只在显式绑定时发生**（``allow_swap=True``，由
+        ``PetSprite.bind_clip`` 传入——它调用本方法前已经 ``stop()`` 掉旧 clip，
+        所以那是安全的"播放边界"）。回归背景：``_movies`` 一旦缓存了 ``WebMClip``，
+        帧序列/下载分件后来就绪也永远返回旧对象，"新后端已就绪"形同虚设；反过来
+        在后台偷偷替换会把正在播的对象的底座抽掉。因此：非绑定调用（灵动岛取
+        缩略图、菜单读帧数/时长）**永远拿到原对象**，只有绑定才允许换代。
+
         新建 clip = 动画切换点：顺手回收兄弟 clip 的残留解码帧
         （release_idle_frames，内存瘦身第一刀的事件驱动触发点）。回收只动
         "不在播且 reader 已退出"的 clip，正在播的对象与本 clip 都不受影响。
         """
+        expected = self._movie_kind(name)
+        cached = self._movies.get(name)
+        if cached is not None and allow_swap and self._movie_kinds.get(name) != expected:
+            self._retire_clip(cached)
+            self._movies.pop(name, None)
+            self._movie_kinds.pop(name, None)
+            cached = None
+        if cached is not None:
+            return cached
         if name not in self._movies:
             try:
                 self.release_idle_frames()
@@ -1568,13 +1771,50 @@ class MovieLibrary(QObject):
                 # 热集帧序列：无 ffmpeg 进程/spawn 冷启动/看门狗（B 档）
                 from .frameseq_clip import FrameSeqClip
                 self._movies[name] = FrameSeqClip(frameseq_dir, parent=self)
-                return self._movies[name]
-            path = self._paths[name]
-            if path.suffix.lower() == '.gif':
-                self._movies[name] = GifClip(path, parent=self)
             else:
-                self._movies[name] = WebMClip(path, parent=self)
+                path = self._paths.get(name)
+                if path is None:
+                    # 索引声明了这个 clip、但对应分件还没装（或帧序列未通过校验）：
+                    # 报明确状态，绝不静默造一个空 clip 播不动。
+                    raise KeyError(
+                        f"clip 未安装或帧序列不可用: {name!r}"
+                        f"（character_id={self.character_id}）")
+                if path.suffix.lower() == '.gif':
+                    self._movies[name] = GifClip(path, parent=self)
+                else:
+                    self._movies[name] = WebMClip(path, parent=self)
+            self._movie_kinds[name] = expected
         return self._movies[name]
+
+    @staticmethod
+    def _retire_clip(clip: object) -> None:
+        """安全退役一个**已停止**的旧 clip：停摆 + 交还 Qt 生命周期。
+
+        调用方（``PetSprite.bind_clip``）在取新对象前已经 ``stop()`` 过旧 clip
+        并断开信号连接；这里只兜底再停一次，绝不在仍连接着信号时删对象。
+        """
+        if clip is None:
+            return
+        # 顺序**必须** close 优先：``FrameSeqClip.close()`` 里是"停止接收 → 队列屏障
+        # → 所属线程销毁 → 排空确认"的完整协议，``stop()`` 只是停表。旧写法
+        # ("stop","close","cleanup") 且首个可调用即 break —— 而每个 clip 都有
+        # ``stop()``，于是 ``close()`` 永远不执行，worker 留在共享线程上（终审 B4）。
+        for step in ("close", "cleanup", "stop"):
+            fn = getattr(clip, step, None)
+            if not callable(fn):
+                continue
+            try:
+                fn()
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "退役旧 clip 时 %s() 失败", step, exc_info=True)
+            break
+        later = getattr(clip, "deleteLater", None)
+        if callable(later):
+            try:
+                later()
+            except Exception:
+                pass
 
     def clip_path(self, name: str) -> Path | None:
         """只取素材路径、不创建 clip——供工作线程解码缩略图用。
@@ -1590,8 +1830,27 @@ class MovieLibrary(QObject):
     def duration(self, name: str) -> float:
         return self.movie(name).duration()
 
+    @property
+    def geometry_root(self):
+        """几何（body_box/head_box）的取数根：包根或素材目录。
+
+        终审 P1：几何必须绑定**正在播放的库**的素材根——「使用这套」只改
+        下次启动的指针，在播的库还在旧根上，框必须跟着旧根走，不能跟着
+        磁盘上的下一次选择变。
+        """
+        return self._pack_root if self._pack_root is not None else self._asset_dir
+
     def names(self) -> list[str]:
-        return list(self._paths)
+        """当前**可播放**的 clip 名。
+
+        回归（终审 B1）：原实现返回 ``list(self._paths)``，而无源角色包的
+        ``_paths`` 是空的 —— 于是应用侧拿到零个动画，"建库成功但没东西可播"。
+        口径必须是"声明了 **且** 素材可用"：帧序列已采纳（``_frameseq_dirs``）
+        或有源文件（``_paths``）。两者都没有的（例如 extra 分件未安装、帧数不符）
+        一律不进动作池，避免行为调度选到它之后再抛 KeyError。
+        """
+        return [n for n in self._manifest
+                if n in self._frameseq_dirs or n in self._paths]
 
     def movies(self) -> dict[str, object]:
         """当前已创建（已加载）的 clip 映射，供窗口层连接信号。"""

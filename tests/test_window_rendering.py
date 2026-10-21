@@ -571,7 +571,7 @@ class _RebuildLibrary:
     def movies(self):
         return dict(self._clips)
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clips[name]
 
     def frames(self, name):

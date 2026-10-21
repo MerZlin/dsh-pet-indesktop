@@ -84,7 +84,12 @@ def _now() -> float:
 
 # 预取线程进程级共享（每 clip 一个 QThread 的方案被实机否决：clip 销毁时
 # 运行中的 QThread 触发 access violation——tests/test_move_sync.py 实崩）。
-_shared_thread: QThread | None = None
+#: 预取线程池大小。**为什么不是 1**：多只宠同时播放时，所有帧解码排在一条线程上，
+#: 实测 8 只同时在线会出现上千次「到期帧未就绪」（缺帧）；3 条线程能把排队摊开。
+#: 这是唯一保留的性能改动（其余调优实测无效，已回退）。
+PREFETCH_THREADS = 3
+_shared_threads: "list[QThread]" = []
+_shared_rr = [0]
 
 
 def _shutdown_shared_prefetch() -> None:
@@ -93,23 +98,30 @@ def _shutdown_shared_prefetch() -> None:
     不收口则解释器退出时 QApplication 先于运行中的 QThread 销毁，
     Windows 上直接 0xC0000409 fail-fast（pytest 进程尾崩实测）。幂等：
     收口后可由 _shared_prefetch_thread() 重建（测试反复建 QApplication）。
+    顺序（三线程后终审）：先**全部** quit，再**逐个** wait——逐条 quit+wait
+    串行会把最坏等待从 2s 拉到 2s×N（慢解码正堵在一条上时，后面的线程
+    连 quit 都没收到）；wait 失败记日志，不再静默吞掉。
     """
-    global _shared_thread
-    thread, _shared_thread = _shared_thread, None
-    if thread is not None and thread.isRunning():
-        thread.quit()
-        thread.wait(2000)
+    threads, _shared_threads[:] = list(_shared_threads), []
+    for thread in threads:
+        if thread is not None and thread.isRunning():
+            thread.quit()
+    for thread in threads:
+        if thread is not None and thread.isRunning() and not thread.wait(2000):
+            logging.getLogger(__name__).warning(
+                'frameseq 预取线程退出超时（%s），按既有纪律不硬杀', thread.objectName())
 
 
 def _shared_prefetch_thread() -> QThread:
     """懒建进程级预取线程（clip 只挂 worker，不拥有线程）。"""
-    global _shared_thread
-    if _shared_thread is not None and not _shared_thread.isRunning():
-        _shared_thread = None  # 已被退出收口：按懒建语义重建
-    if _shared_thread is None:
-        _shared_thread = QThread()
-        _shared_thread.setObjectName("frameseq-prefetch-shared")
-        _shared_thread.start()
+    live = [th for th in _shared_threads if th is not None and th.isRunning()]
+    if len(live) != len(_shared_threads):
+        _shared_threads[:] = live          # 已被退出收口：按懒建语义重建
+    while len(_shared_threads) < PREFETCH_THREADS:
+        thread = QThread()
+        thread.setObjectName(f"frameseq-prefetch-{len(_shared_threads)}")
+        thread.start()
+        _shared_threads.append(thread)
         app = QCoreApplication.instance()
         if app is not None:
             # 生产路径：exec() 退出时 aboutToQuit 收口
@@ -118,7 +130,8 @@ def _shared_prefetch_thread() -> QThread:
         # 兜底：无 exec() 的上下文（pytest/脚本——QApplication 析构不发
         # aboutToQuit），atexit 在模块拆除前收口（幂等，注册一次即安）
         atexit.register(_shutdown_shared_prefetch)
-    return _shared_thread
+    _shared_rr[0] = (_shared_rr[0] + 1) % len(_shared_threads)
+    return _shared_threads[_shared_rr[0]]
 
 
 class _FramePaths:

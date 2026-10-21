@@ -1,0 +1,97 @@
+{
+ "schema": 1,
+ "packs": [
+  {
+   "id": "shenshen",
+   "name": "shenshen",
+   "variant": "base",
+   "version": "2.0.0",
+   "canvas": [
+    640,
+    360
+   ],
+   "pipeline": "white-v6",
+   "format": "lossless-frame-v1",
+   "app_min": "4.4.0",
+   "parts": [
+    {
+     "name": "core",
+     "bytes": 144352172,
+     "unpacked_bytes": 144352172,
+     "sha256": "64d81c15c2ea85e1ae214490502504db084a650723056afa1d010399383e1c8c",
+     "urls": [
+      "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.core.zip",
+      "https://mirror.ghproxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.core.zip",
+      "https://gh-proxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.core.zip"
+     ]
+    },
+    {
+     "name": "extra1",
+     "bytes": 265855161,
+     "unpacked_bytes": 265855161,
+     "sha256": "41bb7b8761b7bb460c2f1f3c1da2edd70ecda77d11813936e0e4a90782f2f407",
+     "urls": [
+      "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra1.zip",
+      "https://mirror.ghproxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra1.zip",
+      "https://gh-proxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra1.zip"
+     ]
+    },
+    {
+     "name": "extra2",
+     "bytes": 258613029,
+     "unpacked_bytes": 258613029,
+     "sha256": "07e7f1e2bdf1573f37cf58b2f8844e7d5aa18b2624ac0ba332e9036c40b5ea30",
+     "urls": [
+      "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra2.zip",
+      "https://mirror.ghproxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra2.zip",
+      "https://gh-proxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra2.zip"
+     ]
+    },
+    {
+     "name": "extra3",
+     "bytes": 260938102,
+     "unpacked_bytes": 260938102,
+     "sha256": "19d7aee163f3c3159f3a8c6132cde48559960d0d9364223e86b808b5d07151fa",
+     "urls": [
+      "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra3.zip",
+      "https://mirror.ghproxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra3.zip",
+      "https://gh-proxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra3.zip"
+     ]
+    },
+    {
+     "name": "extra4",
+     "bytes": 266887825,
+     "unpacked_bytes": 266887825,
+     "sha256": "ef8a7802a0efc41d725e481037187fb969c6147f62e08eb74d62b728f6b5a92d",
+     "urls": [
+      "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra4.zip",
+      "https://mirror.ghproxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra4.zip",
+      "https://gh-proxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra4.zip"
+     ]
+    },
+    {
+     "name": "extra5",
+     "bytes": 259818896,
+     "unpacked_bytes": 259818896,
+     "sha256": "ab976dee035c7b8514761277aacfaf9d660b4c536ee357871eca66014eb77243",
+     "urls": [
+      "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra5.zip",
+      "https://mirror.ghproxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra5.zip",
+      "https://gh-proxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra5.zip"
+     ]
+    },
+    {
+     "name": "extra6",
+     "bytes": 31966739,
+     "unpacked_bytes": 31966739,
+     "sha256": "505eb96e99260dac10617b7879f48d0d77f67a8612581802f909b43a85af2434",
+     "urls": [
+      "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra6.zip",
+      "https://mirror.ghproxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra6.zip",
+      "https://gh-proxy.com/https://github.com/MerZlin/dsh-pet-indesktop/releases/download/assets-v1/shenshen-2.0.0-base-640x360.extra6.zip"
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -1323,6 +1323,11 @@ class AppShell:
         self.voice_chime_service = None
         if self._chime_wanted():
             self._ensure_chime_service()
+        # 助手回复朗读：只是音频通道的一个使用者（不新起通道），默认关。
+        # 关着时不建对象、不订阅 ChatService、不建定时器（与 v4.3.0 行为一致）。
+        self.chat_reply_reader = None
+        if self._chat_reply_voice_wanted():
+            self._ensure_chat_reply_reader()
         # 节日提醒：进程级单例（多窗共用调度器）。**默认关闭** → 不创建服务；
         # 由用户在设置里开启后 _sync_festival_service 才创建并跑 30s tick。
         self.festival_service = None
@@ -1671,15 +1676,16 @@ class AppShell:
         )
 
     def _chime_wanted(self) -> bool:
-        # 报时自身开启，或节日语音 / 点击自言自语朗读 / 抽签语音 / 待办语音播报需要
-        # 这条音频通道（五者共用一套合成与播放，因此"通道是否存在"取决于其中之一
-        # 是否需要）。
+        # 报时自身开启，或节日语音 / 点击自言自语朗读 / 抽签语音 / 待办语音播报 /
+        # 助手回复朗读需要这条音频通道（六者共用一套合成与播放，因此"通道是否存在"
+        # 取决于其中之一是否需要）。
         return (
             bool(self.config.get("voice_chime_enabled", False))
             or self._festival_speak_wanted()
             or self._self_talk_speak_wanted()
             or self._divination_speak_wanted()
             or self._todo_speak_wanted()
+            or self._chat_reply_voice_wanted()
         )
 
     def _ensure_chime_service(self):
@@ -1698,6 +1704,64 @@ class AppShell:
         if service is None:
             return False
         return service.should_speak_at(chime_slot)
+
+    # ------------------------------------------------- 功能门控（助手回复朗读）
+    def _chat_reply_voice_wanted(self) -> bool:
+        # 默认关（主动打扰型功能）：关着时不建通道、不订阅、不建定时器，
+        # 行为与 v4.3.0 完全一致。
+        return bool(self.config.get("chat_reply_voice_enabled", False))
+
+    def _ensure_chat_reply_reader(self):
+        """懒创建回复朗读器（进程级单例：多窗共用一份「回复完成」订阅）。"""
+        if getattr(self, "chat_reply_reader", None) is None:
+            from .chat_reply_voice import ChatReplyReader
+
+            reader = ChatReplyReader(
+                speak=self._speak_chat_reply,
+                channel_idle=self._chat_reply_channel_idle,
+                enabled=self._chat_reply_voice_wanted,
+            )
+            reader.start()
+            self.chat_reply_reader = reader
+        return self.chat_reply_reader
+
+    def _release_chat_reply_reader(self) -> None:
+        """先摘订阅、再由调用方停通道：收口期不再往队列里塞新句子。"""
+        reader = getattr(self, "chat_reply_reader", None)
+        if reader is None:
+            return
+        self.chat_reply_reader = None
+        try:
+            reader.stop()
+        except Exception:
+            logging.exception("停止助手回复朗读失败")
+
+    def _chat_reply_channel_idle(self) -> bool:
+        """注入给朗读器的通道占用判据。
+
+        通道可能尚未创建（报时等全关、只有回复朗读要用）：此时返回 True，让
+        ``_speak_chat_reply`` 走 ``ensure_audio_channel`` 懒创建，而不是让第一句
+        凭空丢掉。
+        """
+        service = getattr(self, "voice_chime_service", None)
+        if service is None:
+            return True
+        try:
+            return bool(service.channel_idle)
+        except Exception:
+            logging.exception("读取音频通道空闲状态失败")
+            return True
+
+    def _speak_chat_reply(self, sentence: str) -> bool:
+        """把一句回复送进音频通道。
+
+        口径与「点击自言自语朗读」一致：``respect_quiet=False``——这是对用户刚发出
+        那条消息的回应，属于交互应答，不该在免打扰期间被静默丢弃。
+        """
+        service = self.ensure_audio_channel()
+        if service is None:
+            return False
+        return bool(service.speak(sentence, log_tag="回复朗读", respect_quiet=False))
 
     def ensure_audio_channel(self):
         """对外暴露的音频通道（节日提醒语音 / 每日一签复用报时服务的合成与播放）。
@@ -1830,7 +1894,7 @@ class AppShell:
         return [inst.config for inst in getattr(self, "_instances", ())]
 
     def _sync_chime_service(self) -> None:
-        """按配置启停语音报时服务；关闭时释放服务对象。"""
+        """按配置启停语音报时服务（以及共用通道的回复朗读）；关闭时释放服务对象。"""
         if self._chime_wanted():
             service = self._ensure_chime_service()
             if service.is_running():
@@ -1838,12 +1902,20 @@ class AppShell:
                 service.apply_config()
             else:
                 service.start()
-        elif getattr(self, "voice_chime_service", None) is not None:
-            try:
-                self.voice_chime_service.stop()
-            except Exception:
-                logging.exception("停止语音报时服务失败")
-            self.voice_chime_service = None
+            # 回复朗读随通道同生共死：开则建（并订阅），关则先摘订阅。
+            if self._chat_reply_voice_wanted():
+                self._ensure_chat_reply_reader()
+            else:
+                self._release_chat_reply_reader()
+        else:
+            # 顺序有意：先摘订阅再停通道，收口期不会有新句子进队列。
+            self._release_chat_reply_reader()
+            if getattr(self, "voice_chime_service", None) is not None:
+                try:
+                    self.voice_chime_service.stop()
+                except Exception:
+                    logging.exception("停止语音报时服务失败")
+                self.voice_chime_service = None
 
     # ------------------------------------------------------------ 功能门控（节日提醒）
     def _festival_wanted(self) -> bool:
@@ -3002,6 +3074,9 @@ class AppShell:
         # 连接从 Qt C++ 侧强引用住整个对象图（理由同 todo_service，见
         # _shutdown_live_for_tests 注释）；不停则退出期仍在跑 20s tick，且
         # 飞行中的合成线程会经信号桥回 GUI 线程回放、触碰正在析构的窗口。
+        # 回复朗读先摘订阅再随通道一起收（它自己还挂着 ChatService 的类级订阅表，
+        # 不摘就是退出期往已析构对象上回调）。
+        self._release_chat_reply_reader()
         if self.voice_chime_service is not None:
             self.voice_chime_service.stop()
         # 节日提醒同为进程级懒服务，退出必须一并停（理由同 voice_chime_service）。

@@ -294,7 +294,10 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 交互，没有新页面/新控件组可拆，按「拆不动则校准到实测」处理。
 # 2026-10-19 上调到 2600（同一处再 +6：`eventFilter` 加修饰键闸门——只拦裸键/小键盘键，
 # 带 Ctrl/Alt/Shift 的 ↑↓ 透传，避免抢走输入法候选导航）。仍是键盘边界，同上处理。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2600
+# 2026-10-20 上调到 2606：新增「角色与素材」页。**页面本体拆到
+# pet/character_packs_page.py**（按本文件预算注释的规矩：新页面不许在上帝类里堆代码），
+# 这里只加 6 行接线（import + _add_page + 3 行注释）。实测 2606。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2606
 
 
 def _read(name: str) -> str:

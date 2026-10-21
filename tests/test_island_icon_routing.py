@@ -100,7 +100,7 @@ def test_overlay_shell_icon_pixmap_falls_back_to_idle_first_frame():
         def names(self):
             return ["x"]
 
-        def movie(self, name):
+        def movie(self, name, **_kw):
             return _StubClip(self._pm)
 
     instance = FakeInstance()

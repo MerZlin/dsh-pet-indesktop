@@ -105,7 +105,7 @@ class FakeLibrary:
         self.move_curves = dict(curves or {})
         self.no_mirror: set[str] = set()
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clips[name]
 
     def duration(self, name):
@@ -911,7 +911,7 @@ def test_clamp_into_bounds_respects_body_box(monkeypatch):
     """
     from pet import catalog
 
-    monkeypatch.setattr(catalog, "character_body_box", lambda _cid: (100, 60, 400, 330))
+    monkeypatch.setattr(catalog, "character_body_box", lambda _cid, *a, **k: (100, 60, 400, 330))
     lib = _make_library()
     sprite = _make_sprite(lib, pos=(600, 435))   # 身体右缘 600+50+150=800 贴界、下缘 435+30+135=600 贴界
     bounds = QRect(0, 0, 800, 600)
@@ -927,7 +927,7 @@ def test_clamp_into_bounds_body_box_pulls_back_only_overflow(monkeypatch):
     """V-2：身体框真出界时按身体框口径钳回（不多拉）。"""
     from pet import catalog
 
-    monkeypatch.setattr(catalog, "character_body_box", lambda _cid: (100, 60, 400, 330))
+    monkeypatch.setattr(catalog, "character_body_box", lambda _cid, *a, **k: (100, 60, 400, 330))
     lib = _make_library()
     sprite = _make_sprite(lib, pos=(700, 500))   # 身体右缘 850>800、下缘 665>600：均出界
     bounds = QRect(0, 0, 800, 600)
@@ -1210,3 +1210,34 @@ def test_predict_warm_without_gate_api_still_submits(tmp_path, monkeypatch):
     c._states[sprite].predictor._warm("idle1")
 
     assert len(executor.batches) == 1
+
+
+def test_categories_cache_invalidates_on_playable_stamp_change():
+    """可播放集合变了，分类池缓存必须重建（终审：装配层缓存未失效）。
+
+    ``_prune_to_playable`` 每收敛一次就让 ``playable_stamp`` +1（首跑帧序列
+    供给落地、库重扫都会触发）。缓存若只按库对象，新段要等换库才进池、
+    播不动的段还会被反复选中。
+    """
+    class PagedLibrary(FakeLibrary):
+        manifest = None
+        folder_map = None
+        folder_files = {"idle": ["待机"]}
+        playable_stamp = 0
+
+        def names(self):
+            return list(self._playable)
+
+    lib = PagedLibrary(idles=[], turns=[], moves=[], clicks=[], frames={})
+    lib._playable = ["待机"]
+    lib._clips = {n: FakeClip(n, 24) for n in ("待机", "东张西望")}
+    c = BehaviorController(BOUNDS, rng=ScriptedRng())
+    assert c._categories(lib)["idles"] == ["待机"]
+
+    # 装好新分件：可播放集合 / 分类表 / 版本号三者一起变
+    lib._playable = ["待机", "东张西望"]
+    lib.folder_files = {"idle": ["待机"], "turn": ["东张西望"]}
+    lib.playable_stamp = 1
+    cats = c._categories(lib)
+    assert cats["turns"] == ["东张西望"], "版本号变了必须重建分类池"
+    assert c._categories(lib) is cats, "同一版本要命中缓存（不每次重建）"

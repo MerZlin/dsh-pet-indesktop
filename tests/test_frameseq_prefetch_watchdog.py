@@ -179,7 +179,7 @@ def test_watchdog_revives_dead_shared_thread(tmp_path, monkeypatch):
         clock.advance(0.6)
         clip._advance()                      # 看门狗发现线程已死 → 重建 + 重发
 
-        assert clip._prefetch_thread is frameseq_clip._shared_thread
+        assert clip._prefetch_thread in frameseq_clip._shared_threads
         assert clip._prefetch_thread.isRunning()
         assert clip._worker.thread() is clip._prefetch_thread
         assert len(clip._retired_workers) == 1

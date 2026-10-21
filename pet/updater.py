@@ -37,12 +37,35 @@ _TRUSTED_ASSET_HOSTS = {
     'github.com',
     'objects.githubusercontent.com',
     'github-releases.githubusercontent.com',
+    'release-assets.githubusercontent.com',
     'cdn.jsdelivr.net',
     'fastly.jsdelivr.net',
     'gcore.jsdelivr.net',
+    # GitHub 加速镜像（分件下载的回退线路；内容身份由 sha256 校验兜底，
+    # 镜像本身不需要可信——投毒只会摘要不过、换下一条）
+    'gh-proxy.com',
+    'mirror.ghproxy.com',
 }
 _MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 _MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
+
+
+class _TrustedRedirect(urllib.request.HTTPRedirectHandler):
+    """逐跳校验重定向：初始 URL 过白名单不够——重定向目标也必须 https +
+    白名单主机，不许被跳板带到别的源（素材镜像 host 进白名单后，这条
+    就是防"镜像当跳板"的闸）。
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _trusted_https_url(newurl):
+            raise urllib.error.HTTPError(
+                req.full_url, code, f"重定向目标不在可信白名单: {newurl}", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def trusted_urlopen(req_or_url, *, timeout: float):
+    """带**逐跳重定向校验**的 urlopen（更新器与素材包下载的统一出口）。"""
+    return urllib.request.build_opener(_TrustedRedirect()).open(req_or_url, timeout=timeout)
 
 
 def _fetch_json(url: str, timeout: float):
@@ -52,7 +75,7 @@ def _fetch_json(url: str, timeout: float):
             url,
             headers={'Accept': 'application/json', 'User-Agent': _USER_AGENT},
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with trusted_urlopen(req, timeout=timeout) as resp:
             raw = resp.read(_MAX_MANIFEST_BYTES + 1)
             if len(raw) > _MAX_MANIFEST_BYTES:
                 return None
@@ -231,7 +254,7 @@ def download_asset(
         received = 0
         try:
             req = urllib.request.Request(url, headers={'User-Agent': _USER_AGENT})
-            with urllib.request.urlopen(req, timeout=timeout) as response, partial.open('wb') as output:
+            with trusted_urlopen(req, timeout=timeout) as response, partial.open('wb') as output:
                 header_total = response.headers.get('Content-Length')
                 if total is None and header_total and header_total.isdigit():
                     total = int(header_total)

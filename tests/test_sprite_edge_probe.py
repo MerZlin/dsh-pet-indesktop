@@ -136,7 +136,7 @@ class FakeLibrary:
         self.character_id = "fake_char"  # 无 manifest → body_box None → 画布即身体
         self._clips = {n: FakeClip() for n in self.idles + self.turns + self.moves + self.clicks}
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clips[name]
 
     def duration(self, name):

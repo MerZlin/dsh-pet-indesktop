@@ -42,6 +42,9 @@ from . import themes as chat_themes
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DEFAULT_ACCENT = "#3994ff"
 
+# 历史消息分页（与 modern widgets.py 同款）：首屏只渲染最新一页
+_PAGE_SIZE = 50
+
 
 def _safe_color(value: object) -> str:
     value = str(value or "")
@@ -289,6 +292,12 @@ class ChatWindow(QDialog):
         self.pet_link = PetChatLink(pet_window)
         self._bubble: MessageBubble | None = None
         self._bubbles: list[MessageBubble] = []
+        # 历史分页状态 + 批量加载守卫（与 modern 窗口同款）
+        self._hidden_count = 0
+        self._load_earlier_row: QPushButton | None = None
+        self._bulk_loading = 0
+        # prepend 视口锚点（与 modern 窗口同款）
+        self._prepend_anchor: tuple | None = None
         self._text = ""
         self._active_request_id: str | None = None
         self._last_user_text = ""
@@ -576,6 +585,8 @@ class ChatWindow(QDialog):
         self.follow_button.toggled.connect(self.set_follow_pet)
         self.session_combo.currentIndexChanged.connect(self._on_session_changed)
         self.composer.send_requested.connect(self.send_message)
+        # prepend 锚定：加载更早消息后内容高度异步变化时追平视口
+        self.scroll.verticalScrollBar().rangeChanged.connect(self._on_scroll_range_changed)
         self.service.started.connect(self._started)
         self.service.delta.connect(self._delta)
         self.service.activity.connect(self._activity)
@@ -701,10 +712,85 @@ class ChatWindow(QDialog):
 
     def _load(self) -> None:
         self._clear_message_rows()
-        for message in self.session.messages:
-            self._add(message.role, message.content)
-        self._set_empty_state(not bool(self.session.messages))
+        messages = self.session.messages
+        self._hidden_count = max(0, len(messages) - _PAGE_SIZE)
+        self._bulk_loading += 1
+        try:
+            if self._hidden_count:
+                self._insert_load_earlier_row()
+            for message in messages[-_PAGE_SIZE:]:
+                self._add(message.role, message.content)
+        finally:
+            self._bulk_loading -= 1
+        self._set_empty_state(not messages)
+        # 批量结束统一一次全量宽度刷新（批量期间每条只设自己的宽度，消 O(n²)）
+        self._update_bubble_widths()
         self._bottom()
+
+    def _insert_load_earlier_row(self) -> None:
+        row = QPushButton(self.timeline_host)
+        row.setObjectName("load-earlier-button")
+        row.setCursor(Qt.CursorShape.PointingHandCursor)
+        row.clicked.connect(self._load_earlier)
+        self.message_host_layout.insertWidget(0, row, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._load_earlier_row = row
+        self._update_load_earlier_row()
+
+    def _update_load_earlier_row(self) -> None:
+        if self._load_earlier_row is not None:
+            self._load_earlier_row.setText(f"加载更早消息（还有 {self._hidden_count} 条）")
+
+    def _remove_load_earlier_row(self) -> None:
+        row = self._load_earlier_row
+        self._load_earlier_row = None
+        if row is not None:
+            self.message_host_layout.removeWidget(row)
+            row.deleteLater()
+
+    def _load_earlier(self) -> None:
+        """把再往前一页插入到已有气泡之上；视口锚定在原第一条，不滚回底部。"""
+        if self._hidden_count <= 0:
+            return
+        messages = self.session.messages
+        start = max(0, self._hidden_count - _PAGE_SIZE)
+        chunk = messages[start:self._hidden_count]
+        anchor = self._bubbles[0] if self._bubbles else None
+        anchor_y = anchor.y() if anchor is not None else 0
+        old_value = self.scroll.verticalScrollBar().value()
+        self._bulk_loading += 1
+        try:
+            for message in reversed(chunk):
+                self._prepend(message.role, message.content)
+            self._hidden_count = start
+            if self._hidden_count:
+                self._update_load_earlier_row()
+            else:
+                self._remove_load_earlier_row()
+        finally:
+            self._bulk_loading -= 1
+        self._set_empty_state(False)
+        self._update_bubble_widths()
+        if anchor is not None:
+            # 视口锚定（与 modern 同款）：内容高度异步继续长时由 rangeChanged 追平
+            self._prepend_anchor = (anchor, anchor_y - old_value)
+            QTimer.singleShot(0, self, self._apply_prepend_anchor)
+
+    def _prepend(self, role: str, text: str) -> MessageBubble:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        bubble = MessageBubble(role, text, self.character_id)
+        self._apply_avatar_style(bubble.avatar, self.accent_color if role == "assistant" else "#2b75d6")
+        if role == "user":
+            row.addStretch(1)
+            row.addWidget(bubble)
+        else:
+            row.addWidget(bubble)
+            row.addStretch(1)
+        index = 1 if self._load_earlier_row is not None else 0
+        self.message_host_layout.insertLayout(index, row)
+        self._bubbles.insert(0, bubble)
+        self._set_bubble_width(bubble)
+        return bubble
 
     def _clear_message_rows(self) -> None:
         while self.message_host_layout.count() > 1:
@@ -712,6 +798,9 @@ class ChatWindow(QDialog):
             self._delete_layout_item(item)
         self._bubbles.clear()
         self._bubble = None
+        self._load_earlier_row = None
+        self._hidden_count = 0
+        self._prepend_anchor = None
 
     @staticmethod
     def _delete_layout_item(item) -> None:
@@ -748,13 +837,19 @@ class ChatWindow(QDialog):
         self.message_host_layout.insertLayout(max(0, self.message_host_layout.count() - 1), row)
         self._bubbles.append(bubble)
         self._set_empty_state(False)
-        self._update_bubble_widths()
+        if self._bulk_loading:
+            # 批量加载：每条只设自己的宽度，全量刷新由批量末尾统一做一次
+            self._set_bubble_width(bubble)
+        else:
+            self._update_bubble_widths()
         return bubble
 
+    def _set_bubble_width(self, bubble: MessageBubble) -> None:
+        bubble.setMaximumWidth(max(320, int(self.scroll.viewport().width() * 0.72)))
+
     def _update_bubble_widths(self) -> None:
-        width = max(320, int(self.scroll.viewport().width() * 0.72))
         for bubble in self._bubbles:
-            bubble.setMaximumWidth(width)
+            self._set_bubble_width(bubble)
 
     def _remove_bubble(self, bubble: MessageBubble | None) -> None:
         if bubble is None:
@@ -772,6 +867,9 @@ class ChatWindow(QDialog):
         if bubble in self._bubbles:
             self._bubbles.remove(bubble)
         bubble.deleteLater()
+        if bubble is self._bubble:
+            # 悬挂引用防护（与 modern 窗口同款）
+            self._bubble = None
         self._set_empty_state(not self._bubbles)
 
     def _refresh_sessions(self) -> None:
@@ -1085,7 +1183,29 @@ class ChatWindow(QDialog):
         bar = self.scroll.verticalScrollBar()
         return bar.value() >= bar.maximum() - threshold
 
+    def _apply_prepend_anchor(self) -> None:
+        """把视口追平到 prepend 前的锚点气泡位置（与 modern 窗口同款）。"""
+        pending = self._prepend_anchor
+        if pending is None:
+            return
+        anchor, offset = pending
+        try:
+            self.message_host_layout.activate()
+            anchor_y = anchor.y()
+        except RuntimeError:
+            self._prepend_anchor = None  # 锚点气泡已随会话切换销毁
+            return
+        bar = self.scroll.verticalScrollBar()
+        target = max(0, anchor_y - offset)
+        if bar.value() != target:
+            bar.setValue(target)
+
+    def _on_scroll_range_changed(self, _minimum: int, _maximum: int) -> None:
+        if self._prepend_anchor is not None:
+            self._apply_prepend_anchor()
+
     def _bottom(self) -> None:
+        self._prepend_anchor = None  # 显式贴底：解除 prepend 视口锚定
         bar = self.scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
         # 切会话后布局更新可能晚于当前事件循环拍；加一拍兜底，

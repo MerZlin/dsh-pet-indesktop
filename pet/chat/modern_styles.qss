@@ -138,3 +138,8 @@ QScrollBar:vertical { width: 7px; margin: 3px 1px; background: transparent; }
 QScrollBar::handle:vertical { min-height: 28px; border-radius: 3px; background: #ccd0d7; }
 QScrollBar::handle:vertical:hover { background: #adb3bd; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QPushButton#load-earlier-button {
+    background: transparent; border: none; color: #7c8aa5;
+    font-size: 12px; padding: 4px 12px;
+}
+QPushButton#load-earlier-button:hover { color: @ACCENT@; }

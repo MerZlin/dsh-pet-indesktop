@@ -395,7 +395,9 @@ class PetSprite(QObject):
         headroom/PAD 修正。
         """
         character_id = str(getattr(self.library, "character_id", "") or "")
-        box = catalog.character_body_box(character_id)
+        # 几何绑定**在播库**的素材根（P1：跟着在播素材走，不跟磁盘上的下一次选择）
+        box = catalog.character_body_box(
+            character_id, getattr(self.library, "geometry_root", None))
         if box is None:
             w, h = self._logical_size()
             return QRect(0, 0, w, h)
@@ -824,8 +826,17 @@ class PetSprite(QObject):
             stop = getattr(self._clip, "stop", None)
             if callable(stop):
                 stop()
+        # 播放边界：此刻旧 clip 已 stop() 并断开信号 → 允许换后端（帧序列变可用）。
+        # **取不到 clip 不能把异常抛进 Qt 槽**：菜单/快捷键是外部触发，槽里抛
+        # KeyError 会被事件循环吞掉只留 traceback，用户看到的是"点了没反应"。
+        # 这里按既有 `bind_clip -> bool` 契约返回 False，让调用方放弃依赖该动画。
+        try:
+            self._clip = self.library.movie(name, allow_swap=True)
+        except KeyError:
+            self._clip = None
+            self._clip_name = ""
+            return False
         self._clip_name = name
-        self._clip = self.library.movie(name)
         clip = self._clip
         clip.frameChanged.connect(self._on_frame_changed)
         # F2：圈末结束标记（WebMClip 圈末停表、帧序列播到尾）转发给行为

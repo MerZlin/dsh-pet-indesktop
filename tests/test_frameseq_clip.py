@@ -307,15 +307,17 @@ def test_shared_prefetch_thread_shutdown_and_recreate(tmp_path):
 
     _make_frames(tmp_path, count=2)
     clip = FrameSeqClip(tmp_path)
-    thread = frameseq_clip._shared_thread
-    assert thread is not None and thread.isRunning()
+    threads = list(frameseq_clip._shared_threads)
+    assert len(threads) == frameseq_clip.PREFETCH_THREADS
+    assert all(th.isRunning() for th in threads)
     frameseq_clip._shutdown_shared_prefetch()
-    assert frameseq_clip._shared_thread is None
-    assert not thread.isRunning()
-    # 重建：新 clip 照常拿到运行中的线程并能播
+    assert frameseq_clip._shared_threads == []
+    assert not any(th.isRunning() for th in threads)
+    # 重建：新 clip 照常拿到运行中的线程（池会重新铺满）并能播
     clip2 = FrameSeqClip(tmp_path)
-    thread2 = frameseq_clip._shared_thread
-    assert thread2 is not None and thread2.isRunning()
+    threads2 = list(frameseq_clip._shared_threads)
+    assert len(threads2) == frameseq_clip.PREFETCH_THREADS
+    assert all(th.isRunning() for th in threads2)
     assert clip2.start()
     _pump_until(lambda: clip2.currentImage() is not None)
     clip2.stop()

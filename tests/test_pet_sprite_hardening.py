@@ -62,7 +62,7 @@ class FakeLibrary:
         self.no_mirror: set[str] = set()
         self.character_id = character_id
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clip
 
 
@@ -252,14 +252,14 @@ BODY_BOX = (100, 60, 400, 330)
 @pytest.fixture
 def body_box(monkeypatch):
     monkeypatch.setattr(catalog, "character_body_box",
-                        lambda _cid: BODY_BOX)
+                        lambda _cid, *a, **k: BODY_BOX)
     return BODY_BOX
 
 
 @pytest.fixture
 def no_body_box(monkeypatch):
     monkeypatch.setattr(catalog, "character_body_box",
-                        lambda _cid: None)
+                        lambda _cid, *a, **k: None)
     return None
 
 

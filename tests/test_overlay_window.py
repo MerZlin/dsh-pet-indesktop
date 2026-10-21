@@ -118,7 +118,7 @@ class FakeLibrary:
         self._clip = clip
         self.no_mirror: set[str] = set()
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clip
 
 
@@ -277,7 +277,7 @@ class PoolLibrary:
             clip.image.fill(0xFF336699)
             self._clips[name] = clip
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clips[name]
 
     def duration(self, name):
@@ -539,7 +539,7 @@ class _FrameseqLibrary:
         self._clip = clip
         self.no_mirror: frozenset[str] = frozenset()
 
-    def movie(self, _name):
+    def movie(self, _name, **_kw):
         return self._clip
 
 

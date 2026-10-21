@@ -150,7 +150,7 @@ class FakeLibrary:
         self._clip = clip
         self.no_mirror: set[str] = set()
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clip
 
 

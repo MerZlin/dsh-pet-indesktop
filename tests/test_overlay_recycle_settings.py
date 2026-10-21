@@ -174,7 +174,7 @@ def test_frameseq_clip_accepts_push_without_effect(tmp_path):
         def __init__(self, clip):
             self._clip = clip
 
-        def movie(self, name):
+        def movie(self, name, **_kw):
             return self._clip
 
     clip = FrameSeqClip(frames_dir)

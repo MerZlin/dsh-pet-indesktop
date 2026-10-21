@@ -115,7 +115,7 @@ class FakePet:
 
 @pytest.fixture
 def body_box(monkeypatch):
-    monkeypatch.setattr(catalog, "character_body_box", lambda cid: BOX)
+    monkeypatch.setattr(catalog, "character_body_box", lambda cid, *a, **k: BOX)
     return BOX
 
 

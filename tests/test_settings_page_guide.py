@@ -1164,7 +1164,9 @@ def test_anchor_bar_rebuilds_when_the_in_page_tab_changes(tmp_path, monkeypatch)
         app.processEvents()
         page, bar = _select(dialog, "桌宠")
         tabs = page.findChild(SettingsTabContainer)
-        assert tabs.keys() == ("display_music", "motion_collision")
+        # 2026-10-20：「桌宠」域新增「角色与素材」标签页（角色包清单 + 分件下载），
+        # 契约随之变化——这里同步期望值，不是放宽断言。
+        assert tabs.keys() == ("display_music", "motion_collision", "character_packs")
 
         assert tabs.currentKey() == "display_music"
         assert [chip.text() for chip in _chips(bar)] == [

@@ -130,7 +130,7 @@ class FakeLibrary:
         self.move_strides = {}
         self.move_curves = {}
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clips[name]
 
     def clip(self, name):
