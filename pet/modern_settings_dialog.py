@@ -2213,8 +2213,6 @@ class ModernSettingsDialog(QDialog):
         ]
         # 域页全部装好之后再装「按区直找」：页头跳转条 + 每个分区的组描述。
         settings_page_guide.install(self)
-        # 域页全部装好之后再装「按区直找」：页头跳转条 + 每个分区的组描述。
-        settings_page_guide.install(self)
 
     def _clear_search_matches(self) -> None:
         for row in self._search_rows:
@@ -2350,10 +2348,6 @@ class ModernSettingsDialog(QDialog):
         # 并闸住关闭路径再写一遍整表（放弃时尤其不能写——那正是要放弃的东西）。
         self._saved_via_button = True
         self.accept()
-
-    def _set_feature_key(self, feature_id: str, key: str, value) -> None:
-        if _fa.is_active(feature_id):  # 未激活模块的组未挂出：其键不写回（控件保留）
-            self.config.set(key, value)
 
     def _write_config(self) -> bool:
         """把当前控件值写入 config 并落盘（按钮与直接关闭共用）。
