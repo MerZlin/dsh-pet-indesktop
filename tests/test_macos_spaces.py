@@ -1,4 +1,9 @@
 """桌宠合成窗的 Spaces 策略：原生边界与显示生命周期。"""
+import os
+
+# 文件级 offscreen 兜底（同族 166 个测试模块同例）：import 期即建 QApplication，
+# 无显示环境单独跑本文件时必须已有平台插件（PR #333 审查 S1）
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import ctypes
 from types import SimpleNamespace
 

@@ -42,11 +42,11 @@ def test_find_launch_command_resolves_web(monkeypatch):
 
     monkeypatch.setattr(hl, "_supports_no_open", lambda base: True)
     command = hl._find_launch_command()
-    assert command == ["dsh", "web", "--host", "127.0.0.1", "--port", "38080", "--no-open"]
+    assert command == ["dsh", "web", "--host", "127.0.0.1", "--port", str(hl.DEFAULT_PORT), "--no-open"]
 
     monkeypatch.setattr(hl, "_supports_no_open", lambda base: False)
     command = hl._find_launch_command()
-    assert command == ["dsh", "web", "--host", "127.0.0.1", "--port", "38080"]
+    assert command == ["dsh", "web", "--host", "127.0.0.1", "--port", str(hl.DEFAULT_PORT)]
     assert "--no-open" not in command
 
 
@@ -69,7 +69,7 @@ def test_find_launch_command_fallback_without_dsh(tmp_path, monkeypatch, package
 
     expected = [node, str(bin_js)] if package_installed else ["npx", "--yes", "@deepseek-ai/dsh"]
     assert hl._find_launch_command() == [
-        *expected, "web", "--host", "127.0.0.1", "--port", "38080",
+        *expected, "web", "--host", "127.0.0.1", "--port", str(hl.DEFAULT_PORT),
     ]
 
 
@@ -205,7 +205,7 @@ def test_launch_harness_no_browser_when_autostart(monkeypatch):
     monkeypatch.setattr(hl, "_spawn", lambda command: None)
     monkeypatch.setattr(
         hl, "_find_launch_command",
-        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", "38080", "--no-open"],
+        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", str(hl.DEFAULT_PORT), "--no-open"],
     )
     threads = []
 
@@ -305,7 +305,7 @@ def test_launch_harness_browser_ownership(monkeypatch):
     # 不带 --no-open：dsh 自己开浏览器，桌宠不重复打开
     monkeypatch.setattr(
         hl, "_find_launch_command",
-        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", "38080"],
+        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", str(hl.DEFAULT_PORT)],
     )
     status, url = hl.launch_harness(target="web")
     assert status == "started"
@@ -315,7 +315,7 @@ def test_launch_harness_browser_ownership(monkeypatch):
     # 带 --no-open：桌宠等待就绪后打开浏览器
     monkeypatch.setattr(
         hl, "_find_launch_command",
-        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", "38080", "--no-open"],
+        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", str(hl.DEFAULT_PORT), "--no-open"],
     )
     status, url = hl.launch_harness(target="web")
     assert status == "started"
@@ -425,7 +425,7 @@ def test_target_web_keeps_existing_web_command(monkeypatch):
 
     status, url = hl.launch_harness(target="web", open_browser=False)
     assert status == "started"
-    assert spawned == [["dsh", "web", "--host", "127.0.0.1", "--port", "38080", "--no-open"]]
+    assert spawned == [["dsh", "web", "--host", "127.0.0.1", "--port", str(hl.DEFAULT_PORT), "--no-open"]]
     assert url == "http://127.0.0.1:38080"
 
 
@@ -495,7 +495,7 @@ def test_auto_launch_is_headless_service(monkeypatch):
     )
     monkeypatch.setattr(
         hl, "_find_launch_command",
-        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", "38080", "--no-open"],
+        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", str(hl.DEFAULT_PORT), "--no-open"],
     )
 
     status, url = hl.launch_harness(target="auto")
@@ -525,7 +525,7 @@ def test_service_target_stays_headless_even_with_open_browser_true(monkeypatch):
     )
     monkeypatch.setattr(
         hl, "_find_launch_command",
-        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", "38080", "--no-open"],
+        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", str(hl.DEFAULT_PORT), "--no-open"],
     )
 
     status, url = hl.launch_harness(target="service", open_browser=True)
