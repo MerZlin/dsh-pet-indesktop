@@ -901,6 +901,11 @@ class PetInstance:
         from .quick_chat import QuickChatBubble
 
         if self.quick_chat is None:
+            # 缓存单例（关闭只 hide）**有意保留**，与完整聊天窗的「关闭即销毁」
+            # 不同：气泡只有 18 个控件、构造后驻留约 33 KiB pet 源码分配，探针
+            # （.scratch/chat-window-close/probe_window_lifetime.py）实测第二轮
+            # 开关的增量是 0.0 KiB / 0 控件——一次性驻留，不随开关增长，不是泄漏。
+            # 换成每次重建反而要给这个高频动作付会话/prompt 重建成本。
             self.quick_chat = QuickChatBubble(self.config, pet_window=self.win)
             self.quick_chat.open_chat_callback = self.open_chat
         else:
@@ -918,7 +923,7 @@ class PetInstance:
         if self._defer_while_popup_active("legacy-chat", self.open_chat):
             return
         from .chat.legacy_widgets import ChatWindow
-        if self.legacy_chat_window is None:
+        if not self._chat_window_usable(self.legacy_chat_window):
             self.legacy_chat_window = ChatWindow(
                 self.config,
                 str(self.config.get('character', catalog.DEFAULT_CHARACTER)),
@@ -926,10 +931,12 @@ class PetInstance:
                 notifier=self.shell.system_notify,
                 auth_callback=self.open_chat_settings,
             )
+            self._own_chat_window(self.legacy_chat_window)
         else:
             self.legacy_chat_window.set_pet_window(host)
         self.chat_window = self.legacy_chat_window
-        self._present_dialog(self.legacy_chat_window, lambda: self.legacy_chat_window.position_near_pet(host))
+        window = self.legacy_chat_window
+        self._present_dialog(window, lambda: window.position_near_pet(host))
 
     def open_modern_chat(self) -> None:
         host = self._chat_host()
@@ -938,7 +945,7 @@ class PetInstance:
         if self._defer_while_popup_active("modern-chat", self.open_modern_chat):
             return
         from .chat.widgets import ChatWindow
-        if self.modern_chat_window is None:
+        if not self._chat_window_usable(self.modern_chat_window):
             self.modern_chat_window = ChatWindow(
                 self.config,
                 str(self.config.get('character', catalog.DEFAULT_CHARACTER)),
@@ -946,10 +953,37 @@ class PetInstance:
                 notifier=self.shell.system_notify,
                 auth_callback=self.open_chat_settings,
             )
+            self._own_chat_window(self.modern_chat_window)
         else:
             self.modern_chat_window.set_pet_window(host)
         self.chat_window = self.modern_chat_window
-        self._present_dialog(self.modern_chat_window, lambda: self.modern_chat_window.position_near_pet(host))
+        window = self.modern_chat_window
+        self._present_dialog(window, lambda: window.position_near_pet(host))
+
+    @staticmethod
+    def _chat_window_usable(window) -> bool:
+        """缓存槽里那只聊天窗还能用吗（关闭即销毁后槽位会被清空/变悬挂）。
+
+        聊天窗不再是「关闭只隐藏」的常驻单例：关窗即销毁，槽位在 ``finished``
+        里被清成 None。这里再判一次 C++ 对象存活是防御——对象可能已被父级
+        收走而信号还没到（同 ``open_network_info`` 的收口方式）。
+        """
+        return window is not None and shiboken6.isValid(window)
+
+    def _own_chat_window(self, window) -> None:
+        """把新造的聊天窗挂进本实例的收口链：窗口一收起就清掉缓存槽。
+
+        关窗即销毁（``pet/chat/lifecycle.py``）之后，槽位必须跟着窗口走——
+        否则下次打开会去 show 一个已排队删除的对象，而 ``self.chat_window``
+        这类裸引用会在死对象上抛 "Internal C++ object already deleted"
+        （``sync_look_to_chat`` / 设置页刷新都读它）。
+        """
+        window.finished.connect(lambda _result=0, window=window: self._forget_chat_window(window))
+
+    def _forget_chat_window(self, window) -> None:
+        for attr in ("modern_chat_window", "legacy_chat_window", "chat_window"):
+            if getattr(self, attr, None) is window:
+                setattr(self, attr, None)
 
     def _defer_while_popup_active(self, key: str, callback) -> bool:
         """Avoid constructing a heavy dialog inside QMenu.exec()."""
@@ -982,6 +1016,9 @@ class PetInstance:
         防止弹窗长期不消失时无限空转。
         """
         if attempt > 60:
+            return
+        if not shiboken6.isValid(dialog):
+            # 缓存窗口已销毁（聊天窗/待办面板的「关闭即销毁」）：没必要再呈现。
             return
         if QApplication.activePopupWidget() is not None:
             QTimer.singleShot(60, lambda: self._present_dialog(dialog, before_present, attempt + 1))
@@ -4567,9 +4604,10 @@ class AppShell:
     def _close_instance_subwindows(self, instance: PetInstance) -> None:
         """批5.2 P1-5：关闭本窗拥有的聊天窗/设置窗并断开引用。
 
-        ChatWindow.closeEvent 只隐藏复用（widgets.py），因此还要显式隐藏 +
-        调度 deleteLater + 清空实例引用，否则孤儿顶层窗在「退出这只」关掉本窗
-        writer 之后仍可经 store 提交、复活写盘 worker（常驻到进程结束）。
+        ChatWindow 自 4.4.0 起**关闭即销毁**（`pet/chat/lifecycle.py`）：close()
+        收尾后由 `done()` 排队 deleteLater，`finished` 信号同时把实例上的缓存槽
+        清空。这里仍显式关闭 + 清引用，是为了覆盖「程序内直接退出这只」这条
+        不走用户关窗的路径（且 writer 关闭后残留顶层窗会复活写盘 worker）。
 
         设置页（``modern_settings_dialog``）正常情况下已经在收口**之前**由
         ``_settings_window_releasable`` 过完闸门并断开引用；这里再列一次是防御
@@ -4587,7 +4625,10 @@ class AppShell:
             try:
                 # N-4：WA_DeleteOnClose 的对话框 close() 已调度销毁，再排
                 # deleteLater 会对已删 C++ 对象抛 RuntimeError（噪音）。
-                if not dialog.testAttribute(Qt.WidgetAttribute.WA_DeleteOnClose):
+                # 聊天窗的销毁由 lifecycle 接管（_release_scheduled）：它会等在飞
+                # worker 退出再删，这里补一刀会赶在 worker 之前删掉宿主对象。
+                if (not dialog.testAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+                        and not getattr(dialog, "_release_scheduled", False)):
                     QTimer.singleShot(0, dialog.deleteLater)
             except Exception:
                 pass
@@ -4735,6 +4776,9 @@ class AppShell:
             parent = self.win
             dialog = TodoPanelDialog(
                 self, parent=parent if isinstance(parent, QWidget) else None)
+            # 已是「关闭即销毁」形态（不必再改）：探针实测关窗后存活控件回到 0、
+            # 槽位清空、重开是新对象且不残留 pet 分配（
+            # .scratch/chat-window-close/probe_window_lifetime.py）。
             dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             dialog.finished.connect(self._todo_panel_finished)
             self.todo_panel = dialog

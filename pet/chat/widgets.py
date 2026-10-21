@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from .geometry import best_position_near_pet
+from .lifecycle import release_window_when_idle
 from .markdown_view import markdown_to_html
 from .memory import ChatMemory, injection_text, parse_remember_command
 from .memory_extract import schedule_extraction
@@ -1091,7 +1092,12 @@ class ChatWindow(QDialog):
         self._resize_edges: set[str] = set()
         self._resize_global_start: QPoint | None = None
         self._resize_start_geometry: QRect | None = None
+        # 关闭即销毁（见 lifecycle.release_window_when_idle）。**不挂
+        # WA_DeleteOnClose**：Qt 那一条会在 close() 里无条件 deleteLater，可能
+        # 赶在在飞 worker 退出之前把窗口（连同 worker 的宿主对象）删掉；销毁
+        # 时机必须由 lifecycle 判定，所以这里只留生命周期标记。
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self._release_scheduled = False
         # 无边框圆角窗：窗口自身透明（QSS #chat-window 背景同步置 transparent），
         # 只显示圆角的 phone-shell，去掉窗外一圈方形背景（浅色系统白框/深色系统黑框）
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -2740,13 +2746,30 @@ class ChatWindow(QDialog):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        # 窗口是复用的（关闭=隐藏）：每次从菜单/灵动岛打开都回到最新一条回复，
-        # 而不是停在上次关闭时的位置。系统自发的 show（如从最小化还原）保留阅读位置。
+        # 每次打开都是新构造的窗口（关闭即销毁）；仍保留这一手兜底：show 之后
+        # 回到最新一条回复，而不是停在（可能的）旧滚动位置。系统自发的 show
+        # （如从最小化还原）保留阅读位置。
         if not event.spontaneous():
             self._bottom(always=True)
 
+    def done(self, result: int) -> None:
+        """所有收口路径（X / Esc / reject）统一「收起即销毁」。
+
+        ``WA_DeleteOnClose`` 只覆盖 ``close()``；QDialog 的 Esc 走 ``reject()``，
+        不经过 closeEvent，光靠属性会留下一个隐藏但活着的窗口。``done()`` 是
+        这几条路径的公共出口，销毁排在这里。
+        """
+        super().done(result)
+        release_window_when_idle(self, self.service)
+
     def closeEvent(self, event) -> None:
-        """关闭=隐藏并复用窗口：收尾本轮回复、停止生成、解除桌宠位置监听，避免泄漏。"""
+        """关闭即销毁：收尾本轮回复、停止生成、解除桌宠位置监听。
+
+        ``super().closeEvent`` 在窗口可见时走 ``reject()``：发出 ``finished``
+        （app 层靠它清缓存槽）、经 ``done()`` 排队销毁。**不要先 hide 再调
+        super**——QDialog 的 closeEvent 只在 ``isVisible()`` 时 reject，先隐藏
+        就既不发明 finished 也不走销毁，槽位会留下一个死对象。
+        """
         # 模型已完成、打字机仍在排空时关窗：worker 已回收，service.stop() 既
         # 不取消任何东西也不会补发 stopped 信号，而定时器一停 _pending_finish_text
         # 就再没有落库机会——回复丢失、重开后按钮仍卡在「停止」。故先按完成路径
@@ -2756,5 +2779,4 @@ class ChatWindow(QDialog):
         self._typewriter_timer.stop()
         self.service.stop()
         self.set_pet_window(None)
-        self.hide()
-        event.ignore()
+        super().closeEvent(event)

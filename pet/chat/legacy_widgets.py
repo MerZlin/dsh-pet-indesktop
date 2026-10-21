@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from .geometry import best_position_near_pet
+from .lifecycle import release_window_when_idle
 from .markdown_view import markdown_to_html
 from .memory import ChatMemory, injection_text, parse_remember_command
 from .memory_extract import schedule_extraction
@@ -304,7 +305,10 @@ class ChatWindow(QDialog):
         self.setMinimumSize(380, 620)
         self.setMaximumSize(560, 980)
         self.resize(430, 780)
+        # 关闭即销毁（与 modern 窗口同款，见 lifecycle.release_window_when_idle）。
+        # 刻意不挂 WA_DeleteOnClose：销毁时机由 lifecycle 等 worker 退出后决定。
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self._release_scheduled = False
         # 无边框圆角窗：窗口自身透明（QSS #chat-window 背景同步置 transparent），
         # 只显示圆角的 phone-shell，去掉窗外一圈方形背景（深色系统下是黑框）
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -1310,9 +1314,17 @@ class ChatWindow(QDialog):
         super().resizeEvent(event)
         self._update_bubble_widths()
 
+    def done(self, result: int) -> None:
+        """所有收口路径（X / Esc / reject）统一「收起即销毁」（与 modern 同款）。"""
+        super().done(result)
+        release_window_when_idle(self, self.service)
+
     def closeEvent(self, event) -> None:
-        """关闭=隐藏并复用窗口：停止生成、解除桌宠位置监听，避免泄漏。"""
+        """关闭即销毁：停止生成、解除桌宠位置监听，随后由 ``done()`` 排队销毁。
+
+        不先 hide：QDialog 的 closeEvent 只在窗口可见时 reject（发出 finished，
+        app 层靠它清缓存槽），先隐藏会绕过整条收口语义（同 modern 窗口）。
+        """
         self.service.stop()
         self.set_pet_window(None)
-        self.hide()
-        event.ignore()
+        super().closeEvent(event)

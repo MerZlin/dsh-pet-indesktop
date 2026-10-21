@@ -62,6 +62,7 @@ class ChatService(QObject):
 
     def __init__(self,provider=None,parent=None):
         super().__init__(parent); self.provider=provider or OpenAICompatibleProvider(); self._request_id=None; self._cancel=None; self._worker=None; self._workers=set()
+        self._detached=False
         # 档 B 记忆提炼（pet/chat/memory_extract）：前端在构造后挂 hook
         # （(user_text, reply_text, provider, provider_config) -> None），
         # finished 路径在发完信号后同步调一次——hook 内部只做护栏检查并起后台线程。
@@ -88,6 +89,23 @@ class ChatService(QObject):
         return not any(worker.isRunning() for worker in self._workers)
     @property
     def busy(self): return self._worker is not None and self._worker.isRunning()
+    def has_running_workers(self) -> bool:
+        """还有没有没退出的 worker（含已 stop、线程仍在校尾的）。
+
+        关窗即销毁的路径靠它决定「现在删还是等 worker 退了再删」：QThread 运行中
+        被销毁会直接崩进程。``busy`` 只看当前那一只，会被上一轮的收尾线程漏掉。
+        """
+        return any(worker.isRunning() for worker in list(self._workers))
+    def detach(self) -> None:
+        """销毁前摘线：worker 已发出但尚未投递的排队信号不许再进本对象。
+
+        关窗即销毁（``pet/chat/lifecycle.py``）之后，worker 的排队回调可能落在
+        本对象已删之后——那时 ``self.stopped.emit`` 会抛
+        "Signal source has been deleted"。置位后 ``_current`` 恒 False，全部
+        排队回调第一行就返回（含 ``_cleanup``，不碰任何 Qt 对象）。
+        """
+        self._detached = True
+        self.stop()
     def send(self,messages:list[dict[str,Any]],config:ProviderConfig,request_id=None):
         self.stop(); rid=request_id or uuid.uuid4().hex; cancel=threading.Event(); worker=_Worker(self.provider,messages,config,cancel); self._request_id=rid; self._cancel=cancel; self._worker=worker
         # 档 B 提炼上下文：本轮最后一条纯文本用户消息（图片等多模态形态不提炼）
@@ -116,7 +134,7 @@ class ChatService(QObject):
                 self._worker.cancel.set()
         elif self._cancel is not None:
             self._cancel.set()
-    def _current(self,rid): return rid==self._request_id
+    def _current(self,rid): return (not self._detached) and rid==self._request_id
     def _delta(self,rid,text):
         if self._current(rid): self.delta.emit(rid,text)
     def _activity(self,rid,kind,text):

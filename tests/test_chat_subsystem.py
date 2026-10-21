@@ -3514,6 +3514,20 @@ def _abort_request(app, window, provider, timeout: float = 10.0) -> None:
     app.processEvents()
 
 
+def _close_if_alive(window) -> None:
+    """收尾用：聊天窗「关闭即销毁」，已经销毁的对象不能再 close()。"""
+    import shiboken6
+
+    if window is not None and shiboken6.isValid(window):
+        window.close()
+
+
+def _is_valid(window) -> bool:
+    import shiboken6
+
+    return window is not None and shiboken6.isValid(window)
+
+
 def _pump_until(app, predicate, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -3590,9 +3604,11 @@ def test_close_while_streaming_still_cancels_the_request(tmp_path, monkeypatch):
         assert _pump_until(app, lambda: window._active_request_id is None), "关窗后 request id 未复位"
         assert _pump_until(app, lambda: not window.composer._busy), "关窗后 composer 忙碌态未复位"
         assert all(m.role != "assistant" for m in window.session.messages)
+        # 4.4.0 起关窗即销毁：在飞请求收尾之后窗口本体也不许留着（缓存单例已废）
+        assert _pump_until(app, lambda: not _is_valid(window), timeout=30.0), "关窗后窗口未销毁"
     finally:
         _abort_request(app, window, provider)
-        window.close()
+        _close_if_alive(window)
         app.processEvents()
 
 
@@ -3659,20 +3675,22 @@ def test_close_during_typewriter_drain_saves_reply_and_resets(tmp_path):
     )
     assert [m["content"] for m in on_disk["messages"]] == ["提问", "回复全文"]
 
-    # 2) 状态复位：不再有残留的在途输出，按钮回到发送态、状态回到就绪
+    # 2) 状态复位：窗口对象上不再有残留的在途输出（销毁前已按完成路径收干净）
     assert window._pending_finish_text is None
     assert window._pending_output == ""
     assert window._active_request_id is None
     assert window.composer._busy is False
-    assert window.composer.send.toolTip() == "发送"
-    assert window.status.text() == "就绪"
+    assert not _is_valid(window), "关窗应销毁窗口（4.4.0 起不再是复用窗口）"
 
-    # 3) 重开（窗口是复用窗口，close=hide）：仍是就绪态而非「生成中」
-    window.show()
+    # 3) 重开（每次都是新构造的窗口）：仍是就绪态而非「生成中」+ 停止按钮，
+    #    且刚落库的回复在历史里看得到。
+    reopened = ChatWindow(Config(tmp_path), "shenshen")
+    reopened.show()
     app.processEvents()
-    assert window.composer._busy is False
-    assert window.status.text() == "就绪"
-    window.close()
+    assert reopened.composer._busy is False
+    assert reopened.status.text() == "就绪"
+    assert [m.content for m in reopened.session.messages] == ["提问", "回复全文"]
+    _close_if_alive(reopened)
     app.processEvents()
 
 
