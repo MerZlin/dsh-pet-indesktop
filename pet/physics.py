@@ -91,6 +91,11 @@ REST_VY = 40.0            # 落地时 |vy| 小于它直接停竖直
 # 不可辨，是"宠物已经站着不动"的合理判定点。
 GROUND_BOUNCE_STOP_VY = 120.0
 REST_VX = 15.0            # 地面上 |vx| 小于它认为已静止
+# 侧墙水平速度截止（2026-10-22，用户实机）：|vx| 低于它在墙上直接停下
+# （重力接管沿墙滑落到墙角静止），不再「贴墙一帧黏住 → 以 RESTITUTION 弹回」
+# ——地板早就有 GROUND_BOUNCE_STOP_VY 同款截止，侧墙一直漏了，低速撞墙观感
+# 是莫名其妙的黏住反弹（主→副屏底部那条收窄带墙上尤其明显）。
+WALL_BOUNCE_STOP_VX = 60.0
 
 
 def flight_anim_speed(speed_px_s: float) -> float:
@@ -206,20 +211,26 @@ def estimate_release_velocity(trail: list, now: float, cap: float = MAX_THROW_SP
 def throw_step(px: float, py: float, vx: float, vy: float, dt: float,
                left: float, top: float, right: float, bottom: float,
                gravity: float = GRAVITY,
-               bounce_stop_vy: float = GROUND_BOUNCE_STOP_VY
+               bounce_stop_vy: float = GROUND_BOUNCE_STOP_VY,
+               wall_stop_vx: float = WALL_BOUNCE_STOP_VX,
                ) -> tuple[float, float, float, float, bool]:
     """抛掷单步积分 + 边界反弹。返回 (px, py, vx, vy, bounced)。
 
     bounce_stop_vy：落地竖直速度截止（小跳不再模拟，见常量注释）。
+    wall_stop_vx：撞侧墙水平速度截止（低速沿墙滑落不弹回，见常量注释）。
     """
     vy += gravity * dt
     px += vx * dt
     py += vy * dt
     bounced = False
     if px < left:
-        px, vx, bounced = left, abs(vx) * RESTITUTION, True
+        px = left
+        vx = 0.0 if abs(vx) < wall_stop_vx else abs(vx) * RESTITUTION
+        bounced = True
     elif px > right:
-        px, vx, bounced = right, -abs(vx) * RESTITUTION, True
+        px = right
+        vx = 0.0 if abs(vx) < wall_stop_vx else -abs(vx) * RESTITUTION
+        bounced = True
     if py < top:
         py, vy, bounced = top, abs(vy) * RESTITUTION, True
     elif py >= bottom:

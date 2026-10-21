@@ -173,3 +173,19 @@ def test_flight_anim_speed_scales_with_speed():
     assert flight_anim_speed(1400.0) == 1.75      # 顶格 1.75×
     assert flight_anim_speed(9999.0) == 1.75      # 超量程封顶
     assert flight_anim_speed(700.0) > flight_anim_speed(300.0)  # 单调
+
+
+def test_wall_low_speed_slides_instead_of_sticky_bounce():
+    """低速撞侧墙：vx 直接归零沿墙滑落（地板有 bounce_stop_vy 同款截止，
+    侧墙漏了——用户实机「速度较低时在屏幕边黏住一下又反弹回来」）。"""
+    from pet.physics import WALL_BOUNCE_STOP_VX, throw_step
+
+    # 低速（低于截止）：撞左墙 vx 归零、位置贴墙、不再弹回
+    px, py, vx, vy, bounced = throw_step(5.0, 100.0, -30.0, 0.0, 0.016, 10.0, 0.0, 500.0, 800.0)
+    assert px == 10.0 and vx == 0.0 and bounced
+    # 高速（高于截止）：照常有 RESTITUTION 反弹
+    px2, py2, vx2, vy2, bounced2 = throw_step(5.0, 100.0, -300.0, 0.0, 0.016, 10.0, 0.0, 500.0, 800.0)
+    assert px2 == 10.0 and vx2 > 0 and bounced2
+    # 右墙低速同样归零
+    px3, py3, vx3, vy3, bounced3 = throw_step(499.9, 100.0, 30.0, 0.0, 0.016, 10.0, 0.0, 500.0, 800.0)
+    assert px3 == 500.0 and vx3 == 0.0 and bounced3
