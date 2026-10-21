@@ -19,6 +19,11 @@ exe 时资源管理器默认工作目录就是 exe 所在目录，行为一致�
 
 import sys
 
+# 同 pet/__main__：Qt 插件路径消毒必须最早（issue #323）
+from pet.qt_plugin_sanitizer import sanitize_plugin_path as _sanitize_plugin_path
+
+_sanitize_plugin_path()
+
 from pet.runtime_cleanup import mark_frozen_runtime_dir
 
 # onefile 运行目录的归属标记：本次启动标记自己，下一次启动才敢把这个目录当遗留

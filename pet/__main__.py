@@ -3,6 +3,12 @@
 
 import sys
 
+# Qt 插件路径消毒必须早于任何 PySide6 导入（issue #323：外部 QT_PLUGIN_PATH
+# 会把旧版本插件 DLL 排在本应用自带插件之前，跨版本 ABI 冲突）
+from .qt_plugin_sanitizer import sanitize_plugin_path as _sanitize_plugin_path
+
+_sanitize_plugin_path()
+
 
 def _chat_available() -> bool:
     """打包变体是否带 AI 聊天（no-chat 变体 excludes=['pet.chat']）。

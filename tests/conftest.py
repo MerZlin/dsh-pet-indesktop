@@ -26,6 +26,17 @@ import sys
 import pytest
 
 
+# 开发机 Qt 环境污染消毒（issue #323）：QT_PLUGIN_PATH 指向的旧版 Qt 插件会让
+# pytest 每个进程首扫插件打一条"Windows fatal exception"噪声——在 import 任何
+# 被测代码之前清掉（conftest 的 pytest 加载时机早于测试模块）。
+try:
+    from pet.qt_plugin_sanitizer import sanitize_plugin_path as _spp
+
+    _spp()
+except Exception:  # 消毒失败不挡测试
+    pass
+
+
 @pytest.fixture
 def non_macos_overlay_topology(monkeypatch):
     """同 DPR 单窗算法族显式选择非 macOS，平台分支由 macOS 专项覆盖。"""
