@@ -177,8 +177,9 @@ RuntimeError: Signal source has been deleted
 | 聚焦（聊天子系统） | `pytest tests/test_chat_subsystem.py -q` | **149 passed, 1 skipped** |
 | 聚焦（新增生命周期） | `pytest tests/test_chat_window_lifecycle.py -q` | **14 passed** |
 | 受影响面（app 级宿主/岛对话/多窗/分页/快速对话） | `pytest tests/test_overlay_app_hosts.py tests/test_island_chat.py tests/test_island_chat_identity.py tests/test_single_process_spawn.py tests/test_quick_chat.py tests/test_child_bubble_quick_chat.py tests/test_chat_history_paging.py -q` | **115 passed** |
+| 时间线（关闭重开落最新回复） | `pytest tests/test_chat_timeline_scroll.py -q` | **2 passed**（改契约前该文件红 1 条） |
 | 受影响面（设置收口/记忆/朗读/待办） | `pytest tests/test_settings_stale_form_exit.py tests/test_requested_regressions.py tests/test_chat_memory.py tests/test_chat_memory_extract.py tests/test_chat_reply_voice.py tests/test_todo_reminder.py -q` | **250 passed, 1 skipped** |
-| 全量 | 见 §六点一（本文件末尾追加） | |
+| 全量 | `QT_QPA_PLATFORM=offscreen pytest -q --ignore=tests/test_webm_reader_lifecycle.py --ignore=tests/test_webm_clip_lifecycle.py --ignore=tests/test_webm_first_frame_lock.py --ignore=tests/test_low_priority_warm_interaction_yield.py` | **8816 passed, 15 skipped**, 0 failed（30:24，日志 `.scratch/chat-window-close/full-suite2.log`） |
 
 **断言有效性**：`test_reopen_keeps_history_paging` 在新旧实现下都能区分——若销毁
 重建路径改成一口气渲染全部历史，`len(_bubbles)` 会变 120 而不是 50；
@@ -208,6 +209,13 @@ RuntimeError: Signal source has been deleted
 - **回滚**：`git revert` 本提交即可，无残留状态（窗口本来就是内存对象，没有落盘
   迁移）。回滚后行为逐位回到「关闭只隐藏」，用户会看到「关窗后内存不回落」的旧现象。
 
-## 六点一、全量门结果
+## 六点一、全量门结果（两轮，如实记录）
 
-（见提交时补记）
+| 轮次 | 命令 | 结果 | 说明 |
+|---|---|---|---|
+| 第 1 轮 | 同 §六「全量」行 | **8815 passed, 15 skipped, 1 failed**（31:18） | 唯一红点 `test_chat_timeline_scroll.py::test_reopening_window_returns_to_latest_reply`——它先 `close()` 再对**同一个**窗口 `show()`，依赖旧的「关闭=隐藏复用」语义。属于本批语义变更必须同步的用例，不是产品缺陷。 |
+| 修正 | `pytest tests/test_chat_timeline_scroll.py -q` | **2 passed** | 用例改成「关窗后重新构造窗口」，断言意图不变（重开仍贴最新回复底边）。 |
+| 第 2 轮 | 同 §六「全量」行 | **8816 passed, 15 skipped, 0 failed**（30:24） | 全绿。日志 `.scratch/chat-window-close/full-suite2.log`。 |
+
+四个 `--ignore` 与 CI 主套件同口径（webm 生命周期族按 `docs/PR-MERGE-LESSONS-2026-09-12.md`
+的时序族隔离先例）。
