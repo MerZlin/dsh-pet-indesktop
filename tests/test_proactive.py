@@ -1159,7 +1159,7 @@ class TestPhase5ShortTermMemory:
 
     def test_memory_write_goes_through_atomic_replace_with_unique_tmp(self, tmp_path, monkeypatch):
         """#196：落盘必须 temp（名带 PID，多实例不抢同一临时文件）+ 原子替换。"""
-        from pet import proactive_memory as pm
+        from pet.proactive import memory as pm
 
         mem_file = tmp_path / "memory.json"
         mem = pm.ProactiveMemory(mem_file)
@@ -1184,7 +1184,7 @@ class TestPhase5ShortTermMemory:
 
     def test_memory_write_fsyncs_before_replace(self, tmp_path, monkeypatch):
         """#204：替换前必须 fsync——否则掉电/崩溃后 rename 已生效而内容还在页缓存。"""
-        from pet import proactive_memory as pm
+        from pet.proactive import memory as pm
 
         synced: list[int] = []
         real_fsync = os.fsync
@@ -1200,7 +1200,7 @@ class TestPhase5ShortTermMemory:
 
     def test_memory_write_failure_is_logged_not_swallowed(self, tmp_path, monkeypatch, caplog):
         """#196：写盘失败不得静默吞——记 warning，且旧内容完整保留、不留 .tmp。"""
-        from pet import proactive_memory as pm
+        from pet.proactive import memory as pm
 
         mem_file = tmp_path / "memory.json"
         old = {"entries": [{"ts": 1.0, "process": "old.exe", "activity": "上网"}]}
@@ -1221,7 +1221,7 @@ class TestPhase5ShortTermMemory:
 
     def test_memory_lock_is_shared_per_path_inside_process(self, tmp_path):
         """#196：同进程内同一路径共用一把锁——设置页清理与主动记录是两个实例。"""
-        from pet import proactive_memory as pm
+        from pet.proactive import memory as pm
 
         path = tmp_path / "memory.json"
         first = pm.ProactiveMemory(path)
@@ -1244,7 +1244,7 @@ class TestPhase5ShortTermMemory:
         """
         import threading
 
-        from pet import proactive_memory as pm
+        from pet.proactive import memory as pm
 
         mem_file = tmp_path / "memory.json"
         writers = [pm.ProactiveMemory(mem_file, max_entries=200) for _ in range(4)]

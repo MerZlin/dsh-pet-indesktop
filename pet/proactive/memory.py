@@ -53,7 +53,7 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QLockFile
 
-from .config import _is_replace_conflict, atomic_replace_with_retry
+from ..config import _is_replace_conflict, atomic_replace_with_retry
 
 log = logging.getLogger(__name__)
 

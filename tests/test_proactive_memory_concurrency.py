@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QLockFile
 
-from pet import proactive_memory as pm
+from pet.proactive import memory as pm
 
 REPO = str(Path(__file__).resolve().parent.parent)
 WAIT = 60.0  # 子进程同步的宽预算（CI 慢机不赌时序）
@@ -63,7 +63,7 @@ target = os.environ["PM_TARGET"]
 mode = os.environ["PM_MODE"]
 release = os.environ["PM_RELEASE"]
 
-from pet.proactive_memory import ProactiveMemory, lock_path_for
+from pet.proactive.memory import ProactiveMemory, lock_path_for
 
 if mode == "write":
     m = ProactiveMemory(target, max_entries=500,

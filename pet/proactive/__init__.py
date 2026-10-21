@@ -18,13 +18,13 @@ import time
 from typing import Any
 
 # 拆分后组件 re-export（维持既有 import 兼容；外部调用点本批不改）
-from .proactive_limiter import (
+from ..proactive_limiter import (
     DEFAULT_PROACTIVE_CONFIG,
     PRESET_DEFAULTS,
     ProactiveLimiter,
     effective_proactive_config,
 )
-from .proactive_memory import ProactiveMemory
+from .memory import ProactiveMemory
 
 __all__ = [
     "DEFAULT_PROACTIVE_CONFIG",
@@ -250,7 +250,7 @@ class ProactiveScreenWatcher:
                 self._watcher._on_frame_ready(img, app_str, hwnd, cur_hash, info_dict)
 
             def _forward_bubble(self, text: str, duration_ms: int) -> None:
-                from . import window_alerts as _alerts
+                from .. import window_alerts as _alerts
 
                 if _alerts.quiet_blocked(self._watcher.win):
                     # 免打扰（含全屏等效）：识屏答复属普通气泡，不冒，转存暂存队列。
@@ -364,7 +364,7 @@ class ProactiveScreenWatcher:
             return
 
         # 获取前台窗口信息
-        from . import vision
+        from .. import vision
 
         info = vision.foreground_window_info()
         if not info:
@@ -436,7 +436,7 @@ class ProactiveScreenWatcher:
         """后台 worker 线程：执行窗口截图与 dHash 计算。"""
         emitted = False
         try:
-            from . import vision
+            from .. import vision
 
             # TOCTOU 复核：派发到现在之间用户可能已切到非白名单窗口，
             # 抓图前必须重新确认前台 hwnd 仍是当时那个窗口，否则按旧矩形
@@ -600,7 +600,7 @@ class ProactiveScreenWatcher:
         watcher 由 ``SharedSubsystems`` 注入，逐窗挂载（legacy）的那份 ``cfg``
         本身就是该宠的路由视图，未注入时直接用 ``cfg``。
         """
-        from . import catalog
+        from .. import catalog
 
         source = self.cfg if self._identity_provider is None else self._identity_provider()
         return source.character_display_name(
@@ -637,7 +637,7 @@ class ProactiveScreenWatcher:
         gen: int = -1,
     ) -> None:
         """后台线程：发起大模型视觉请求，处理重试/熔断，并通过桥接信号在桌宠冒泡。"""
-        from . import vision
+        from .. import vision
 
         pet_name = self.pet_name()
         try:
