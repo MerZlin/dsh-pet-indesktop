@@ -1279,6 +1279,10 @@ class AppShell:
     见 §2.2-E2 / R5）。
     """
 
+    #: 类级默认值：测试用 ``__new__`` 绕开 __init__ 拼壳时按「构建带聊天」处理
+    #: （同 platform_passthrough 的 _applied_state 惯例）。
+    _chat_build_capable: bool = True
+
     def __init__(self, app: QApplication, config: Config, enable_chat: bool = True,
                  slot_id: int | None = None,
                  spawn_offset: int = 0, overlay_gate=None) -> None:

@@ -2211,13 +2211,8 @@ class ModernSettingsDialog(QDialog):
             row for row in self.findChildren(SettingRow) + self.findChildren(AuthorRow)
             if any(page.isAncestorOf(row) for page in live_pages)
         ]
-        # 未挂载的散落控件全部隐藏：模块停用时没进任何域页布局的控件会以
-        # (0,0) 浮窗形式出现在对话框左上角（用户实测「左上角莫名 Agent 按钮」
-        # 与若干悬浮开关）。行对象保留（_retained_rows），只是不可见。
-        for w in self.findChildren(QWidget):
-            if w.parentWidget() is self and not any(
-                    page.isAncestorOf(w) for page in live_pages):
-                w.setVisible(False)
+        # 域页全部装好之后再装「按区直找」：页头跳转条 + 每个分区的组描述。
+        settings_page_guide.install(self)
         # 域页全部装好之后再装「按区直找」：页头跳转条 + 每个分区的组描述。
         settings_page_guide.install(self)
 

@@ -74,10 +74,11 @@ class _AutoCloseDialog(QDialog):
 
     captured: dict = {}
 
-    def __init__(self, config, parent=None, *, include_ai=True, standalone=False):
+    def __init__(self, config, parent=None, *, include_ai=True, standalone=False, chat_build_capable=None):
         super().__init__(parent)
         type(self).captured = {
             "config": config,
+            "chat_build_capable": chat_build_capable,
             "parent": parent,
             "include_ai": include_ai,
             "standalone": standalone,
