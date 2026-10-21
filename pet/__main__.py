@@ -121,7 +121,8 @@ def _run_settings(config=None) -> int:
         pass
     return _exec_settings(
         app, config, include_ai=_chat_available() and _feature_activation.is_active("chat"),
-        initial_page=_settings_page(sys.argv)
+        initial_page=_settings_page(sys.argv),
+        chat_build_capable=_chat_available(),
     )
 
 

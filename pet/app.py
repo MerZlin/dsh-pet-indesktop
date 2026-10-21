@@ -1055,6 +1055,7 @@ class PetInstance:
                 self.win,
                 include_ai=self.enable_chat,
                 initial_page=initial_page,
+                chat_build_capable=self.chat_build_capable,
             )
             dialog.finished.connect(self._modern_settings_finished)
             self.modern_settings_dialog = dialog

@@ -274,7 +274,8 @@ class ModernSettingsDialog(QDialog):
     """Settings window matching Modern's sidebar and rounded-card hierarchy."""
 
     def __init__(self, config, parent=None, *, include_ai: bool = True,
-                 standalone: bool = False, initial_page: str | None = None):
+                 standalone: bool = False, initial_page: str | None = None,
+                 chat_build_capable: bool | None = None):
         super().__init__(parent)
         # slot 设置页（含 #271 起的主宠页 = slot0 页）：非 per-slot 键直读**主**配置
         #（而不是 slot 文件里的无效快照），保存时按同一分流写回。
@@ -285,6 +286,11 @@ class ModernSettingsDialog(QDialog):
         opener = getattr(config, "new_form_view", None)
         self.config = config = opener() if callable(opener) else config
         self.include_ai = bool(include_ai)
+        # 构建变体真值（no-chat 包）：只供更新器选安装包——不能随 chat 功能
+        # 模块启停变化（astra 盲审 P1：关掉 chat 模块的用户更新时会被发成
+        # 纯桌宠安装包）。缺省回落 include_ai（旧调用方语义不变）。
+        self.chat_build_capable = (
+            bool(include_ai) if chat_build_capable is None else bool(chat_build_capable))
         # standalone=True：本对话框跑在独立设置进程（python -m pet --settings）里，
         # 没有桌宠窗口/AppShell 可依附。只影响下面几处显式分支，默认 False 时
         # 全部行为与改动前逐位一致。
@@ -1019,7 +1025,7 @@ class ModernSettingsDialog(QDialog):
         # 更新页是命令/状态面板，不写入 Config；它与常规域同级，便于从菜单
         # 和设置窗口进入同一套检查、下载、校验、安装流程。
         self.update_page = UpdatePage(
-            self.config, include_chat=self.include_ai, parent=self
+            self.config, include_chat=self.chat_build_capable, parent=self
         )
         self._rebuild_domain_navigation()
         self.sidebar.currentRowChanged.connect(self.pages.setCurrentIndex)
@@ -1029,9 +1035,8 @@ class ModernSettingsDialog(QDialog):
         # 索引口径：标准设置行 + 「更新」页的作者账号行（后者不是 SettingRow，
         # 但暴露同名的 label/hint_label，故同一套匹配函数就能覆盖；侧栏命令类
         # 控件仍不进索引——那是 docs/SETTINGS-CHANGE-GATES.md 里的既有决定）。
-        from .settings_about import AuthorRow
-
-        self._search_rows = self.findChildren(SettingRow) + self.findChildren(AuthorRow)
+        # 索引由 _rebuild_domain_navigation 末尾统一收集（过滤未挂载行并随
+        # 重建刷新，避免旧页销毁后的死行）；这里只初始化匹配状态。
         self._search_matches: list[SettingRow] = []
         self._search_index = -1
         self.search_edit.textChanged.connect(self._search_settings)
@@ -1803,6 +1808,11 @@ class ModernSettingsDialog(QDialog):
         old_pages = {self.sidebar.item(index).text(): self.pages.widget(index) for index in range(self.pages.count())}
         all_rows = list(self.findChildren(SettingRow))
         claimed: set[SettingRow] = set()
+        # 持有全部行防 GC：claimed 但未挂载的行一旦丢掉最后的 Python 引用，
+        # wrapper 被回收会连坐销毁 C++ 控件（纯核心/停用模块场景实测
+        # pro_dwell_spin 在 exec 后死亡）——保存链（settings_default_marks）、
+        # 搜索索引、模块行写回都会撞上死控件（astra P1-1 的真正根因）。
+        self._retained_rows = all_rows
 
         def claim(*setting_ids: str) -> list[SettingRow]:
             rows = []
@@ -2187,6 +2197,16 @@ class ModernSettingsDialog(QDialog):
             self._add_page(label, icon, self._page_shell(label, content))
         for page in old_pages.values():
             page.deleteLater()
+        # 搜索索引随重建刷新：初装时收集的行可能已随旧页销毁（外部改配置触发
+        # 刷新后，旧索引里的死行会让搜索/清匹配直接 RuntimeError——astra P1-1）；
+        # 只收仍挂在某个域页上的行（未激活模块未挂载的行不入索引）。
+        from .settings_about import AuthorRow
+
+        live_pages = [self.pages.widget(i) for i in range(self.pages.count())]
+        self._search_rows = [
+            row for row in self.findChildren(SettingRow) + self.findChildren(AuthorRow)
+            if any(page.isAncestorOf(row) for page in live_pages)
+        ]
         # 域页全部装好之后再装「按区直找」：页头跳转条 + 每个分区的组描述。
         settings_page_guide.install(self)
 
@@ -2396,8 +2416,11 @@ class ModernSettingsDialog(QDialog):
         existing_island = self.config.get("dynamic_island", {})
         if not isinstance(existing_island, dict):
             existing_island = {}
-        # 灵动岛模块未激活：岛行未挂出，其键不写回（见「桌面组件」域装配）。
-        self._set_feature_key("dynamic_island", "dynamic_island", {
+        # 灵动岛模块未激活：岛行未挂出，其键不写回——判活必须先于任何控件
+        # 读取（旧页 deleteLater 会连坐销毁未搬走的行控件，先求值 dict 就是
+        # RuntimeError；astra 盲审 P1-1）。agent_cfg 同理（2517 行同型）。
+        if _fa.is_active("dynamic_island"):
+            self.config.set("dynamic_island", {
             "enabled": self.island_enabled_check.isChecked(),
             "show_icon": self.island_icon_check.isChecked(),
             "show_name": self.island_name_check.isChecked(),
@@ -2415,10 +2438,10 @@ class ModernSettingsDialog(QDialog):
             "edge_dock": self.island_edge_dock_check.isChecked(),
             "collision_enabled": self.island_collision_check.isChecked(),
             # 拖拽落点写入的停靠边与位置：设置页不回写，原样保留。
-            "dock_edge": existing_island.get("dock_edge", "none"),
-            "x": existing_island.get("x"),
-            "y": existing_island.get("y"),
-        })
+                "dock_edge": existing_island.get("dock_edge", "none"),
+                "x": existing_island.get("x"),
+                "y": existing_island.get("y"),
+            })
         if self.click_balance_check is not None and _fa.is_active("dynamic_island"):
             self.config.set("click_show_balance", self.click_balance_check.isChecked())
         self.config.set("click_show_self_talk", self.click_self_talk_check.isChecked())
@@ -2508,7 +2531,8 @@ class ModernSettingsDialog(QDialog):
         agent_cfg["sound_volume"] = float(self.agent_sound_volume_spin.value()) / 100.0
         agent_cfg["sound_cooldown_seconds"] = float(self.agent_sound_cooldown_spin.value())
 
-        self._set_feature_key("agent_link", "agent_link", agent_cfg)
+        if _fa.is_active("agent_link"):
+            self.config.set("agent_link", agent_cfg)
         # 模块未激活的组未挂进页面（见 automation 装配），其键不写回
         if _fa.is_active("todo"):
             self.config.set("todo_reminder_enabled", self.todo_reminder_check.isChecked())
@@ -2555,7 +2579,8 @@ class ModernSettingsDialog(QDialog):
             },
         )
         # 快捷启动模块未激活：「快捷启动」标签未挂出，编辑器值不写回
-        self._set_feature_key("quick_launch", "quick_launch_apps", self.quick_launch_editor.apps())
+        if _fa.is_active("quick_launch"):
+            self.config.set("quick_launch_apps", self.quick_launch_editor.apps())
         if self.ai_page is not None:
             self.ai_page.save()
         settings_file_interpret.save_file_interpret_settings(self)
