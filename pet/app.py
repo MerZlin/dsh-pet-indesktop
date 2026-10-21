@@ -209,6 +209,8 @@ def _show_balance_payload(win, payload) -> None:
         subtitle = balance_mod.deepseek_pricing_hint(
             peak_label=peak_label, idle_label=idle_label,
         )
+    # 只保护这一次上屏的字符串。缓存、format_balance 和接口原文仍是明文。
+    text = balance_mod.format_balance_display(text)
     win.show_bubble(
         text, duration_ms=6000,
         subtitle=subtitle,

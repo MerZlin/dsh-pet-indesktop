@@ -16,6 +16,7 @@ v4.1 扩展（同步上游 dsh-pet 余额动画）：
 from __future__ import annotations
 
 import json
+import re
 import socket
 import urllib.error
 import urllib.request
@@ -126,6 +127,39 @@ def format_balance(info: dict) -> str:
     if granted and topped:
         return f'余额 ¥{total}（充值 ¥{topped} / 赠送 ¥{granted}）'
     return f'余额 ¥{total}'
+
+
+# U+2060 WORD JOINER：零宽，且不属于 Unicode 空白，normalize 折空白时不会把它吃掉。
+# 用它而不是 NBSP，是因为气泡规整会把不换行空格折回普通空格。
+_WORD_JOINER = '\u2060'
+_HSPACE = r'[^\S\n]*'
+# 只连接「余额/充值/赠送 + 现有分隔 + 货币金额」。人设散文里单独出现的这两个字不动。
+_BALANCE_PHRASE_RE = re.compile(
+    rf'(?:余额|充值|赠送){_HSPACE}[:：]?{_HSPACE}'
+    rf'(?:[¥￥]{_HSPACE}-?{_HSPACE}\d+(?:\.\d+)?|-{_HSPACE}[¥￥]{_HSPACE}\d+(?:\.\d+)?)'
+)
+
+
+def format_balance_display(text: str) -> str:
+    """给已经渲染好的余额正文加上断行保护，只用于气泡显示。
+
+    「余额 ¥12.34」「充值 ¥10.00」「赠送 ¥2.34」各成一段：标签、原有分隔和整个
+    金额之间插入 WORD JOINER，看起来仍是原来的空格。没有这些金额短语的文字
+    原样返回。再调用一次不会叠第二层连接符。
+
+    不要把结果写进余额缓存或请求体——``format_balance`` 保持明文。
+    """
+    raw = text if isinstance(text, str) else str(text or '')
+    if not raw:
+        return ''
+
+    def _join(match: re.Match) -> str:
+        visible = match.group(0).replace(_WORD_JOINER, '')
+        if len(visible) <= 1:
+            return match.group(0)
+        return _WORD_JOINER.join(visible)
+
+    return _BALANCE_PHRASE_RE.sub(_join, raw)
 
 
 def balance_percent(total: str | float | None) -> float | None:
