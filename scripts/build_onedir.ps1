@@ -622,7 +622,7 @@ function Wait-SmokeWindow {
 # 界面看不出来（那一段按 unsupported 不占位）。所以在产物里按**同一份**判据再验一次
 # （文件名 / sha256 / x86-64），缺件、拷坏、被后续步骤删掉都在这里中止。
 # 文件名从 pet\game_fps.py 读，不在本脚本里写第二份字面量（换版本只需改产品常量）。
-$backendName = (& python -c "from pet import game_fps; print(game_fps.BACKEND_EXE_NAME)").Trim()
+$backendName = (& python -c "from pet.island import game_fps; print(game_fps.BACKEND_EXE_NAME)").Trim()
 if (-not $backendName) { throw "[presentmon] cannot resolve BACKEND_EXE_NAME from pet/game_fps.py" }
 $backendInBundle = Join-Path $appDir ("_internal\resources\presentmon\" + $backendName)
 Write-Host "[presentmon] verifying bundled backend in the built app..." -ForegroundColor Cyan

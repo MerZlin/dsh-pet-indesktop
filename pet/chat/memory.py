@@ -45,7 +45,7 @@ from typing import Any, Callable
 from PySide6.QtCore import QLockFile
 
 from ..config import _is_replace_conflict, atomic_replace_with_retry
-from ..proactive_memory import (
+from ..proactive.memory import (
     DEFAULT_LOCK_TIMEOUT_MS,
     _io_lock_for,
     _lock_for,
