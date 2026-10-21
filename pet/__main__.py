@@ -52,6 +52,11 @@ def _exec_settings(app, config, *, include_ai: bool = True, initial_page: str = 
     dialog = ModernSettingsDialog(config, parent=None, **dialog_kwargs)
     dialog.finished.connect(lambda _result: app.quit())
     dialog.show()
+    # Accessory 设置进程（macOS 无 Dock 图标、不进 Cmd-Tab）被盖住后没有任何
+    # 找回手段——show 后主动置前（三平台安全；进程内路径 app.py 本就有这两句，
+    # PR #333 审查 M1）
+    dialog.raise_()
+    dialog.activateWindow()
     try:
         return app.exec()
     finally:
