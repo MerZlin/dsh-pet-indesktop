@@ -138,7 +138,11 @@ def snapshot_env_value() -> str | None:
 
 
 def pending_enabled(config) -> list[str]:
-    """功能页展示的「下次启动」启用集：盘上已判定的值；未判定给迁移基线预览。"""
+    """功能页展示的「下次启动」启用集：盘上已判定的值；未判定时预览跟随
+    **有效判定**——本进程已冻结的快照（主进程=启动判定结果；设置进程=
+    透传快照/自己的判定），未冻结才给迁移基线预览。
+    否则新装用户的功能页会显示全模块勾选，任何一次保存都把全激活写进盘，
+    纯核心名存实亡（2026-10-21 复审补漏：is_active 投影与 pending 预览必须同源）。"""
     raw = config.data.get("feature_activation")
     if isinstance(raw, dict) and isinstance(raw.get("enabled"), list):
         try:
@@ -146,6 +150,9 @@ def pending_enabled(config) -> list[str]:
         except ValueError:
             return list(MIGRATION_BASELINE)
         return enabled
+    snap = snapshot()
+    if snap is not None:
+        return sorted(snap)
     return list(MIGRATION_BASELINE)
 
 

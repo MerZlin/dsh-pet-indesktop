@@ -197,3 +197,24 @@ def test_snapshot_env_value_roundtrip():
     assert fa.snapshot_env_value() == ""
     fa.freeze_snapshot_for_tests(["weather", "todo"])
     assert fa.snapshot_env_value() == "todo,weather"
+
+
+def test_pending_preview_follows_effective_decision_not_baseline(tmp_path):
+    """功能页预览与有效判定同源：新装（冻结纯核心）预览必须是空——否则
+    功能页显示全模块勾选，一次保存就把全激活写进盘（复审补漏）。"""
+    cfg = _config(tmp_path)
+    cfg.dir.mkdir(parents=True, exist_ok=True)
+    # 新装：主进程判定并冻结纯核心 → 预览纯核心（修复前：预览=迁移基线全开）
+    fa.decide_and_freeze(cfg)
+    assert fa.pending_enabled(cfg) == []
+    # 升级：冻结迁移基线 → 预览全模块
+    fa.reset_snapshot_for_tests()
+    cfg2 = _config(tmp_path / "upg")
+    cfg2.dir.mkdir(parents=True, exist_ok=True)
+    cfg2.path.write_text("{}", encoding="utf-8")
+    cfg2.reload()
+    fa.decide_and_freeze(cfg2)
+    assert fa.pending_enabled(cfg2) == list(MIGRATION_BASELINE)
+    # 未冻结（工具/测试上下文）：沿用迁移基线预览（旧行为不变）
+    fa.reset_snapshot_for_tests()
+    assert fa.pending_enabled(_config(tmp_path / "raw")) == list(MIGRATION_BASELINE)
