@@ -304,3 +304,35 @@ def test_close_while_streaming_still_destroys_window(tmp_path, kind):
     )
     assert inst.modern_chat_window is None and inst.legacy_chat_window is None
     _pump_deferred()
+
+
+def test_flash_hint_timer_uses_context_object(tmp_path, kind, monkeypatch):
+    """提示栏 5s 复位定时器必须带上下文对象：关闭即销毁后定时器自动取消，
+    不回调已删控件（ubuntu CI 实测 RuntimeError: QLabel already deleted——
+    缓存单例时代窗口永不销毁，这条是潜伏隐患，关闭即销毁把它变成生产路径）。"""
+    import pet.chat.legacy_widgets as legacy_mod
+    import pet.chat.widgets as widgets_mod
+
+    inst = _make_instance(tmp_path)
+    win = _open(kind, inst)
+    try:
+        calls = []
+        monkeypatch.setattr(widgets_mod.QTimer, "singleShot",
+                            lambda *a, **kw: calls.append(a))
+        monkeypatch.setattr(legacy_mod.QTimer, "singleShot",
+                            lambda *a, **kw: calls.append(a))
+        flash = getattr(win, "_flash_notice", None) or getattr(win, "_flash_hint", None)
+        if flash is None:
+            composer = getattr(win, "composer", None)
+            flash = getattr(composer, "_flash_notice", None) or getattr(composer, "_flash_hint", None)
+        assert flash is not None
+        flash("测试提示")
+        timed = [a for a in calls if a and a[0] == 5000]
+        assert timed, "没有找到 5s 复位定时器"
+        assert all(len(a) >= 3 for a in timed), f"定时器未带上下文对象（销毁即取消）: {timed}"
+    finally:
+        for attr in ("modern_chat_window", "legacy_chat_window"):
+            obj = getattr(inst, attr, None)
+            if obj is not None and shiboken6.isValid(obj):
+                obj.deleteLater()
+        inst.chat_window = None

@@ -277,7 +277,7 @@ class ChatComposer(QFrame):
     def _flash_hint(self, message: str) -> None:
         """短提示（钉为记忆反馈等）：与 modern 窗 composer._flash_notice 同一形态。"""
         self.hint.setText(message)
-        QTimer.singleShot(5000, lambda: self.hint.setText("内容会保存到当前角色的本地会话"))
+        QTimer.singleShot(5000, self.hint, lambda: self.hint.setText("内容会保存到当前角色的本地会话"))
 
     def set_busy(self, busy: bool) -> None:
         self._busy = bool(busy)
