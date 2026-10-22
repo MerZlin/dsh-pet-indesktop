@@ -30,7 +30,7 @@
 |---|---:|---|
 | `pet/harness_launcher.py` | +170 / −14 | `_spawn` 保存 stdout 并及时关闭父进程句柄；按完整行、字节偏移增量捕获最后一条 token 公告；新启动和已有实例校验 authority，复用时检查首个 HTTP 状态；缺失或失效时回退裸地址；同步模块与函数契约。解决认证链接被丢弃的问题。 |
 | `tests/test_harness_launcher.py` | +243 / −3 | 新增 11 个用例，覆盖半行、重复公告、无日志、authority 不匹配、失效 token、非法 URL、首个响应状态和启动入口；3 个既有用例隔离本机日志，防止真实文件与网络影响结果。 |
-| `docs/PR-REPORT-HARNESS-WEB-TOKEN-2026-10-22.md` | +188 / −0（新增） | 记录改动、性能方法、实机协议与验证边界，满足交付证据规则。 |
+| `docs/PR-REPORT-HARNESS-WEB-TOKEN-2026-10-22.md` | +187 / −0（新增） | 记录改动、性能方法、实机协议、菜单点击验收与验证边界，满足交付证据规则。 |
 | `docs/INDEX.md` | +3 / −1 | 登记本报告，并在服务目标报告条目中补充后续认证行为的入口。 |
 
 无删除文件。`run.bat`、`app.py`、配置键、依赖和安装流程均沿用基线。
@@ -150,10 +150,10 @@ h.stop_self_launched_harness()
 | desktop 未安装 | `not-found`，日志明确说明未检测到安装且不回落 web。 |
 | 停止与旧 token | `stopped_count=1`、`port_closed=True`；旧 token 复用回退裸地址。 |
 | service 再启动 | `('started', 'http://127.0.0.1:38182')`；真实端口开始监听，`browser_calls_added=0`；随后按当前宿主登记安全收尾，`port_closed=True`。 |
+| 菜单启动 | 实机点击桌宠菜单「启动 dsh web 界面」，确认服务启动并打开认证页面，菜单入口行为符合预期。 |
 
-用户可见行为验证到系统浏览器真实接受认证链接，以及真实服务的 cookie 认证闭环。
-没有把这等同于桌宠菜单的鼠标点击或浏览器页面的截图确认；本次未做打包产物及
-macOS/Linux 真机验收。没有 token 公告的回退另以隔离时钟运行真实等待闭包：60 秒宽限打开裸地址；
+用户可见行为验证覆盖系统浏览器真实接受认证链接、真实服务的 cookie 认证闭环和桌宠菜单实机点击启动。
+本次未做浏览器页面截图确认、打包产物及 macOS/Linux 真机验收。没有 token 公告的回退另以隔离时钟运行真实等待闭包：60 秒宽限打开裸地址；
 把总预算缩短到 2 秒时仍在端口就绪条件下回退；端口始终不通时不打开页面。
 这些是确定性边界检查，不是旧版 dsh 的真机验收。
 
@@ -165,7 +165,7 @@ macOS/Linux 真机验收。没有 token 公告的回退另以隔离时钟运行�
 |---|---|---|
 | 聚焦及相邻回归 | `QT_QPA_PLATFORM=offscreen` 下运行 Harness launcher、lifecycle、ownership 与报告纪律测试 | 349 passed，22.36 秒。 |
 | 60 秒边界 | 隔离时钟执行真实等待闭包：无公告、59.5 秒到达 token、缩短总预算、端口始终未就绪 | 60.0 秒回退；59.5 秒 token 被捕获；2 秒总预算时正常回退；端口未就绪时不打开浏览器。 |
-| 全量 | `$env:QT_QPA_PLATFORM='offscreen'; $env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'; .venv\Scripts\python.exe -m pytest -q` | **9079 passed, 13 skipped, 18 warnings, 0 failed；2790.53 秒（46 分 30 秒）。** |
+| 全量 | `$env:QT_QPA_PLATFORM='offscreen'; $env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'; .venv\Scripts\python.exe -m pytest -q` | **9079 passed, 13 skipped, 18 warnings, 0 failed；2485.33 秒（41 分 25 秒）。** |
 | 受影响时序族高负载 3 轮 | 8 个忙循环进程期间连续运行 `tests/test_harness_launcher.py` | 每轮 44 passed；13.85 / 18.29 / 224.87 秒；采样 CPU 100.0%，全部负载进程已退出。 |
 | 静态检查 | `.venv\Scripts\python.exe -m ruff check --no-cache pet tests scripts` | 通过。 |
 | 编译 | `.venv\Scripts\python.exe -m compileall -q pet packaging scripts` | 通过。 |
