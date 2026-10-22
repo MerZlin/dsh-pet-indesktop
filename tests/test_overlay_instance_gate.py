@@ -305,6 +305,7 @@ def test_main_refuses_second_overlay_instance_before_slot(tmp_path, monkeypatch,
     monkeypatch.setenv("PET_RENDER_TOPOLOGY", "overlay")
     monkeypatch.setattr(app_mod, "_default_base", lambda: tmp_path)
     monkeypatch.setattr(app_mod, "QApplication", _FakeQApplication)
+    monkeypatch.setattr("pet.context_menus.menu_styles.common.install_responsive_menu_style", lambda _app: None)
 
     config_dir = tmp_path / APP_DIR_NAME
     holder = gate_mod.OverlayInstanceGate(config_dir)
@@ -338,6 +339,7 @@ def test_main_legacy_topology_also_takes_gate_and_does_not_take_slot_lock(
     monkeypatch.delenv("DSH_PET_INSTANCE", raising=False)
     monkeypatch.setattr(app_mod, "_default_base", lambda: tmp_path)
     monkeypatch.setattr(app_mod, "QApplication", _FakeQApplication)
+    monkeypatch.setattr("pet.context_menus.menu_styles.common.install_responsive_menu_style", lambda _app: None)
     monkeypatch.setattr(app_mod, "Config", lambda *a, **k: RealConfig(base=tmp_path))
     monkeypatch.setattr(app_mod, "_setup_logging", lambda _config: None)
     monkeypatch.setattr(app_mod.autostart_mod, "cleanup_stale_entries", lambda: 0)
@@ -377,6 +379,7 @@ def test_main_legacy_topology_refuses_second_instance(tmp_path, monkeypatch, cap
     monkeypatch.setenv("PET_RENDER_TOPOLOGY", "legacy")
     monkeypatch.setattr(app_mod, "_default_base", lambda: tmp_path)
     monkeypatch.setattr(app_mod, "QApplication", _FakeQApplication)
+    monkeypatch.setattr("pet.context_menus.menu_styles.common.install_responsive_menu_style", lambda _app: None)
 
     config_dir = tmp_path / APP_DIR_NAME
     holder = gate_mod.OverlayInstanceGate(config_dir)
@@ -406,6 +409,7 @@ def test_main_releases_gate_when_startup_fails(tmp_path, monkeypatch):
     monkeypatch.setenv("PET_RENDER_TOPOLOGY", "overlay")
     monkeypatch.setattr(app_mod, "_default_base", lambda: tmp_path)
     monkeypatch.setattr(app_mod, "QApplication", _FakeQApplication)
+    monkeypatch.setattr("pet.context_menus.menu_styles.common.install_responsive_menu_style", lambda _app: None)
     # 隔离真实用户配置目录与日志（Config/_setup_logging 不走 _default_base）
     monkeypatch.setattr(app_mod, "Config", lambda *a, **k: RealConfig(base=tmp_path))
     monkeypatch.setattr(app_mod, "_setup_logging", lambda _config: None)

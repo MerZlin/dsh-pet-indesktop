@@ -5226,6 +5226,9 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
             return 1
 
     app = QApplication(argv)
+    from .context_menus.menu_styles.common import install_responsive_menu_style
+
+    install_responsive_menu_style(app)
     app.setApplicationName(APP_DIR_NAME)
     app.setQuitOnLastWindowClosed(False)
     # 图片解码上限（像素级别的一处设定）：Qt 默认 256 MB/张（本机 Qt 6.11.2 实测），

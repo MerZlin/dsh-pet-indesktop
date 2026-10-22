@@ -49,7 +49,6 @@ from .context_menus.menu_styles import (
     install_modern_check_indicators,
 )
 from .context_menus.menu_styles.common import (
-    install_responsive_menu_style,
     install_stay_open_interaction,
 )
 from .context_menus.shared import add_action as _add_action
@@ -816,7 +815,6 @@ def build_sprite_full_menu(shell, sprite=None) -> QMenu:
         menu, cfg.get("context_menu_appearance", {}) or {})
     build_modern_menu(menu, facade)
     install_modern_check_indicators(menu)
-    install_responsive_menu_style(menu)
     install_stay_open_interaction(menu)
     if not facade.music_service_available:
         # 音乐服务宿主不可达 → 整组隐藏（注册表不按宿主能力过滤，在这里收口）

@@ -72,7 +72,7 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
-| [`CONTEXT-MENU-RESEARCH-AND-REFACTOR-2026-08-25.md`](CONTEXT-MENU-RESEARCH-AND-REFACTOR-2026-08-25.md) | 右键菜单图标调研与双模板（`modern-default-v1`）重构记录，含菜单布局树的顺序/显隐/别名/图标覆盖规则与 2026-09 生命周期收口补充。**双模板已是历史**：旧版扁平菜单 2026-10-08 全量退役，现状见文首「后继变更」与 [`PR-REPORT-LEGACY-MENU-RETIREMENT-2026-10-08.md`](PR-REPORT-LEGACY-MENU-RETIREMENT-2026-10-08.md)。 | **改右键菜单结构、样式、交互或平台行为时必读**（AGENTS.md 口径）。**删除已有菜单项**（入口收敛）时还要看 [`PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md`](PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md)：注册表怎么改、用户旧 `context_menu_layout` 里的残留节点怎么清；**判断「菜单模板键 / 旧版建造器还在不在」时先读退役报告**（退役模块与符号有机器化防复活守卫）。 |
+| [`CONTEXT-MENU-RESEARCH-AND-REFACTOR-2026-08-25.md`](CONTEXT-MENU-RESEARCH-AND-REFACTOR-2026-08-25.md) | 右键菜单图标调研与双模板（`modern-default-v1`）重构记录，含菜单布局树的顺序/显隐/别名/图标覆盖规则与 2026-09 生命周期收口补充。**双模板已是历史**：旧版扁平菜单 2026-10-08 全量退役，现状见文首「后继变更」与 [`PR-REPORT-LEGACY-MENU-RETIREMENT-2026-10-08.md`](PR-REPORT-LEGACY-MENU-RETIREMENT-2026-10-08.md)。 | **改右键菜单结构、样式、交互或平台行为时必读**（AGENTS.md 口径）。**删除已有菜单项**（入口收敛）时还要看 [`PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md`](PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md)：注册表怎么改、用户旧 `context_menu_layout` 里的残留节点怎么清；**判断「菜单模板键 / 旧版建造器还在不在」时先读退役报告**（退役模块与符号有机器化防复活守卫）；**修改子菜单悬浮或启动样式安装时还要读 [菜单响应报告](PR-REPORT-MENU-RESPONSE-2026-10-22.md)**，Qt 在构造时缓存交互参数。 |
 | [`SETTINGS-CHANGE-GATES.md`](SETTINGS-CHANGE-GATES.md) | Settings System 的变更门禁：一条设置能否进入设置页的准入条件、以及变更的准出证据要求。 | **新增、移动、重命名、删除或改变任何持久设置、以及修改设置页布局/保存语义/平台可见性/依赖关系之前必读**（AGENTS.md 口径）。常规域分组归属与披露层级的**现状**见本文 2026-10-16 条目与 [`PR-REPORT-SETTINGS-POLISH-2026-10-16.md`](PR-REPORT-SETTINGS-POLISH-2026-10-16.md)；同日另两条记录：`music_player_paths` 扩到四播放器（**不新增配置格式**）见 [`PR-REPORT-MUSIC-PLAYER-PATHS-2026-10-16.md`](PR-REPORT-MUSIC-PLAYER-PATHS-2026-10-16.md)；新增全局键 `allow_cross_screen`（「允许桌宠跨屏」，默认关 + 重启级 + 非 overlay 拓扑置灰）见 [`PR-REPORT-PER-PET-MULTISCREEN-2026-10-16.md`](PR-REPORT-PER-PET-MULTISCREEN-2026-10-16.md)；新增全局键 `todo_reminder_speak`（「待办提醒 → 语音播报」，默认关 + 复用语音报时通道）见 [`PR-REPORT-TODO-VOICE-BROADCAST-2026-10-18.md`](PR-REPORT-TODO-VOICE-BROADCAST-2026-10-18.md)。 |
 | [`SETTINGS-INFORMATION-ARCHITECTURE-2026-08-27.md`](SETTINGS-INFORMATION-ARCHITECTURE-2026-08-27.md) | 设置页信息架构重组记录：按用户任务划分的页面归属表、渐进显示与禁用规则、视觉密度。 | 决定某个新设置该放哪一页/哪一组；确认"同一概念不得跨页重复"的现行归属时。**常规域 2026-10-16 有两处归属调整**（「光标隐藏时自动穿透」回 primary、「直播捕获兼容」独立高级组），见文末「后继变更」；现行真值以 `pet/modern_settings_dialog.py` 的域装配表为准。 |
 | [`SETTINGS-REDESIGN-Q4-CLASSIFICATION-RESEARCH.md`](SETTINGS-REDESIGN-Q4-CLASSIFICATION-RESEARCH.md) | Q4 调研：侧栏分类（7 个稳定能力域）的跨平台 IA 结论与第一方 HIG 出处。 | 为"要不要新增一级侧栏页"找判断依据与先例出处时。 |
@@ -143,6 +143,8 @@
 ---
 
 ## PR 报告存档
+
+- [菜单悬浮响应（2026-10-22）](PR-REPORT-MENU-RESPONSE-2026-10-22.md)：菜单创建前安装交互策略；修改 QMenu 初始化、高亮或子菜单保护时必读，含离屏回归与 Cocoa 原生探针。
 
 - [跨屏过缝通行与落点吸附（2026-10-22）](PR-REPORT-CROSS-SCREEN-CORRIDOR-2026-10-22.md)：跨屏移动语义从 band 收窄改为「通行域=并集（含空洞）、静止域=各屏、四处收口吸附」，含侧墙低速截止、两轮 k3 盲审记录与先红后绿证据；改跨屏拖拽/抛掷物理、写 `_clamp_rects` 多矩形域、动 `snap_to_nearest_screen` 或排查「宠物停在看不见的地方」时必读。**先例**：① 语义改动要逐个收口点查吸附（落地/原地放下/落岛/弹弓取消，漏一个就是把宠钉死在空洞）；② `__init__` 里 set_pos 先于字段初始化，钳制条件必须 getattr 兜底；③ 覆盖判定用并集（QRegion）而非中心点，否则半身悬空漏判。
 - [macOS 多屏与 Dock 修复（2026-10-21）](PR-REPORT-MACOS-DESKTOP-2026-10-21.md)：Mac 双屏每屏一窗、设置进程启动即 Accessory，含用户副屏可见及单 Dock 图标确认、75 秒焦点观察、构建安装与测试证据；改 Mac 拓扑或 Dock 启动策略时查阅；多个 Spaces 的后续修复见下一项。
