@@ -145,7 +145,7 @@ def test_supports_no_open_disk_cache(monkeypatch, tmp_path):
     assert hl._supports_no_open(["dsh"]) is True
 
 
-def test_launch_harness_reuses_existing_instance_on_alt_port(monkeypatch):
+def test_launch_harness_reuses_existing_instance_on_alt_port(monkeypatch, tmp_path):
     """已有 dsh web 跑在官方默认 3080 时，直接复用打开，不再新起 38080。
 
     ``target="web"`` 显式给出：默认的 auto 已改为 service（只起服务、不开浏览器），
@@ -153,6 +153,8 @@ def test_launch_harness_reuses_existing_instance_on_alt_port(monkeypatch):
     """
     from pet import harness_launcher as hl
 
+    # stdout 日志指向不存在路径：token 复用逻辑静默回退裸地址，测试保持确定性
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: tmp_path / "no-stdout.log")
     opened = []
     monkeypatch.setattr(hl.webbrowser, "open", lambda url: opened.append(url))
     # 38080 无监听，3080 有
@@ -168,10 +170,12 @@ def test_launch_harness_reuses_existing_instance_on_alt_port(monkeypatch):
     assert opened == ["http://127.0.0.1:3080"]
 
 
-def test_launch_harness_prefers_configured_port(monkeypatch):
+def test_launch_harness_prefers_configured_port(monkeypatch, tmp_path):
     """配置端口已有实例时优先复用它，不再探测 3080。"""
     from pet import harness_launcher as hl
 
+    # stdout 日志指向不存在路径：token 复用逻辑静默回退裸地址，测试保持确定性
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: tmp_path / "no-stdout.log")
     opened = []
     probed = []
     monkeypatch.setattr(hl.webbrowser, "open", lambda url: opened.append(url))
@@ -323,7 +327,7 @@ def test_launch_harness_browser_ownership(monkeypatch):
     assert opened == []
 
 
-def test_spawn_injects_augmented_path(monkeypatch):
+def test_spawn_injects_augmented_path(monkeypatch, tmp_path):
     """子进程必须继承增强 PATH：macOS Finder 启动的 .app 原 PATH 极简，
     dsh/npx 的 shebang（/usr/bin/env node）依赖子进程环境找 node。"""
     import subprocess
@@ -337,6 +341,7 @@ def test_spawn_injects_augmented_path(monkeypatch):
         captured["kwargs"] = kwargs
         return object()
 
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: tmp_path / "harness-web-stdout.log")
     monkeypatch.setattr(hl.subprocess, "Popen", fake_popen)
     hl._spawn(["dsh", "web"])
     env = captured["kwargs"]["env"]
@@ -834,3 +839,238 @@ def test_self_launched_web_still_collected(monkeypatch):
             hl._SELF_LAUNCHED_PIDS.clear()
             hl._SELF_LAUNCHED_KIND.clear()
             hl._LAUNCHED_CHILDREN.clear()
+
+
+# ------------------------------------------------------------------ token 捕获
+# dsh web 的鉴权链路：一次性 token（仅打印在 stdout）→ 换 30 天持久签名
+# cookie。--no-open 静默启动模式下 token 行是官方留给宿主的唯一通道——
+# 宿主不读它，用户每次重启都要 401 一场。以下用例钉住「读 stdout → 预探
+# → 打开认证页，任何失败回退裸地址」这条契约（2026-10）。
+
+
+def test_scan_stdout_for_token_captures_incrementally(tmp_path, monkeypatch):
+    """增量扫描：只消费完整行；半行等待；token 行捕获后偏移精确推进。"""
+    from pet import harness_launcher as hl
+
+    log = tmp_path / "harness-web-stdout.log"
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: log)
+
+    # 日志缺失：静默 (原偏移, None)，不抛
+    assert hl._scan_stdout_for_token(0) == (0, None)
+
+    # 半行（无换行符）：不消费，等下一轮
+    log.write_bytes(b"dsh web: http://127.0.0.1:38080/?toke")
+    assert hl._scan_stdout_for_token(0) == (0, None)
+
+    # 补全换行：整行可消费，捕获 token 链接
+    log.write_bytes(
+        b"[whale-memory] registering tool x\n"
+        b"dsh web: http://127.0.0.1:38080/?token=abc-DEF_123\n"
+    )
+    offset, token_url = hl._scan_stdout_for_token(0)
+    assert token_url == "http://127.0.0.1:38080/?token=abc-DEF_123"
+    assert offset == log.stat().st_size
+
+    # 从新偏移续扫：无新内容 → None；追加新 token → 从新偏移也能捕获
+    assert hl._scan_stdout_for_token(offset) == (offset, None)
+    with open(log, "ab") as fh:
+        fh.write(b"dsh web: http://127.0.0.1:38080/?token=second\n")
+    offset2, token_url2 = hl._scan_stdout_for_token(offset)
+    assert token_url2 == "http://127.0.0.1:38080/?token=second"
+
+
+def test_scan_stdout_for_token_prefers_latest_complete_announcement(tmp_path, monkeypatch):
+    """同一批 stdout 里有多条公告时，交付最后一条 token。"""
+    from pet import harness_launcher as hl
+
+    log = tmp_path / "harness-web-stdout.log"
+    log.write_bytes(
+        b"dsh web: http://127.0.0.1:38080/?token=old\n"
+        b"dsh web: http://127.0.0.1:38080/?token=new\n"
+    )
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: log)
+
+    _, token_url = hl._scan_stdout_for_token(0)
+    assert token_url == "http://127.0.0.1:38080/?token=new"
+
+
+def test_authenticated_reuse_url_falls_back_without_log(tmp_path, monkeypatch):
+    """无 stdout 日志（dsh 由用户在外部自行启动）：回退裸地址，不发预探请求。"""
+    from pet import harness_launcher as hl
+
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: tmp_path / "no-stdout.log")
+
+    def _no_probe(url):
+        raise AssertionError("无 token 时不应发起预探请求")
+
+    monkeypatch.setattr(hl, "_token_url_alive", _no_probe)
+    assert hl._authenticated_reuse_url("http://127.0.0.1:38080") == "http://127.0.0.1:38080"
+
+
+def test_authenticated_reuse_url_uses_token_when_alive(tmp_path, monkeypatch):
+    """存档 token 与候选地址同 authority 且服务端认账 → 打开认证链接。"""
+    from pet import harness_launcher as hl
+
+    token_url = "http://127.0.0.1:38080/?token=abc-DEF_123"
+    log = tmp_path / "harness-web-stdout.log"
+    log.write_bytes(f"dsh web: {token_url}\n".encode())
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: log)
+    monkeypatch.setattr(hl, "_token_url_alive", lambda url: url == token_url)
+
+    assert hl._authenticated_reuse_url("http://127.0.0.1:38080") == token_url
+
+
+def test_authenticated_reuse_url_authority_mismatch_falls_back(tmp_path, monkeypatch):
+    """stdout 里的 token 属于另一个端口（如历史 3080 实例）：不得带用户去别的 authority。"""
+    from pet import harness_launcher as hl
+
+    log = tmp_path / "harness-web-stdout.log"
+    log.write_bytes(b"dsh web: http://127.0.0.1:3080/?token=stale\n")
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: log)
+
+    def _no_probe(url):
+        raise AssertionError("authority 不匹配时不应发起预探请求")
+
+    monkeypatch.setattr(hl, "_token_url_alive", _no_probe)
+    assert hl._authenticated_reuse_url("http://127.0.0.1:38080") == "http://127.0.0.1:38080"
+
+
+def test_authenticated_reuse_url_dead_token_falls_back(tmp_path, monkeypatch):
+    """存档 token 属于已死实例（服务端 401/拒连）：回退裸地址。"""
+    from pet import harness_launcher as hl
+
+    log = tmp_path / "harness-web-stdout.log"
+    log.write_bytes(b"dsh web: http://127.0.0.1:38080/?token=stale\n")
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: log)
+    monkeypatch.setattr(hl, "_token_url_alive", lambda url: False)
+
+    assert hl._authenticated_reuse_url("http://127.0.0.1:38080") == "http://127.0.0.1:38080"
+
+
+def test_token_url_alive_checks_first_status_only(monkeypatch):
+    """预探只读首个状态码，不消费响应体，也不跟随重定向。"""
+    from pet import harness_launcher as hl
+
+    captured = {}
+
+    class _Response:
+        status = 303
+
+    class _Connection:
+        def __init__(self, host, port, timeout):
+            captured.update(host=host, port=port, timeout=timeout)
+
+        def request(self, method, path):
+            captured.update(method=method, path=path)
+
+        def getresponse(self):
+            return _Response()
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(hl.http.client, "HTTPConnection", _Connection)
+    assert hl._token_url_alive("http://127.0.0.1:38080/?token=live") is True
+    assert captured == {
+        "host": "127.0.0.1",
+        "port": 38080,
+        "timeout": 2,
+        "method": "GET",
+        "path": "/?token=live",
+        "closed": True,
+    }
+
+
+def test_token_url_alive_rejects_malformed_url(monkeypatch):
+    """异常 token 只能触发回退，不能把启动线程抛出。"""
+    from pet import harness_launcher as hl
+
+    monkeypatch.setattr(
+        hl.http.client,
+        "HTTPConnection",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("非法 URL 不应发起网络连接")
+        ),
+    )
+    assert hl._token_url_alive("http://?token=broken") is False
+
+
+def test_token_url_alive_rejects_invalid_authority(monkeypatch):
+    """非法 authority 不能让预探线程抛出 URL 解析异常。"""
+    from pet import harness_launcher as hl
+
+    monkeypatch.setattr(
+        hl.http.client,
+        "HTTPConnection",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("非法 authority 不应发起网络连接")
+        ),
+    )
+
+    assert hl._token_url_alive("http://[broken/?token=bad") is False
+
+
+def test_wait_and_open_uses_token_url_over_bare(tmp_path, monkeypatch):
+    """启动路径：端口就绪后 stdout 出现 token 行 → 打开认证链接而非裸地址。
+
+    launch_harness 的等待线程闭包无法直接注入依赖：伪造 _spawn/_find_launch_command
+    让 fake Thread 暴露 _wait_and_open 闭包后手动执行（首拍即捕获 token，走不到
+    is_running 宽限与 sleep 分支）。
+    """
+    from pet import harness_launcher as hl
+
+    opened = []
+    monkeypatch.setattr(hl.webbrowser, "open", lambda url: opened.append(url))
+    log = tmp_path / "harness-web-stdout.log"
+    log.write_bytes(b"dsh web: http://127.0.0.1:38080/?token=fresh\n")
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: log)
+    monkeypatch.setattr(hl, "is_running", lambda port=None: False)  # 钉死走「新起」分支
+    monkeypatch.setattr(hl, "_spawn", lambda command: None)
+    monkeypatch.setattr(
+        hl, "_find_launch_command",
+        lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", "38080", "--no-open"],
+    )
+    targets = []
+    monkeypatch.setattr(
+        hl.threading, "Thread",
+        lambda target=None, daemon=None: SimpleNamespace(start=lambda: targets.append(target)),
+    )
+    status, url = hl.launch_harness(target="web")
+    assert status == "started"
+    assert len(targets) == 1
+    targets[0]()  # 直跑等待线程体
+    assert opened == ["http://127.0.0.1:38080/?token=fresh"]
+
+
+def test_wait_and_open_rejects_token_from_another_authority(tmp_path, monkeypatch):
+    """新启动实例也不能打开 stdout 中指向其他端口的 token。"""
+    from pet import harness_launcher as hl
+
+    opened = []
+    monkeypatch.setattr(hl.webbrowser, "open", lambda url: opened.append(url))
+    log = tmp_path / "harness-web-stdout.log"
+    log.write_bytes(b"dsh web: http://127.0.0.1:3080/?token=foreign\n")
+    monkeypatch.setattr(hl, "_stdout_log_path", lambda: log)
+    monkeypatch.setattr(hl, "is_running", lambda port=None: False)
+    monkeypatch.setattr(hl, "_spawn", lambda command: None)
+    monkeypatch.setattr(
+        hl, "_find_launch_command",
+        lambda port=None: [
+            "dsh", "web", "--host", "127.0.0.1", "--port", "38080", "--no-open"
+        ],
+    )
+    targets = []
+    monkeypatch.setattr(
+        hl.threading,
+        "Thread",
+        lambda target=None, daemon=None: SimpleNamespace(start=lambda: targets.append(target)),
+    )
+    clock = iter((0.0, 1.0, hl._READY_TIMEOUT_SECONDS + 1.0))
+    monkeypatch.setattr(hl.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(hl.time, "sleep", lambda seconds: None)
+
+    status, url = hl.launch_harness(target="web")
+    assert status == "started"
+    targets[0]()
+    assert opened == []
+    assert url == "http://127.0.0.1:38080"

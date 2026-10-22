@@ -23,20 +23,25 @@ nvm、volta、bun、pnpm 等常见安装目录后回退 npx；需要机器装有
 Windows：Explorer / 开机自启的进程环境块是登录时的旧值，除增强 PATH 外还会
 探测 nvm-windows（`%NVM_HOME%\v*`）等全局包目录。
 
-行为：探测端口 —— 已在运行则直接打开浏览器；未运行则后台拉起
-（Windows 隐藏窗口脱离进程 / POSIX 新会话），就绪后自动打开浏览器。
+行为：探测端口 —— 已在运行则直接打开浏览器（stdout 日志里有上次 spawn 留下的
+token 链接时，预探认账优先用，浏览器会重铸 30 天持久 cookie，裸地址从此免
+鉴权）；未运行则后台拉起（Windows 隐藏窗口脱离进程 / POSIX 新会话），就绪后
+从 stdout 捕获 token 链接打开认证页（老版 dsh 无 token 行则回退裸地址）。
 """
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import struct
 import subprocess
 import threading
 import time
+import urllib.parse
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,8 +54,16 @@ from .node_runtime import which as _which
 # 3080 会落入 Windows winnat/Hyper-V 动态保留段（EACCES），默认改用 38080；
 # 与环境变量 DSH_PORT 保持一致（dsh-launcher 三件套也读它）。
 DEFAULT_PORT = int(os.environ.get("DSH_PORT") or 38080)
-# npx 首次拉取 @deepseek-ai/dsh 可能较慢，预留 90 秒就绪窗口
-_READY_TIMEOUT_SECONDS = 90.0
+# npx 首次拉取 @deepseek-ai/dsh 可能较慢；冷启动含插件栈初始化，实测轻载
+# 40~80s、重载下更久（2026-10 实机：bind 之后 announce 还能再滞后一分钟），
+# 就绪窗口放宽到 240 秒——daemon 线程到期兜底开裸地址，等再久也不会卡 UI。
+_READY_TIMEOUT_SECONDS = 240.0
+# 端口开始监听 ≠ token 行就位：两者虽同出 announceReady，但 bind 之后的插件
+# 栈初始化在重载机器上能把 announce 拖到一分钟以后（2026-10 实机实测），
+# 10 秒宽限会把本该捕获的 token 误判成「老版 dsh」提前回退裸地址。放宽到
+# 60 秒：覆盖轻载全距 + 重载大部分；仍给真·老版 dsh（stdout 永远没有 token
+# 行）保留兜底路径，只是多等一会再上裸地址。
+_TOKEN_GRACE_SECONDS = 60.0
 
 def is_running(port: int = DEFAULT_PORT) -> bool:
     """探测 127.0.0.1:port 是否有服务监听。"""
@@ -262,6 +275,104 @@ def _probe_cache_path() -> Path:
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
     return base / app_dir / "harness_probe_cache.json"
+
+
+def _stdout_log_path() -> Path:
+    """dsh web 子进程 stdout 的落盘文件（桌宠数据目录下）。
+
+    token 链接与启动日志都在这里；文件每次 spawn 截断重建，生命周期与
+    最近一次 spawn 的实例对齐——「已有实例」分支从这同一份文件里找
+    token，不另设存档文件（少一份落盘、少一套清理状态）。
+    """
+    return _probe_cache_path().with_name("harness-web-stdout.log")
+
+
+# dsh web 就绪时向 stdout 公告带 token 的完整链接（"dsh web: http://…/?token=…"
+# ——这是官方给跨进程宿主的唯一 token 通道：--no-open 模式下宿主本该自己读它
+# 打开认证页。宽松匹配任意 host:port，容忍 dsh 未来调整 announce 行措辞）。
+_TOKEN_URL_RE = re.compile(r"https?://[^\s'\"<>]*\?token=[^\s'\"<>]+")
+
+
+def _scan_stdout_for_token(offset: int) -> tuple[int, str | None]:
+    """从 stdout 日志 offset 字节处增量扫描 token 链接，返回 (新偏移, 链接|None)。
+
+    只消费到**最后一个完整行**（按 \\n 切界）：半行留在文件里等下一轮，
+    避免把写了一半的 URL 当成完整链接。禁止读到 EOF——服务常驻下 EOF
+    永远不来，等 EOF 就成了「停服务才能捕获」，正是本函数要绕开的坑。
+    二进制读 + 手动解码：字节偏移才能跨轮精确定位（文本模式的换行翻译
+    会破坏 offset 语义）。
+    """
+    try:
+        with open(_stdout_log_path(), "rb") as fh:
+            fh.seek(offset)
+            data = fh.read()
+    except OSError:
+        return offset, None
+    cut = data.rfind(b"\n")
+    if cut < 0:
+        return offset, None
+    matches = list(_TOKEN_URL_RE.finditer(
+        data[: cut + 1].decode("utf-8", "replace")
+    ))
+    # 一次写入可能包含多次 announce；优先交付最后一条，避免旧 token
+    # 抢在当前实例的 token 之前被打开。
+    return offset + cut + 1, matches[-1].group(0) if matches else None
+
+
+def _token_url_alive(token_url: str) -> bool:
+    """本地预探 token 链接是否被服务端认账（<400 即认，303/200 都算）。
+
+    http.client 裸请求读**首个**响应的状态码：不跟随重定向（token 换
+    cookie 的 Set-Cookie 是浏览器侧的事，这里只验证 token 有效性）、
+    不保存任何 cookie——启动器不持有凭据，凭据的生成、铸造、过期全部
+    留在 dsh 进程内。
+    """
+    try:
+        parsed = urllib.parse.urlparse(token_url)
+        hostname = parsed.hostname
+        port = parsed.port
+    except (TypeError, ValueError):
+        return False
+    if parsed.scheme != "http" or not hostname or not parsed.netloc:
+        return False
+    try:
+        conn = http.client.HTTPConnection(hostname, port or 80, timeout=2)
+    except (OSError, TypeError, ValueError, http.client.HTTPException):
+        return False
+    try:
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+        conn.request("GET", path)
+        return conn.getresponse().status < 400
+    except (OSError, TypeError, ValueError, UnicodeError, http.client.HTTPException):
+        return False
+    finally:
+        conn.close()
+
+
+def _authenticated_reuse_url(fallback_url: str) -> str:
+    """「已有实例」分支的打开地址（open_browser=True 时用）。
+
+    stdout 日志里留着最近一次 spawn 实例打印的 token 行：预掘认账就用它
+    打开——浏览器会重铸 30 天持久 cookie，顺带把续期做了；不认账（实例
+    被外部重启过 / token 失效 / 日志缺失）→ 回退裸地址，行为与旧版一致。
+    authority 必须与候选地址一致，防止把用户带去别的端口的实例。
+    每次都由用户点菜单显式触发，启动器只做递送，不做任何后台自主续期。
+    """
+    _, token_url = _scan_stdout_for_token(0)
+    if not token_url:
+        return fallback_url
+    try:
+        same_authority = (
+            urllib.parse.urlparse(token_url).netloc
+            == urllib.parse.urlparse(fallback_url).netloc
+        )
+    except ValueError:
+        return fallback_url
+    if not same_authority or not _token_url_alive(token_url):
+        return fallback_url
+    return token_url
 
 
 def _dsh_version(base_command: list[str]) -> str | None:
@@ -515,11 +626,26 @@ def _spawn(command: list[str]) -> None:
 
     起成功后把 pid 记进自拉起登记表：桌宠退出不会带走这个子进程，收口
     （``stop_self_launched_harness``）只认这里记下的身份。
+
+    stdout 重定向到数据目录的落盘文件（stderr 照旧 DEVNULL）：dsh web 的
+    token 链接只打印在 stdout（``announceReady`` 的跨进程公告通道，实测
+    dsh 0.2.1-rc.2 带 --no-open 也照打），落盘后既不丢日志，也让「等就绪
+    开页面」线程能增量读到 token 行去打开认证页。Node 对文件型 stdout 是
+    同步写（实测服务运行中逐行可见），不存在「停服务才能读到」的缓冲问题。
+    打开失败（数据目录不可写等）回落 DEVNULL：丢日志可接受，拉不起来不可
+    接受。
     """
+    log_handle = None
+    try:
+        log_path = _stdout_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = open(log_path, "wb")  # 每次 spawn 截断重建
+    except OSError:
+        log_handle = None
     kwargs: dict = {
         "cwd": str(Path.home()),  # dsh 以调用目录为默认工作区，用家目录保持中性
         "close_fds": True,
-        "stdout": subprocess.DEVNULL,
+        "stdout": log_handle if log_handle is not None else subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
         "env": {**os.environ, "PATH": _augmented_path()},
     }
@@ -528,7 +654,11 @@ def _spawn(command: list[str]) -> None:
     else:
         kwargs["start_new_session"] = True
     _reap_children()
-    proc = subprocess.Popen(command, **kwargs)
+    try:
+        proc = subprocess.Popen(command, **kwargs)
+    finally:
+        if log_handle is not None:
+            log_handle.close()  # 子进程已持有自己的复制，父侧立即关（Windows 上不关会占着文件）
     if isinstance(proc, _POPEN_TYPE):
         # 两条登记同进同出（R2 修复）：「pid 有登记 ⇒ 句柄有登记」的不变量
         # 是 G3 身份门槛的前提，任何替身/补丁环境下都不许拆开。
@@ -566,8 +696,9 @@ def launch_harness(port: int = DEFAULT_PORT, *, open_browser: bool = True,
       等就绪开页面的线程）。遗留限制（与 ``open_browser=False`` 同源）：旧版
       dsh 不支持 ``--no-open`` 时它会自己开浏览器，service 目标无法阻止
       （启动前无法可靠探测）。
-    - ``web``：显式要界面——``open_browser=True`` 时复用已有实例会直接开页面，
-      新起实例（命令带 ``--no-open``）由桌宠等就绪后开页面。
+    - ``web``：显式要界面——``open_browser=True`` 时复用已有实例优先打开日志中的
+      认证链接，失效则回退裸地址；新起实例（命令带 ``--no-open``）由桌宠捕获 token
+      后开认证页面，捕获失败回退裸地址。
     - ``desktop``：显式要界面——拉起桌面端 exe（见下）。
 
     open_browser=False（随桌宠自启动场景）：只起服务不开浏览器——已有实例
@@ -581,9 +712,9 @@ def launch_harness(port: int = DEFAULT_PORT, *, open_browser: bool = True,
 
     返回 (status, url)：
     - already   已有实例在运行（配置端口或官方默认 3080）；service 目标不开浏览器，
-                其余 open_browser=True 时已打开浏览器
-    - started   已后台启动；open_browser 且命令带 --no-open 时由桌宠等待就绪后
-                打开浏览器，否则由 dsh 自己开浏览器（桌宠不重复打开）
+                其余 open_browser=True 时优先打开认证链接，失效则回退裸地址
+    - started   已后台启动；open_browser 且命令带 --no-open 时由桌宠增量捕获 token
+                后打开认证链接，捕获失败或超时回退裸地址，否则由 dsh 自己开浏览器
     - aborted   cancel_check 命中：慢探测后放弃拉起（未 spawn）
     - not-found 未找到 dsh 命令 / 未检测到桌面端安装（显式 target="desktop"）
     - unsupported 平台不支持桌面端（非 Windows；info="desktop"）
@@ -626,7 +757,7 @@ def launch_harness(port: int = DEFAULT_PORT, *, open_browser: bool = True,
         if is_running(candidate):
             url = f"http://127.0.0.1:{candidate}"
             if open_browser:
-                webbrowser.open(url)
+                webbrowser.open(_authenticated_reuse_url(url))
             return "already", url
     url = f"http://127.0.0.1:{int(port)}"
     command = _find_launch_command(port)
@@ -647,12 +778,37 @@ def launch_harness(port: int = DEFAULT_PORT, *, open_browser: bool = True,
         return "started", url  # 只起服务：不等就绪、不开页面
 
     def _wait_and_open() -> None:
+        """等就绪后打开**认证页**：stdout 里出现 token 行就开认证链接（浏览器
+        自动换 30 天持久 cookie，裸地址从此免鉴权）；端口已通但迟迟没有
+        token 行（老版 dsh 不打）超过宽限 → 回退裸地址（旧行为）。
+
+        扫描按字节偏移增量推进，只消费完整行（见 ``_scan_stdout_for_token``）；
+        0.5s 轮询节奏与旧版一致，读本地文件的开销可忽略。
+        """
         deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
+        running_since: float | None = None
+        offset = 0
         while time.monotonic() < deadline:
+            offset, token_url = _scan_stdout_for_token(offset)
+            if token_url:
+                try:
+                    token_authority = urllib.parse.urlparse(token_url).netloc
+                    expected_authority = urllib.parse.urlparse(url).netloc
+                except ValueError:
+                    token_authority = expected_authority = ""
+                if token_authority == expected_authority:
+                    webbrowser.open(token_url)
+                    return
             if is_running(port):
-                webbrowser.open(url)
-                return
+                now = time.monotonic()
+                if running_since is None:
+                    running_since = now
+                elif now - running_since >= _TOKEN_GRACE_SECONDS:
+                    webbrowser.open(url)  # 老版 dsh：stdout 无 token 行，退回裸地址
+                    return
             time.sleep(0.5)
+        if is_running(port):
+            webbrowser.open(url)  # 到期兜底：端口通了就别让用户白等一场
 
     threading.Thread(target=_wait_and_open, daemon=True).start()
     return "started", url
