@@ -329,6 +329,77 @@ def test_sample_loop_passes_foobar_settings_from_config(monkeypatch):
         ctrl.sync_enabled(False)
 
 
+def test_sample_loop_passes_bodian_setting_from_config(monkeypatch):
+    """采样线程必须把 ``bodian_lyrics_enabled`` 带给 ``now_playing``（B2 回归）。
+
+    审查在旧 PR 上指出：``allow_bodian`` 从配置到采样线程的接线**至今无测试**，
+    所以「开关是摆设」这类断链（配置读了但没传下去）在测试里完全看不见。
+    本用例走真实 ``LyricController`` 采样线程，只把最外层的
+    ``now_playing.get_now_playing`` 换成记录器。
+    """
+    calls: list[dict] = []
+
+    def fake_get_now_playing(tracked_app_id=None, **kwargs):
+        calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(now_playing, "get_now_playing", fake_get_now_playing)
+    _win, ctrl, _fetched = _controller(
+        monkeypatch, {"bodian_lyrics_enabled": True}
+    )
+    try:
+        ctrl.sync_enabled(True)
+        assert _wait_until(lambda: calls), "开启后应采样"
+        assert calls[0]["allow_bodian"] is True, (
+            "bodian_lyrics_enabled=True 没有传到 get_now_playing——开关是摆设"
+        )
+    finally:
+        ctrl.sync_enabled(False)
+
+
+def test_bodian_setting_defaults_off_and_tolerates_dirty_values(monkeypatch):
+    """缺键 / 脏值一律按关：采样时 ``allow_bodian`` 必须是 ``False``。"""
+    calls: list[dict] = []
+
+    def fake_get_now_playing(tracked_app_id=None, **kwargs):
+        calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(now_playing, "get_now_playing", fake_get_now_playing)
+    # 键缺失：老配置升级上来的样子。
+    _win, ctrl, _fetched = _controller(monkeypatch, {})
+    try:
+        ctrl.sync_enabled(True)
+        assert _wait_until(lambda: calls)
+        assert calls[0]["allow_bodian"] is False
+    finally:
+        ctrl.sync_enabled(False)
+
+
+def test_bodian_reader_never_raises_on_a_broken_config(monkeypatch):
+    """``cfg.get`` 抛异常时按关处理，不许把采样线程带崩。"""
+    _win, ctrl, _fetched = _controller(monkeypatch, {})
+
+    class _Boom:
+        def get(self, *_a, **_k):
+            raise RuntimeError("config exploded")
+
+    ctrl.win.cfg = _Boom()
+
+    assert ctrl._bodian_lyrics_enabled() is False
+
+
+def test_bodian_playback_does_not_take_the_smtc_tracking_slot(monkeypatch):
+    """波点源同样不得覆盖 ``_tracked_app_id``（统一走 is_supplementary_source）。"""
+    from pet.music import bodian as bodian_playing
+
+    _win, ctrl, _fetched = _controller(monkeypatch)
+    ctrl._tracked_app_id = "cloudmusic.exe"
+
+    ctrl._on_playback_ready(_playback(bodian_playing.BODIAN_APP_ID))
+    assert ctrl._tracked_app_id == "cloudmusic.exe", "波点抢了 SMTC 的跟踪位"
+
+
 def test_browser_title_is_cleaned_into_the_fetch_query(monkeypatch):
     """浏览器会话：取词用清洗后的查询词，**气泡标题仍是原始网页标题**。"""
     win, ctrl, fetched = _controller(monkeypatch, {"music_browser_media_enabled": True})

@@ -1254,6 +1254,18 @@ def _launch_player_and_play(player_key: str, pet) -> None:
                     pass
                 return
             exe_name = os.path.basename(exe)
+            # 不注册 SMTC 的播放器（波点）：这条路**只负责启动**。
+            # 给它发播放指令一定返回 False（没有会话），轮询等它出现在 SMTC 里也
+            # 一定等不到——白等 10 秒还占一条线程。它自己会续播上次的队列。
+            if not music_players.registers_smtc(player_key):
+                try:
+                    if sys.platform == "win32":
+                        os.startfile(exe)  # noqa: S606 - 路径来自受控的播放器搜索
+                    else:
+                        QProcess.startDetached(exe, [])
+                except Exception:
+                    return
+                return
             # 先给已经在跑的会话发播放指令：这条路径是确定的。
             if now_playing.play_session_for(exe_name):
                 return
@@ -1295,13 +1307,25 @@ def _run_music_off_main(callable_) -> None:
     _run_off_main(callable_)
 
 
+def _toggle_play_pause(pet) -> bool:
+    """菜单「暂停 / 播放」。
+
+    优先走控制器的路径：它能判断当前来源是不是补充源（波点），是的话改发系统媒体键
+    （见 ``music/bodian_control.py``）；没有控制器时退回原来的 SMTC 直调。
+    """
+    if _music_gated():
+        return False
+    controller = _music_controller(pet)
+    if controller is None:
+        return False
+    return controller.toggle_play_pause()
+
+
 def add_music_pause(menu: QMenu, pet, *, icons: bool = True):
     """音乐子菜单：暂停 / 播放。"""
-    from ..music import now_playing
-
     return add_action(
         menu, "让人家歇一会儿嘛（暂停 / 播放）", "pause" if icons else None,
-        lambda: _run_music_off_main(now_playing.toggle_play_pause), close_on_trigger=True,
+        lambda: _run_music_off_main(lambda: _toggle_play_pause(pet)), close_on_trigger=True,
     )
 
 
@@ -1466,6 +1490,15 @@ def add_music_open_kugou(menu: QMenu, pet, *, icons: bool = True):
 
 def add_music_open_soda(menu: QMenu, pet, *, icons: bool = True):
     return _music_player_builder("soda")(menu, pet, icons=icons)
+
+
+def add_music_open_bodian(menu: QMenu, pet, *, icons: bool = True):
+    """「打开波点音乐给主人放歌」。
+
+    与其它四个入口同一个 builder，但**语义略有不同、文案已如实写明**：波点不注册
+    SMTC，发播放指令一定失败，所以这个入口是"打开它"，由它自己续播上次的队列。
+    """
+    return _music_player_builder("bodian")(menu, pet, icons=icons)
 
 
 def add_agent_cost(menu: QMenu, pet, *, icons: bool = True):

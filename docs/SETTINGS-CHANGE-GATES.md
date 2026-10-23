@@ -83,6 +83,52 @@ recovery
 
 ## 变更记录
 
+### 2026-10-23 — 新增全局键 `bodian_lyrics_enabled`（「音乐关联 → 波点音乐歌词」行）
+
+本刀**新增 1 个持久设置键与 1 行设置项**（波点音乐的歌词来源），不改任何既有键的
+默认值、归属与保存语义；foobar 那条补充源的行文案同步补一句「foobar 优先」的如实说明
+（行为未变，只是把既有后果写出来）。
+
+| 项 | 本刀口径 |
+|---|---|
+| setting_id / 行键 | `bodian_lyrics_enabled`（`pet/config.py::Config._initial_data`） |
+| 归属 | 「桌宠」域 →「音乐关联」组，排在 `foobar_lyrics` 之后（与既有三个歌词源开关同组同层级）。模块门控沿用 `feature_activation.is_active("music")`：未激活时该行照常 `claim`（防掉「待分类」）但不挂进标签页 |
+| 标题 / 说明 | 「波点音乐歌词」/ 说明写清四件必须写明的事：①为什么单独一个开关（波点不向系统上报、主窗口标题是常量）；②读的是本机播放历史与日志，**只读**、不联网、不上传；③进度是推算的（记录里没有播放位置），可用右键「音乐 → 歌词对齐」校正；④**只在没有其它播放器在播时才会被问到，且 foobar 优先**——foobar 那条路看不出是否在播，开着不播也会挡住波点，关掉 foobar 或它的开关即可 |
+| default | `False`（**关**）。读第三方程序的私有数据库与日志属于"用户明确要才开"的能力，与 `foobar_lyrics_enabled` / `music_browser_media_enabled` 同口径 |
+| 保存时机 / commit_policy | `immediate`（随设置窗关闭的既有 `_write_config` 写回，经 `settings.save_source_settings` 的 `_SOURCE_SWITCHES` 登记；不新增写盘路径）。**无需重启**：采样线程每拍读配置（`lyric_controller._bodian_lyrics_enabled`） |
+| capability / 平台可用性 | **仅 Windows 创建控件**（数据目录是 `%LOCALAPPDATA%`，链路是 SQLite + 日志尾读）。非 Windows 上**不建控件、不建行**——「永久不支持的能力不创建控件」（本文 §4）；`bodian_lyrics_supported()` 与 `foobar_lyrics_supported()` 同规 |
+| 依赖 | 无前置开关。链路依赖：`music` 模块激活 × `music_lyric_enabled`（显示歌词）打开。**不依赖** SMTC 是否可用——正因为它读的是本地文件，没有 WinRT 时这条补充源仍然工作 |
+| 迁移 | **新键**：老配置没有它 → 取默认关（升级用户呈现不变）；`Config.reload()` 白名单、`Config.set()` 归一化触发集、`_normalize_pet_settings()` 三处登记（`_bool_or_default`，字符串 `"false"` 不会被误开） |
+| 恢复 | 无需恢复路径：失败面只有写盘失败（走既有设置窗关闭闸门）。**读不到一律当没有**：路径不存在 / 表不存在 / JSON 坏 / 进程没跑 → `None`，表现为"没有歌词"，不会产生错误歌词，也不影响其它播放器 |
+| 披露层级 | `primary`（就在「音乐关联」组里，不进任何折叠） |
+| 默认值标记 | 登记在 `settings_default_marks`（`"bodian_lyrics": "bodian_lyrics_enabled"`，出厂默认 `False` 可比），因此勾选后会出现「已修改」标记与单项重置入口 |
+| 不做 | 不加「打开波点音乐给主人放歌」右键入口（那属于 `music_players.PLAYERS` 注册表，是另一个能力）；不做切歌/暂停（波点没有 SMTC 会话可操作）；不猜播放进度（`position` 恒 `None`，否则会关掉用户唯一的补救入口「歌词对齐」） |
+
+准出对应：
+
+1. **契约**：键、默认值、归属、依赖、平台可见性、披露层级、保存与生效时机逐条见上表；
+   旧键/旧入口/旧别名无迁移问题（新键）；失败路径只降级为"没有歌词"。
+2. **TDD**：新增 `tests/test_bodian_playing.py` 54 例（数据来源形状 / 不可信输入 /
+   降级与边界 / 接线 / 配置与设置行 / 真锁 / 中文路径），`tests/test_lyric_sources.py`
+   新增 4 例（`allow_bodian` 从配置到采样线程的接线、缺键与脏值按关、赋值不抛、
+   跟踪位不被补充源占用）。**先红后绿**：7 条消融逐个撤掉产品改动，全部按预期变红
+   （B1 挂载链 / 采样线程接线 / 跟踪位判断 / 播放状态缓存 / 日志排序 / URI 编码 /
+   真锁降级），且文件逐字节还原。消融同时抓出**一条空转用例**（日志排序那条原本
+   挑的 `log_11.log` 在 glob 枚举序里排第 4，旧实现会碰巧留下它）——已改用
+   `log_9.log`（枚举序第 11 位）并写明原因。配置侧由 `test_config_schema.py` 的两份
+   快照 + 归一化路径覆盖。
+3. **布局与可访问性**：无新增控件类型、无新增 QSS（复用 `ToggleSwitch` 与 `SettingRow`）；
+   组内末尾追加一行，行序断言（`test_settings_pet_tabs.py` / `test_settings_ia_first_cut.py`
+   的高级行清单）本刀**未涉及**——该行在「音乐关联」主组、不在高级折叠组内。
+   B1 回归用例走真实 `ModernSettingsDialog` 构造，断言 `settingRow_bodian_lyrics`
+   取到对象且行真的包裹控件（审查实测的"幽灵控件"判据）。
+4. **跨平台**：产品代码新增平台分支一处（`bodian_lyrics_supported()`，与既有
+   `foobar_lyrics_supported()` 同形）；非 Windows 不建控件不建行。真实 GUI 验收仅本机
+   Windows，macOS / Linux 未跑（不推断）。
+5. **视觉与文档**：本记录即变更记录；PR 报告
+   [`PR-REPORT-BODIAN-MUSIC-SOURCE-2026-10-21.md`](PR-REPORT-BODIAN-MUSIC-SOURCE-2026-10-21.md)
+   与 `docs/INDEX.md` 登记同步；`README.md`「不向系统上报播放信息的播放器」小节含本项。
+
 ### 2026-10-21 — 新增一级域「功能」（功能模块启用/停用卡片，staged 语义）
 
 本刀**新增 1 个一级能力域与 1 个持久设置的可见入口**（`feature_activation` 键与迁移

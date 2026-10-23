@@ -14,11 +14,12 @@
 因此 ``Playback.position`` 允许为 ``None``，表示"该播放器不提供进度"，
 调用方需回退到本地计时推算。这与同类工具（如 Lyricify）的处理方式一致。
 
-**SMTC 之外还有一个补充源**：foobar2000 默认不注册 SMTC，永远不出现在会话
-列表里，所以它额外走"进程 + 主窗口标题"（``pet/foobar_playing.py``）。那一路只在
-**SMTC 没有在播会话**时被询问（见 :func:`_read_foobar_playback`），返回的
-``app_id`` 是 :data:`foobar_playing.FOOBAR_APP_ID`，调用方据此不拿它覆盖 SMTC 的
-跟踪位。
+**SMTC 之外还有补充源**：有的播放器根本不注册 SMTC，永远不出现在会话列表里，
+所以它们各自多走一条路——foobar2000 读"进程 + 主窗口标题"
+（:mod:`pet.music.foobar`），波点音乐读"进程 + 本地播放记录"
+（:mod:`pet.music.bodian`）。补充源只在**SMTC 没有在播会话**时被询问
+（见 :func:`_read_supplementary_playback`），返回的 ``app_id`` 是各自的
+``*_APP_ID``，调用方据此不拿它覆盖 SMTC 的跟踪位（:func:`is_supplementary_source`）。
 
 本模块只读系统信息，不发起任何网络请求，也不触碰音频流。
 """
@@ -32,6 +33,7 @@ import time
 from dataclasses import dataclass
 from functools import lru_cache
 
+from . import bodian as bodian_playing
 from . import foobar as foobar_playing
 
 # 判定"不上报进度"的阈值：末位时长小于该值视为无效时间轴。
@@ -237,6 +239,24 @@ def is_foobar_source(app_id: str | None) -> bool:
     会话选取用的，塞一个 SMTC 里不存在的 id 会白白丢掉"粘住当前播放器"的能力。
     """
     return str(app_id or "").strip().lower() == foobar_playing.FOOBAR_APP_ID
+
+
+def is_bodian_source(app_id: str | None) -> bool:
+    """这条采样是否来自波点音乐本地记录源（非 SMTC 会话）。
+
+    与 :func:`is_foobar_source` 同一口径，理由相同。
+    """
+    return str(app_id or "").strip().lower() == bodian_playing.BODIAN_APP_ID
+
+
+def is_supplementary_source(app_id: str | None) -> bool:
+    """这条采样是否来自**任何**补充源（不上报 SMTC 的播放器）。
+
+    **加补充源时只改这一个判断**：调用方（``lyric_controller``）问的是"要不要把
+    这个 ``app_id`` 写进 SMTC 跟踪位"，答案对所有补充源都是"不要"。各自散落一个
+    ``if`` 就等着漏一处——漏掉的那一处表现为"那个播放器的歌词时好时坏"。
+    """
+    return is_foobar_source(app_id) or is_bodian_source(app_id)
 
 
 def _read_media_type(holder) -> int:
@@ -447,25 +467,86 @@ def _read_foobar_playback(allow_foobar: bool, title_format: str) -> Playback | N
     )
 
 
+def _read_bodian_playback(allow_bodian: bool) -> Playback | None:
+    """波点音乐补充源：读它自己的本地播放记录，包成一次采样结果。
+
+    三条刻意的口径（与 :func:`_read_foobar_playback` 同源，理由见
+    :mod:`pet.music.bodian` 的模块说明）：
+
+    - **不抢 SMTC 的位**：只有调用方在"SMTC 没有在播会话"时才走到这里；返回的
+      ``app_id`` 是 :data:`bodian_playing.BODIAN_APP_ID`。
+    - **进度恒为 ``None``**：本地库里的时间是"开始播放的时刻"，不是播放器上报的
+      进度；当成真值会骗过 ``LyricTracker``（它会因此关掉手动对齐）。
+    - **播放状态来自日志**：读不到状态时按在播处理（见 ``bodian._parse_playing``）。
+    """
+    if not allow_bodian:
+        return None
+    track = bodian_playing.read_track()
+    if track is None:
+        return None
+    if not track.title and not track.artist:
+        return None
+    return Playback(
+        track=Track(
+            title=track.title,
+            artist=track.artist,
+            album=track.album,
+            duration=track.duration,
+            playing=track.playing,
+        ),
+        position=None,
+        updated_at=time.monotonic(),
+        app_id=bodian_playing.BODIAN_APP_ID,
+    )
+
+
+def _read_supplementary_playback(
+    allow_foobar: bool,
+    foobar_title_format: str,
+    allow_bodian: bool = False,
+) -> Playback | None:
+    """补充源统一入口：foobar 窗口标题 → 波点本地记录。
+
+    顺序是**固定注册顺序**，不是猜出来的优先级：两路都只在没有 SMTC 在播会话时
+    才被问到，而用户同时开着两个播放器时"哪一路才算正在播"没有客观答案（两路都
+    不上报真实进度）。先问 foobar 是因为它更老、行为更早被用户验证过；波点只在
+    foobar 读不到时才接手。
+
+    **这个顺序有一个用户可见后果**（设置页文案必须如实写清，别让用户以为是 bug）：
+    foobar 源读的是窗口标题，**没有播放状态**——foobar 开着但没在播时，它的标题
+    往往还停在上一次播的歌，于是它会一直挡住波点。用户遇到这种情况要么关掉设置里
+    的「foobar2000 歌词」开关，要么关掉 foobar。
+    """
+    fallback = _read_foobar_playback(allow_foobar, foobar_title_format)
+    if fallback is not None:
+        return fallback
+    return _read_bodian_playback(allow_bodian)
+
+
 async def _read_async(
     tracked_app_id: str | None = None,
     *,
     allow_browser: bool = True,
     allow_foobar: bool = False,
     foobar_title_format: str = "",
+    allow_bodian: bool = False,
 ) -> Playback | None:
     manager_cls = _import_winrt()
     if manager_cls is None:
-        # 没有 WinRT（非 Windows / 未装可选依赖）：SMTC 无从查起。foobar 的窗口
-        # 标题源不依赖 WinRT，仍可作补充——两者都不行时才返回 None。
-        return _read_foobar_playback(allow_foobar, foobar_title_format)
+        # 没有 WinRT（非 Windows / 未装可选依赖）：SMTC 无从查起。补充源不依赖
+        # WinRT，仍可作补充——两路都不行时才返回 None。
+        return _read_supplementary_playback(
+            allow_foobar, foobar_title_format, allow_bodian
+        )
     manager = await manager_cls.request_async()
     snapshot = _pick_singing_session(
         _session_snapshots(manager), tracked_app_id, allow_browser
     )
-    # foobar 是**补充源**：SMTC 有在播会话时绝不问它（见 _read_foobar_playback）。
+    # 补充源只在 SMTC 没有在播会话时才问（见 _read_supplementary_playback）。
     if snapshot is None or not snapshot.playing:
-        fallback = _read_foobar_playback(allow_foobar, foobar_title_format)
+        fallback = _read_supplementary_playback(
+            allow_foobar, foobar_title_format, allow_bodian
+        )
         if fallback is not None:
             return fallback
     if snapshot is None:
@@ -667,6 +748,7 @@ def get_now_playing(
     allow_browser: bool = True,
     allow_foobar: bool = False,
     foobar_title_format: str = "",
+    allow_bodian: bool = False,
 ) -> Playback | None:
     """返回当前播放信息；无播放器/无会话/任何异常时返回 ``None``。
 
@@ -680,8 +762,14 @@ def get_now_playing(
 
     ``allow_foobar=True``（设置页「foobar2000 歌词」开启）时，SMTC **没有在播
     会话**的情况下读 foobar2000 主窗口标题作为补充源（它默认不注册 SMTC，见
-    ``pet/foobar_playing.py``）。``foobar_title_format`` 是用户在 foobar 里配置的
+    :mod:`pet.music.foobar`）。``foobar_title_format`` 是用户在 foobar 里配置的
     窗口标题格式串，空串 = 自动（不猜歌名/歌手顺序）。
+
+    ``allow_bodian=True``（设置页「波点音乐歌词」开启）时，同样在 SMTC **没有在播
+    会话**的情况下读波点音乐的本地播放记录作为补充源（它也不注册 SMTC，见
+    :mod:`pet.music.bodian`）。两路补充源的先后顺序见
+    :func:`_read_supplementary_playback`——**foobar 在前**，所以 foobar 开着时它会
+    挡住波点（foobar 源没有播放状态，这一点在设置文案里如实写明）。
 
     本函数绝不抛异常——歌词只是锦上添花，不能因为第三方接口异常影响桌宠本体。
     """
@@ -694,6 +782,7 @@ def get_now_playing(
                 allow_browser=allow_browser,
                 allow_foobar=allow_foobar,
                 foobar_title_format=foobar_title_format,
+                allow_bodian=allow_bodian,
             )
         )
     except Exception:

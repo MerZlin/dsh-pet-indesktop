@@ -334,6 +334,7 @@ def test_missing_user_layout_resolves_versioned_default():
         "music_open_qqmusic",
         "music_open_kugou",
         "music_open_soda",
+        "music_open_bodian",
         "golden_spin",
         "edge_probe",
         "quick_launch",
@@ -2866,7 +2867,7 @@ def test_screen_capture_menu_entry_keeps_shared_vector_icon():
 # 因此路径解析、冷缓存乐观启用、后台预热、负缓存置灰、手填路径失效提示这几条语义
 # 由共享代码一次性给出，新键不该各写一遍。
 
-_PLAYER_KEYS = ("netease", "qqmusic", "kugou", "soda")
+_PLAYER_KEYS = ("netease", "qqmusic", "kugou", "soda", "bodian")
 
 
 def _player_entry_labels() -> dict[str, str]:
@@ -3012,6 +3013,7 @@ def test_music_submenu_registers_and_places_every_known_player():
         "music_open_qqmusic",
         "music_open_kugou",
         "music_open_soda",
+        "music_open_bodian",
     ]
 
 
@@ -3227,6 +3229,7 @@ def test_saved_user_layout_gains_the_new_player_entries_beside_their_siblings():
         "music_open_qqmusic",
         "music_open_kugou",
         "music_open_soda",
+        "music_open_bodian",
     ]
     assert "default-action-added:music_open_kugou" in result.diagnostics
     assert "default-action-added:music_open_soda" in result.diagnostics

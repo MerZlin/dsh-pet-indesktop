@@ -454,6 +454,14 @@ def build_pet_controls(host) -> None:
         )
         host.foobar_title_format_edit.setMaxLength(FOOBAR_FORMAT_MAX_CHARS)
         host.foobar_title_format_edit.setPlaceholderText("留空 = 自动")
+    # 波点音乐歌词同样只在 Windows 建控件：它读的是 %LOCALAPPDATA% 下的本地播放
+    # 记录与日志，其它平台既没有那个目录也没有那条链路。
+    host.bodian_lyrics_check = None
+    if sys.platform == "win32":
+        host.bodian_lyrics_check = ToggleSwitch(host)
+        host.bodian_lyrics_check.setChecked(
+            bool(host.config.get("bodian_lyrics_enabled", False))
+        )
     host.agent_cost_check = ToggleSwitch(host)
     host.agent_cost_check.setChecked(bool(host.config.get("agent_cost_enabled", False)))
     host.music_lyric_lead_spin = BrowserDoubleSpinBox(host)

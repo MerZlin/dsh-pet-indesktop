@@ -294,6 +294,7 @@ FEATURES: dict[str, FeatureSpec] = {
             "music_open_qqmusic",
             "music_open_kugou",
             "music_open_soda",
+            "music_open_bodian",
         ),
         config_keys=(
             "music_sing_enabled",

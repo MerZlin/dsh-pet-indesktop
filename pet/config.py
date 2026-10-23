@@ -1212,6 +1212,11 @@ class Config:
             # 空 = 自动：不猜歌名/歌手顺序（见 pet/music_title.py）。出厂默认值随
             # 版本与主题变化，没有稳定契约，所以做成可配置而不是硬编码一份。
             "foobar_title_format": "",
+            # 波点音乐歌词：波点也不注册 SMTC（2026-10-21 实测播放中系统会话数为 0），
+            # 窗口标题又是常量，只能读它自己的本地播放记录（见 pet/music/bodian.py）。
+            # **默认关**：读的是第三方程序的私有数据库与日志，属于"用户明确要才开"的
+            # 补充源；且同样只在 SMTC 没有在播会话时才生效。
+            "bodian_lyrics_enabled": False,
             # 手动指定播放器路径 {播放器键（网易云/QQ音乐/酷狗/汽水）: exe 路径}：自动搜索找不到时的
             # 逃生口，也能在「设置 → 桌宠 → 播放器路径（高级）」里改（
             # settings_music.build_music_player_rows），空 = 走自动搜索。
@@ -1569,6 +1574,7 @@ class Config:
             "music_browser_media_enabled",
             "foobar_lyrics_enabled",
             "foobar_title_format",
+            "bodian_lyrics_enabled",
             "music_player_paths",
             "agent_cost_enabled",
             "golden_spin_on_click",
@@ -2113,6 +2119,10 @@ class Config:
             if isinstance(raw_format, str)
             else ""
         )
+        # 波点音乐歌词开关：同族第八个布尔键，同样走 _bool_or_default。
+        self.data["bodian_lyrics_enabled"] = _bool_or_default(
+            self.data.get("bodian_lyrics_enabled"), False
+        )
         # 持续静音判定时长：下限 1s（低于它就退回"瞬时静音即退出"的老问题），
         # 上限必须有——否则手改 1e9 会让唱歌状态永不退出。
         self.data["music_sing_grace_seconds"] = _float_or_default(
@@ -2282,6 +2292,7 @@ class Config:
             "music_browser_media_enabled",
             "foobar_lyrics_enabled",
             "foobar_title_format",
+            "bodian_lyrics_enabled",
             "agent_cost_enabled",
             "music_player_paths",
             "mem_skip_foreground",

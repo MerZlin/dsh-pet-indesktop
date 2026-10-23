@@ -106,6 +106,149 @@ def test_parse_lrc_empty_input():
     assert parse_lrc("\n\n") == []
 
 
+# ---------------------------------------------------------------- 拼音歌词拦截
+#
+# 2026-10-23 实机 bug：波点放「天使/刘思鉴」时气泡里出现的是拼音
+# 「Yěguāng zhàqiáo dōu」。根因是 lrclib 对中文歌常有一条**全拼音（带声调）**
+# 的歌词版本，它和汉字版一样完整、时间轴也正确；而 lrclib 当时是**直接构造**
+# Lyrics 返回的，绕过了 _as_lyrics 的质量判据。QQ 音乐与网易云都是 67~72 行汉字。
+
+
+def test_looks_romanized_detects_toned_pinyin_lyrics():
+    """整屏带声调的拼音 → 判为"不可用"。"""
+    lines = [
+        LyricLine(22.14, "Yěguāng zhàqiáo dōu"),
+        LyricLine(24.38, "Bǎn bō yīnyīn biàn hǎoshǒu"),
+        LyricLine(27.44, "Zhǎobùjīng liúniǎn de yōu zǒu"),
+        LyricLine(33.28, "Wángshí cuì yuǎn dōu"),
+        LyricLine(35.34, "Huā kāi huā luò yī chǎng mèng"),
+        LyricLine(38.54, "Nǐ hòurè huí xiā yīqiè chéngkōng"),
+        LyricLine(43.29, "Dàn nǐ shì wéiyī de diànshì"),
+        LyricLine(46.09, "Shì wǒ xià yīshì húhuàn de míngzì"),
+    ]
+    assert music_lyric._looks_romanized(lines) is True
+
+
+def test_looks_romanized_accepts_real_chinese_lyrics():
+    """正常中文歌词不该被误伤。"""
+    lines = [
+        LyricLine(float(i), t)
+        for i, t in enumerate([
+            "天使", "刘思鉴", "是我下意识呼唤的名字", "放弃又坚持",
+            "让我平静用熟悉的方式", "是最善良的天使", "拯救了我一次又一次",
+            "灯光照进来的样子",
+        ])
+    ]
+    assert music_lyric._looks_romanized(lines) is False
+
+
+def test_looks_romanized_accepts_plain_english_lyrics():
+    """纯英文歌词没有声调符号，不该被判成拼音版。"""
+    lines = [
+        LyricLine(float(i), t)
+        for i, t in enumerate([
+            "Hello darkness my old friend", "I've come to talk with you again",
+            "Because a vision softly creeping", "Left its seeds while I was sleeping",
+            "And the vision that was planted", "In my brain still remains",
+            "Within the sound of silence", "In restless dreams I walked alone",
+        ])
+    ]
+    assert music_lyric._looks_romanized(lines) is False
+
+
+def test_looks_romanized_accepts_mixed_with_mostly_chinese():
+    """汉字为主、夹几行拼音注音 → 仍是可用歌词。"""
+    lines = [
+        LyricLine(0.0, "天使"),
+        LyricLine(1.0, "是我下意识呼唤的名字"),
+        LyricLine(2.0, "放弃又坚持"),
+        LyricLine(3.0, "让我平静用熟悉的方式"),
+        LyricLine(4.0, "是最善良的天使"),
+        LyricLine(5.0, "拯救了我一次又一次"),
+        LyricLine(6.0, "Yěguāng zhàqiáo dōu"),
+        LyricLine(7.0, "Bǎn bō yīnyīn biàn hǎoshǒu"),
+    ]
+    assert music_lyric._looks_romanized(lines) is False
+
+
+def test_lrclib_pinyin_result_is_treated_as_miss(monkeypatch):
+    """**bug 回归**：lrclib 返回拼音时，必须按"没命中"处理，让汉字源胜出。
+
+    这条钉住的是「lrclib 直接构造 Lyrics、绕过 _as_lyrics」那个缺口——
+    判据写对但没接线，用户照样看到一屏拼音（实际就是这样漏出去的）。
+    """
+    pinyin_lrc = "\n".join([
+        "[00:22.14]Yěguāng zhàqiáo dōu",
+        "[00:24.38]Bǎn bō yīnyīn biàn hǎoshǒu",
+        "[00:27.44]Zhǎobùjīng liúniǎn de yōu zǒu",
+        "[00:33.28]Wángshí cuì yuǎn dōu",
+        "[00:35.34]Huā kāi huā luò yī chǎng mèng",
+        "[00:38.54]Nǐ hòurè huí xiā yīqiè chéngkōng",
+        "[00:43.29]Dàn nǐ shì wéiyī de diànshì",
+        "[00:46.09]Shì wǒ xià yīshì húhuàn de míngzì",
+    ])
+    monkeypatch.setattr(
+        music_lyric, "_http_get_json", lambda *a, **k: {"syncedLyrics": pinyin_lrc}
+    )
+
+    assert music_lyric._fetch_from_lrclib("天使", "刘思鉴") is None
+
+
+def test_lrclib_chinese_result_still_passes(monkeypatch):
+    """lrclib 给出正常汉字歌词时照常采用（别把拦截做成误杀）。"""
+    chinese_lrc = "\n".join([
+        "[00:01.00]天使",
+        "[00:02.00]是我下意识呼唤的名字",
+        "[00:03.00]放弃又坚持",
+        "[00:04.00]让我平静用熟悉的方式",
+        "[00:05.00]是最善良的天使",
+        "[00:06.00]拯救了我一次又一次",
+        "[00:07.00]灯光照进来的样子",
+        "[00:08.00]再唱一次",
+    ])
+    monkeypatch.setattr(
+        music_lyric, "_http_get_json", lambda *a, **k: {"syncedLyrics": chinese_lrc}
+    )
+
+    result = music_lyric._fetch_from_lrclib("天使", "刘思鉴")
+
+    assert result is not None
+    texts = [line.text for line in result]
+    assert "天使" in texts
+
+
+def test_fetch_lyrics_prefers_chinese_source_over_pinyin(monkeypatch):
+    """端到端：拼音源先返回也不算数，汉字源的结果必须被采用。"""
+    pinyin = [LyricLine(float(i), t) for i, t in enumerate([
+        "Yěguāng zhàqiáo dōu", "Bǎn bō yīnyīn biàn hǎoshǒu",
+        "Zhǎobùjīng liúniǎn de yōu zǒu", "Wángshí cuì yuǎn dōu",
+        "Huā kāi huā luò yī chǎng mèng", "Nǐ hòurè huí xiā yīqiè chéngkōng",
+        "Dàn nǐ shì wéiyī de diànshì", "Shì wǒ xià yīshì húhuàn de míngzì",
+    ])]
+    chinese = [LyricLine(float(i), t) for i, t in enumerate([
+        "天使", "刘思鉴", "是我下意识呼唤的名字", "放弃又坚持",
+        "让我平静用熟悉的方式", "是最善良的天使", "拯救了我一次又一次",
+        "灯光照进来的样子",
+    ])]
+
+    def pinyin_source(title, artist, **kwargs):
+        # 走 _as_lyrics 的源会把拼音判为未命中
+        return music_lyric._as_lyrics(pinyin)
+
+    monkeypatch.setattr(music_lyric, "_SOURCES", (
+        ("lrclib", pinyin_source),
+        ("qq", lambda t, a, **k: chinese),
+    ))
+    monkeypatch.setattr(music_lyric, "_write_cache", lambda *a, **k: None)
+    monkeypatch.setattr(music_lyric, "_read_cache", lambda *a, **k: None)
+
+    result = music_lyric.fetch_lyrics("天使", "刘思鉴")
+
+    assert result is not None
+    texts = [line.text for line in result]
+    assert "天使" in texts, f"采用的结果仍是拼音：{texts[:3]}"
+
+
 # ---------------------------------------------------------------- 曲目匹配
 
 

@@ -344,6 +344,10 @@ def test_pure_logic_modules_do_not_import_qt():
         # 是纯几何，度量对象同样注入——收缩逐级触发/逆序恢复这些规则要能在没有
         # 窗口、没有真实字体、没有屏幕的替身上直接验，就必须零 Qt。
         "island/segments.py", "sys_monitor.py", "island/layout.py",
+        # 2026-10-23 加入 music/bodian：波点音乐的曲目来源读的是第三方程序的本地
+        # 数据库与日志（sqlite3 + 文件尾读），跑在歌词采样线程上；真值表（坏 JSON /
+        # 撞锁 / 中文路径 / URI 编码）必须在没有窗口、没有事件循环的替身上直接验。
+        "music/bodian.py",
     ):
         src = _read(name)
         assert "PySide6" not in src, f"{name} 引入了 Qt 依赖，破坏纯函数层定位"

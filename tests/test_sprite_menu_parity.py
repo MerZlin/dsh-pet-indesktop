@@ -477,11 +477,14 @@ def test_music_submenu_offers_every_player_a_launch_entry(tmp_path):
     finally:
         shell._delete_runtime_marker()
 
-    for key in ("netease", "qqmusic", "kugou", "soda"):
+    # 键表从注册表取，别在这里再抄一份：注册表加播放器时这条用例自动跟上。
+    player_keys = tuple(music_players.player_keys())
+    for key in player_keys:
         expected = f"打开{music_players.player_label(key)}给主人放歌"
         assert expected in labels, f"音乐子菜单缺 {key} 的启动入口：{labels}"
     launch = [text for text in labels if text.startswith("打开")]
-    assert len(launch) == len(set(launch)) == 4, f"启动入口重复或数量不对：{launch}"
+    assert len(launch) == len(set(launch)) == len(player_keys), (
+        f"启动入口重复或数量不对：{launch}")
 
 
 def test_divination_entry_appears_when_app_shell_provides_the_callback(tmp_path):

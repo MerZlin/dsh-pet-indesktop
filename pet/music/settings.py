@@ -230,6 +230,46 @@ PLAYER_GROUP_TITLE = "播放器路径与标题格式（高级）"
 PLAYER_GROUP_TITLE_NO_FOOBAR = "播放器路径（高级）"
 
 
+def bodian_lyrics_supported() -> bool:
+    """「波点音乐歌词」是否在本平台可用——数据目录是 Windows 的 %LOCALAPPDATA%。"""
+    return sys.platform == "win32"
+
+
+def bodian_lyrics_rows(dialog) -> list[SettingRow]:
+    """「波点音乐歌词」一行（**仅 Windows**，与 foobar_lyrics_rows 同规）。
+
+    行文案里必须如实写清四条，否则用户会以为是"功能坏了"：
+
+    1. **为什么要单独一个开关**：波点不向系统上报正在播什么（实测播放中系统会话
+       数为 0），窗口标题又是固定文字，所以只能读它自己的本地播放记录。
+    2. **读的是什么**：本机那份播放历史库与日志，**只读**，不联网、不上传、不改动。
+    3. **进度是推算的**：它的记录里没有播放进度，歌词按本机时钟推算；开启时如果
+       歌已经放到一半，可以右键菜单「音乐 → 歌词对齐」手工校正。
+    4. **与 foobar 源的先后**：两路都只在没有其它播放器在播时才会被问到；但
+       **foobar 优先**，而且 foobar 源看不出播放状态——所以 foobar 开着（哪怕没在
+       播）会挡住波点。这条必须写，否则用户会以为波点开关失效了。
+    """
+    check = getattr(dialog, "bodian_lyrics_check", None)
+    if check is None or not bodian_lyrics_supported():
+        return []
+    # 与 foobar 两键同规（同一 _SOURCE_SWITCHES 组、同一读取形态）：进程级歌词源
+    # 开关，子宠页保存由设置进程的配置路由直写主配置（pet/settings_slot_config.py），
+    # 改了真生效。控件本体建在 settings_pet_controls。
+    return [
+        SettingRow(
+            "bodian_lyrics",
+            "波点音乐歌词",
+            "波点音乐不会告诉系统正在播什么，所以默认读不到歌词。本开关改为读取它"
+            "自己的本地播放记录（只读、不联网、不上传）。只在没有其它播放器在播时"
+            "才会被问到；若同时开着 foobar2000 且打开了它的歌词开关，foobar 会优先"
+            "（那条路看不出是否在播，关掉 foobar 或关掉它的开关即可让波点接手）。"
+            "它的记录里没有播放进度，歌词按本机时钟推算——开启时歌已放到一半的话，"
+            "用右键菜单「音乐 → 歌词对齐」校正一次即可。",
+            check,
+        ),
+    ]
+
+
 def advanced_group_title(dialog) -> str:
     """高级折叠组标题：按平台上有没有「标题格式」这一行决定（无该行就不提它）。"""
     if not foobar_lyrics_supported() or getattr(dialog, "foobar_title_format_edit", None) is None:
@@ -255,11 +295,12 @@ def save_music_player_settings(dialog) -> None:
         music_players.clear_cache()
 
 
-# 「音乐关联」域里两个**来源开关**的控件名 → 配置键。控件在
+# 「音乐关联」域里三个**来源开关**的控件名 → 配置键。控件在
 # pet/settings_pet_controls 里按平台条件创建（非 Windows 为 None）。
 _SOURCE_SWITCHES = (
     ("music_browser_media_check", "music_browser_media_enabled"),
     ("foobar_lyrics_check", "foobar_lyrics_enabled"),
+    ("bodian_lyrics_check", "bodian_lyrics_enabled"),
 )
 
 

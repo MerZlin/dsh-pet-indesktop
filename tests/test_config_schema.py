@@ -116,6 +116,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "music_browser_media_enabled",
         "foobar_lyrics_enabled",
         "foobar_title_format",
+        "bodian_lyrics_enabled",
         "music_lyric_cache_limit",
         "music_lyric_enabled",
         "music_lyric_lead_seconds",
@@ -247,6 +248,9 @@ SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "ch
 # 一次；共创者定稿的 token 成本闸），白名单 159。
 # 2026-10-22 加场景扮演 3 键（roleplay_enabled / roleplay_scene / roleplay_cast；
 # 每宠键，默认关/空），白名单 162。
+# 2026-10-23 加波点音乐歌词 1 键（bodian_lyrics_enabled，默认 False：波点不注册 SMTC，
+# 这一条读它自己的本地播放记录与日志，只读、仅 Windows、只在无在播会话时被询问），
+# 白名单 163。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 
@@ -788,7 +792,13 @@ def test_music_player_paths_keys_track_registry(tmp_path):
     """清洗键集 = 注册表键集（不许在 config 里另抄一份固定键表）。"""
     from pet.music import players as music_players
 
-    assert set(music_players.player_keys()) == {"netease", "qqmusic", "kugou", "soda"}
+    assert set(music_players.player_keys()) == {
+        "netease",
+        "qqmusic",
+        "kugou",
+        "soda",
+        "bodian",
+    }
     payload = {key: f"D:/{key}/player.exe" for key in music_players.player_keys()}
     _write_config(tmp_path, {"version": 4, "music_player_paths": payload})
     cfg = Config(base=tmp_path)
