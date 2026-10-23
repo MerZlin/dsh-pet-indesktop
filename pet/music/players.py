@@ -43,7 +43,26 @@ PLAYERS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     # （版本段随升级变，见 _VERSIONED_INSTALL_DIRS）。目录名也有写成 SodaMusic /
     # 汽水音乐的，一并认。
     "soda": ("汽水音乐", "SodaMusic.exe", ("SodaMusic", "Soda Music", "汽水音乐")),
+    # 波点音乐：Flutter 应用，安装目录名小写 ``bodian``（本机实测
+    # ``D:\Program Files (x86)\bodian\bodian_pc.exe``），也有写成 ``Bodian`` 的
+    # （Windows 路径不分大小写，两种拼法都能命中同一个目录）。
+    # **它不注册 SMTC**（见 :data:`_NO_SMTC_PLAYERS`），所以这个入口只负责把程序
+    # 打开、让它续播自己的队列；"发播放指令"那一段对它一定失败，不要白等 10 秒。
+    # 歌词走另一条路：``music/bodian.py`` 的本地播放记录补充源。
+    "bodian": ("波点音乐", "bodian_pc.exe", ("bodian", "Bodian", "波点音乐")),
 }
+
+# 不注册 Windows 系统媒体会话的播放器：对它们 ``now_playing.play_session_for``
+# 恒为 False（没有会话可发指令），所以启动流程要跳过"轮询等它出现在 SMTC 里"——
+# 否则每次点菜单都白等 10 秒、还占一条线程。
+# **判决依据是实测**（2026-10-21/23）：波点播放中 ``GetSessions()`` 返回 0，
+# 它的程序与全部插件 DLL 里也没有 ``SystemMediaTransportControls`` 引用。
+_NO_SMTC_PLAYERS = frozenset({"bodian"})
+
+
+def registers_smtc(player_key: str) -> bool:
+    """这个播放器会不会出现在系统媒体会话里（决定要不要发 SMTC 播放指令）。"""
+    return player_key not in _NO_SMTC_PLAYERS
 
 # 搜哪些根目录：两个常见盘符 + 用户的 AppData（部分安装器会装在这里）。
 _SEARCH_ROOTS = ("D:/", "C:/", "C:/Program Files", "C:/Program Files (x86)",

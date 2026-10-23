@@ -45,13 +45,14 @@ _REAL_SEARCH = music_players._search
 #: （那就是全局 ``time`` 模块），本文件的等待助手必须用自己的这一份，否则会自锁。
 _MONOTONIC = time.monotonic
 
-#: 契约：四个播放器的控件属性名。在这里逐字钉住（而不是从 ``settings_music`` 反查），
+#: 契约：五个播放器的控件属性名。在这里逐字钉住（而不是从 ``settings_music`` 反查），
 #: 免得产品侧漏一个播放器时用例跟着一起漏（同 test_music_player_settings.py 口径）。
 PLAYER_ATTRS = {
     "netease": "music_player_netease_picker",
     "qqmusic": "music_player_qqmusic_picker",
     "kugou": "music_player_kugou_picker",
     "soda": "music_player_soda_picker",
+    "bodian": "music_player_bodian_picker",
 }
 
 

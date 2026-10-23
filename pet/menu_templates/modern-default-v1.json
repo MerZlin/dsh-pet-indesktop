@@ -22,7 +22,8 @@
       {"type": "action", "id": "music_open_netease", "visible": true},
       {"type": "action", "id": "music_open_qqmusic", "visible": true},
       {"type": "action", "id": "music_open_kugou", "visible": true},
-      {"type": "action", "id": "music_open_soda", "visible": true}
+      {"type": "action", "id": "music_open_soda", "visible": true},
+      {"type": "action", "id": "music_open_bodian", "visible": true}
     ]},
     {"type": "separator", "id": "default.separator-playback", "visible": true},
     {

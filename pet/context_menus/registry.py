@@ -42,6 +42,7 @@ from .shared import (
     add_agent_cost,
     add_music_lyric_align,
     add_music_next,
+    add_music_open_bodian,
     add_music_open_kugou,
     add_music_open_netease,
     add_music_open_qqmusic,
@@ -82,6 +83,7 @@ ACTION_LABELS = {
     "music_open_qqmusic": "打开QQ音乐并播放",
     "music_open_kugou": "打开酷狗音乐并播放",
     "music_open_soda": "打开汽水音乐并播放",
+    "music_open_bodian": "打开波点音乐",
     "music_lyric_align": "歌词对齐",
     "agent_cost": "显示本轮消费",
     "quick_launch": "快捷启动", "balance": "DeepSeek 余额",
@@ -114,7 +116,7 @@ ACTION_ICONS = {
     "music_next": "play", "music_prev": "play", "music_quit": "stop", "agent_cost": "balance",
     "music": "play", "music_pause": "pause", "music_open_netease": "play",
     "music_open_qqmusic": "play", "music_open_kugou": "play",
-    "music_open_soda": "play", "music_lyric_align": "play",
+    "music_open_soda": "play", "music_open_bodian": "play", "music_lyric_align": "play",
     "quick_launch": "application", "balance": "balance", "harness": "harness",
     "memory_trim": "clear",
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
@@ -342,6 +344,7 @@ class MenuActionRegistry:
             # 运行时启用态表达（CONTEXT.md：Runtime Disabled 保留位置 + 解释原因）。
             "music_open_kugou": MenuActionSpec(add_music_open_kugou),
             "music_open_soda": MenuActionSpec(add_music_open_soda),
+            "music_open_bodian": MenuActionSpec(add_music_open_bodian),
             # 平台门在 menu_layout 的 available_actions 过滤里生效（非 Windows
             # 整条不出现）；builder 自身也有同一道门，legacy 扁平布局直接调它。
             "memory_trim": MenuActionSpec(add_memory_trim, _memory_trim_available),

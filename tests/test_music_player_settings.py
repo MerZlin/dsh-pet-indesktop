@@ -52,27 +52,30 @@ def dialog(tmp_path, monkeypatch):
     app.processEvents()
 
 
-#: 契约：四个播放器的**控件属性名**与**行键**。在这里逐字钉住（而不是从
+#: 契约：五个播放器的**控件属性名**与**行键**。在这里逐字钉住（而不是从
 #: ``settings_music`` 反查），否则产品侧把某个播放器漏掉时用例会跟着一起漏。
-PLAYER_ORDER = ("netease", "qqmusic", "kugou", "soda")
+PLAYER_ORDER = ("netease", "qqmusic", "kugou", "soda", "bodian")
 PLAYER_ATTRS = {
     "netease": "music_player_netease_picker",
     "qqmusic": "music_player_qqmusic_picker",
     "kugou": "music_player_kugou_picker",
     "soda": "music_player_soda_picker",
+    "bodian": "music_player_bodian_picker",
 }
 PLAYER_ROWS = {
     "netease": "music_player_netease",
     "qqmusic": "music_player_qqmusic",
     "kugou": "music_player_kugou",
     "soda": "music_player_soda",
+    "bodian": "music_player_bodian",
 }
-#: 用户搜这四个播放器时会打的词（设置页搜索是子串匹配，行标题里必须有它）。
+#: 用户搜这几个播放器时会打的词（设置页搜索是子串匹配，行标题里必须有它）。
 PLAYER_QUERIES = {
     "netease": "网易云",
     "qqmusic": "QQ音乐",
     "kugou": "酷狗",
     "soda": "汽水",
+    "bodian": "波点",
 }
 
 

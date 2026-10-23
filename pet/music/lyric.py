@@ -601,6 +601,12 @@ def _as_lyrics(lines: list[LyricLine]) -> Lyrics | None:
         return None
     if _looks_instrumental(lines):
         return Lyrics(instrumental=True)
+    if _looks_romanized(lines):
+        # 当作"这个源没给出可用结果"，让别的源接手（见 _looks_romanized）。
+        # 注意**不是**返回 None 就完事：如果所有源都只有拼音版，调用方会显示
+        # "暂无歌词"——这比显示一屏拼音更符合预期。
+        log.debug("该源返回的是拼音歌词，按未命中处理（%d 行）", len(lines))
+        return None
     return Lyrics(lines=tuple(lines))
 
 
@@ -639,6 +645,39 @@ def _looks_instrumental(lines: list[LyricLine]) -> bool:
     return all(
         any(pattern in text for pattern in _INSTRUMENTAL_PATTERNS) for text in texts
     )
+
+
+# 「拼音歌词」识别：lrclib 这类社区库里，中文歌常有一条**全拼音**（带声调符号）
+# 的歌词版本，而它自己和汉字版一样"完整、有正确时间轴"，所以看不出问题。
+# 实测（2026-10-23，天使/刘思鉴）：lrclib 返回 52 行 'Yěguāng zhàqiáo dōu'，
+# QQ 音乐与网易云都是 67~72 行汉字——拼音版被采用纯粹是因为它先到。
+#
+# 判据只看"**整首**几乎没有汉字，却大量出现带声调的拉丁字母"：真歌词里混一句
+# 外语不该被否掉（那是正常的多语种歌词），所以按比例判、且要求声调符号出现。
+_TONE_MARKS = "āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜüńňǹ"
+
+
+def _looks_romanized(lines: list[LyricLine]) -> bool:
+    """这些歌词是不是"中文歌的拼音版"（整首无汉字、大量带声调拉丁字母）。
+
+    为什么必须挡：用户看到的是「天使 / 刘思鉴」而气泡里出现
+    「Yěguāng zhàqiáo dōu」——同一首歌明明有汉字版，只是那条慢了一点点。
+    这种结果**看起来像 bug，实际是源质量问题**，所以按"这个源没给出可用结果"
+    处理，让更好的源（或用户重试）胜出，而不是把它显示给用户。
+    """
+    texts = [str(line.text or "").strip() for line in lines]
+    texts = [t for t in texts if t]
+    if len(texts) < 8:
+        # 行数太少时不下结论：可能是短曲或解析残片，交给既有逻辑。
+        return False
+    han = sum(1 for t in texts if any("\u4e00" <= ch <= "\u9fff" for ch in t))
+    if han / len(texts) >= 0.05:
+        # 有 5% 以上的行含汉字 → 是正常中文歌词（哪怕夹杂拼音注音行）。
+        return False
+    toned = sum(1 for t in texts if any(ch in _TONE_MARKS for ch in t))
+    # 带声调的拉丁行占多数才是拼音版；纯英文歌词不该被这个判据误伤
+    # （英文里没有 āáǎà 这类字符）。
+    return toned / len(texts) >= 0.5
 
 
 def _fetch_from_qq(title: str, artist: str, *, deadline: float | None = None) -> Lyrics | None:
@@ -686,7 +725,10 @@ def _fetch_from_lrclib(title: str, artist: str, *, deadline: float | None = None
         if payload.get("instrumental"):
             return Lyrics(instrumental=True)
         return None
-    return Lyrics(lines=tuple(parse_lrc(str(synced))))
+    # **必须过 _as_lyrics**：lrclib 对中文歌常有一条全拼音（带声调）的歌词版本，
+    # 它和汉字版一样"完整 + 时间轴正确"，直接返回会把一屏拼音显示给用户。
+    # 实测 2026-10-23（天使/刘思鉴）：这里绕过 _as_lyrics 时拼音版照样上屏。
+    return _as_lyrics(parse_lrc(str(synced)))
 
 
 def _fetch_from_netease(title: str, artist: str, *, deadline: float | None = None) -> Lyrics | None:

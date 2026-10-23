@@ -316,11 +316,13 @@ _EXPECTED_PLAYERS = {
     "qqmusic": ("QQMusic.exe", ("QQMusic", "QQ音乐")),
     "kugou": ("KuGou.exe", ("KuGou", "KGMusic", "酷狗音乐")),
     "soda": ("SodaMusic.exe", ("SodaMusic", "汽水音乐")),
+    # 本机实测的真实布局：``D:\Program Files (x86)\bodian\bodian_pc.exe``。
+    "bodian": ("bodian_pc.exe", ("bodian", "Bodian")),
 }
 
 
-def test_registry_covers_four_players_with_known_exe_names():
-    """注册表就是四播放器的键源：酷狗 KuGou.exe、汽水 SodaMusic.exe 都在。"""
+def test_registry_covers_every_player_with_known_exe_names():
+    """注册表就是播放器的键源：酷狗 KuGou.exe、汽水 SodaMusic.exe、波点 bodian_pc.exe 都在。"""
     assert set(music_players.PLAYERS) == set(_EXPECTED_PLAYERS)
     assert music_players.player_keys() == tuple(music_players.PLAYERS)
     for key, (exe_name, dir_names) in _EXPECTED_PLAYERS.items():

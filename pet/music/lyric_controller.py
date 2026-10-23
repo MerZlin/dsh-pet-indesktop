@@ -36,7 +36,13 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from . import lyric as music_lyric, now_playing, title as music_title
+from . import (
+    bodian as bodian_playing,
+    bodian_control,
+    lyric as music_lyric,
+    now_playing,
+    title as music_title,
+)
 from .. import window_alerts
 
 log = logging.getLogger(__name__)
@@ -365,6 +371,10 @@ class MusicLyricController(QObject):
         # 留在同一个播放器上——本机实测同时有网易云与浏览器会话，丢了这个标识
         # 就会在"暂停一下"时跳到浏览器里那首歌上。
         self._tracked_app_id: str = ""
+        # 最近一次采样的来源（**含补充源**）。`_tracked_app_id` 刻意不记补充源
+        # （它不占 SMTC 跟踪位），但"切歌该发给谁"要知道当前到底在跟谁——波点这类
+        # 不上报 SMTC 的播放器只能靠系统媒体键控制（见 music/bodian_control.py）。
+        self._source_app_id: str = ""
         # 「该播放器不上报播放进度」的提示每个会话只发一次。
         self._estimated_hint_shown: bool = False
         # 常驻标题行（如「我在唱《歌名》」），固定在气泡第一行长期显示。
@@ -503,8 +513,39 @@ class MusicLyricController(QObject):
 
         切歌后 SMTC 的 title 会变，下几拍的轮询自然检测到"换了首歌"并重建基准，
         歌词因此自动跟上，不需要在这里额外处理。
+
+        **补充源（波点）走另一条路**：它没有 SMTC 会话，``now_playing.skip_track``
+        对它恒为 ``False``；这时改发系统媒体键（见 ``music/bodian_control.py``）。
+        只在**当前确实在跟波点**时才发——媒体键是全局的，发错对象等于把用户正在听的
+        网易云换掉。
         """
-        return now_playing.skip_track(direction)
+        if now_playing.skip_track(direction):
+            return True
+        if not self._following_bodian():
+            return False
+        return bodian_control.skip(direction)
+
+    def toggle_play_pause(self) -> bool:
+        """菜单「暂停 / 播放」。补充源（波点）同上走系统媒体键。"""
+        if now_playing.toggle_play_pause():
+            return True
+        if not self._following_bodian():
+            return False
+        return bodian_control.toggle_pause()
+
+    def _following_bodian(self) -> bool:
+        """最近一次采样是否来自波点。
+
+        要求"最近一次采样的来源是波点"而不是"波点在跑"：后者在用户同时开着多个
+        播放器时会把媒体键发给错误的程序。
+        """
+        try:
+            return (
+                str(self._source_app_id or "").strip().lower()
+                == bodian_playing.BODIAN_APP_ID
+            )
+        except Exception:
+            return False
 
 
     def _reset(self) -> None:
@@ -531,6 +572,7 @@ class MusicLyricController(QObject):
         self._primed = False
         self._detected_at = None
         self._tracked_app_id = ""
+        self._source_app_id = ""
         self._title_line = None
         self._last_lyric = ""
         self._last_shown = None
@@ -690,6 +732,17 @@ class MusicLyricController(QObject):
             return ""
         return value.strip() if isinstance(value, str) else ""
 
+    def _bodian_lyrics_enabled(self) -> bool:
+        """「波点音乐歌词」开关（配置缺失/脏值一律按关处理）。
+
+        与上面几条同规：读配置只在采样线程上做，不另存一份会过期的副本——
+        否则设置页改了开关要重启桌宠才生效。
+        """
+        try:
+            return bool(self.win.cfg.get("bodian_lyrics_enabled", False))
+        except Exception:
+            return False
+
     def _lyric_query(self, title: str, artist: str, playback) -> tuple[str, str]:
         """取词用的 ``(歌名, 歌手)``——**只有浏览器媒体会话**才先清洗标题。
 
@@ -734,6 +787,7 @@ class MusicLyricController(QObject):
                     allow_browser=self._browser_media_enabled(),
                     allow_foobar=self._foobar_lyrics_enabled(),
                     foobar_title_format=self._foobar_title_format(),
+                    allow_bodian=self._bodian_lyrics_enabled(),
                 )
             except Exception:
                 playback = None
@@ -797,12 +851,14 @@ class MusicLyricController(QObject):
         key = track.key()
         now = time.monotonic()
         # 记住这次跟的是哪个播放器，下一拍带上它去采样（会话选取据此粘住）。
-        # **foobar 窗口标题源不占 SMTC 的跟踪位**：那个位是给会话选取用的，塞一个
-        # SMTC 里不存在的 id 只会丢掉"粘住当前播放器"的能力（见
-        # now_playing.is_foobar_source）。
+        # **补充源不占 SMTC 的跟踪位**：那个位是给会话选取用的，塞一个 SMTC 里
+        # 不存在的 id 只会丢掉"粘住当前播放器"的能力（见
+        # now_playing.is_supplementary_source——加新补充源时只改那一个判断）。
         app_id = str(getattr(playback, "app_id", "") or "")
-        if not now_playing.is_foobar_source(app_id):
+        if not now_playing.is_supplementary_source(app_id):
             self._tracked_app_id = app_id
+        # 来源本身（含补充源）单独记：切歌/暂停要知道"该发给谁"。
+        self._source_app_id = app_id
 
         if not track.playing:
             # 暂停：只冻结进度，**不要** reset——否则恢复播放时同一首歌会被
