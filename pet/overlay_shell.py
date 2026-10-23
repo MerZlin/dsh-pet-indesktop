@@ -3291,7 +3291,8 @@ class OverlayShell(QObject):
         self._music_sing_silent_since = None
         self._instrumental_playing = False
         timer = QTimer(self)
-        # 1s 轮询：兼顾 COM 开销与「识别到音频后尽快触发」的体验（旧机同值）
+        # 1s 轮询：兼顾响应速度与开销（COM 在 music/detect 的探针线程里，
+        # 主线程只读缓存；旧机同值）
         timer.setInterval(1000)
         timer.timeout.connect(self._check_music_sing)
         self._music_sing_timer = timer

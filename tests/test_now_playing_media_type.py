@@ -74,9 +74,11 @@ def _win32(monkeypatch):
 def _clean_session_probe():
     """每个用例前后清掉探针缓存与推送的浏览器开关，避免跨用例串味。"""
     now_playing.reset_session_probe()
+    music_detect.reset_peak_probe()
     music_detect.set_browser_media_enabled(False)
     yield
     now_playing.reset_session_probe()
+    music_detect.reset_peak_probe()
     music_detect.set_browser_media_enabled(False)
 
 
@@ -421,9 +423,14 @@ class _SingHost:
 
 
 def _loud_system(monkeypatch, sessions) -> None:
-    """系统在出声 + 给定的 SMTC 会话在播（只替换 OS 边界）。"""
+    """系统在出声 + 给定的 SMTC 会话在播（只替换 OS 边界）。
+
+    峰值读数也在这里喂一拍：门现在只读后台探针的缓存（主线程不许调 COM），
+    同步调用探针的公开入口等价于"探针跑过一轮"，不必等线程。
+    """
     _install_winrt(monkeypatch, sessions)
     monkeypatch.setattr(music_detect, "_get_meter", lambda: _LoudMeter())
+    music_detect.refresh_peak_once()
 
 
 def _prime_verdict() -> tuple:

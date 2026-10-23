@@ -128,6 +128,8 @@ def test_firefox_install_id_obeys_lyrics_and_singing_switch(monkeypatch, enabled
     assert (playback is not None) is enabled
     now_playing.refresh_session_probe_once()
     monkeypatch.setattr(music_detect, "_get_meter", lambda: SimpleNamespace(GetPeakValue=lambda: 0.5))
+    # 峰值也由后台探针供数（主线程不再同步调 COM）：同步喂一拍等价于探针跑过一轮。
+    music_detect.refresh_peak_once()
     music_detect.set_browser_media_enabled(enabled)
     assert music_detect.is_music_playing() is enabled
 
