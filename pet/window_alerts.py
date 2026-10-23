@@ -846,8 +846,8 @@ def check_music_sing(host) -> None:
     两处。规则只留在 ``music_detect`` 一处。
     """
     if not feature_activation.is_active("music"):
-        # 音乐模块未激活：本拍直接收口——不调 music_detect（每秒一次 pycaw COM）、
-        # 不拉常驻 SMTC 探针线程，也不付 pet.window 的导入。行为开关的值原样留着。
+        # 音乐模块未激活：本拍直接收口——不调 music_detect、不拉峰值探针线程，
+        # 也不付 pet.window 的导入。行为开关的值原样留着。
         host._music_sing_active = False
         host._music_sing_silent_since = None
         return

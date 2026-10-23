@@ -496,7 +496,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         )
         self._music_sing_active = False
         self._music_sing_timer = QTimer(self)
-        # 1s 轮询：兼顾 COM 开销与“识别到音频后尽快触发”的体验。
+        # 1s 轮询：兼顾响应速度与开销（COM 在 music/detect 的探针线程里，
+        # 主线程只读缓存，见该模块的峰值探针说明）。
         self._music_sing_timer.setInterval(1000)
         self._music_sing_timer.timeout.connect(self._check_music_sing)
         # 重要气泡（主动识屏先兆/答复、Agent 联动提醒等）占用期间，自言自语让路，
