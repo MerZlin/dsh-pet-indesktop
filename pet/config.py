@@ -1155,6 +1155,9 @@ class Config:
             "roleplay_scene": "",
             "roleplay_cast": "",
             "mouse_through": False,
+            # 气泡独立鼠标穿透（issue #367）：只穿透气泡窗口，本体保持可交互；
+            # 默认关 = 升级用户行为不变。Windows 专属能力，其它平台读点为零。
+            "bubble_click_through": False,
             "cursor_hidden_passthrough": True,
             "drag_physics": False,
             "drop_gravity": False,  # 静止放手下落：低速松手零初速受重力落地（#219，默认关=旧行为）
@@ -1523,6 +1526,7 @@ class Config:
             "bubble_text_scale",
             "self_talk_bubble_style",
             "mouse_through",
+            "bubble_click_through",
             "cursor_hidden_passthrough",
             "drag_physics",
             "drop_gravity",
@@ -1973,6 +1977,7 @@ class Config:
         self.data["self_talk_voice_precache_enabled"] = _bool_or_default(self.data.get("self_talk_voice_precache_enabled"), False)
         self.data["cursor_hidden_passthrough"] = _bool_or_default(self.data.get("cursor_hidden_passthrough"), True)
         self.data["allow_cross_screen"] = _bool_or_default(self.data.get("allow_cross_screen"), False)
+        self.data["bubble_click_through"] = _bool_or_default(self.data.get("bubble_click_through"), False)
         self.data["spawn_inherit_size"] = _bool_or_default(self.data.get("spawn_inherit_size"), True)
         self.data["spawn_scale"] = _float_or_default(self.data.get("spawn_scale"), catalog.DEFAULT_SCALE, 0.1, 4.0)
         self.data["spawn_inherit_dynamic_island"] = _bool_or_default(self.data.get("spawn_inherit_dynamic_island"), False)

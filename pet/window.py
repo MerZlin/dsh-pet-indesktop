@@ -460,6 +460,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             style_id=str(config.get('self_talk_bubble_style', DEFAULT_SELF_TALK_BUBBLE_STYLE))
         )
         self._speech_bubble.set_host_on_top(bool(config.get('on_top', True)))
+        # 气泡鼠标穿透（issue #367）：只下发意愿，气泡自己收敛（隐藏中不写
+        # 样式，首次显示由 showEvent 重放）。getattr 守卫与 set_text_scale
+        # 注入同口径：测试替身气泡可能没有这个 setter。
+        _apply_bubble_through = getattr(self._speech_bubble, 'set_click_through', None)
+        if callable(_apply_bubble_through):
+            _apply_bubble_through(bool(config.get('bubble_click_through', False)))
         self._speech_bubble.clicked.connect(self._on_speech_bubble_clicked)
         self._look_busy = False
         self._last_look_ts = 0.0
@@ -3866,6 +3872,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         desired_mouse_through = bool(self.cfg.get('mouse_through', False))
         if desired_mouse_through != self._user_mouse_through:
             self.set_mouse_through(desired_mouse_through)
+        # 气泡穿透跟随配置热改（setter 幂等，值不变不动原生窗口）
+        _apply_bubble_through = getattr(self._speech_bubble, 'set_click_through', None)
+        if callable(_apply_bubble_through):
+            _apply_bubble_through(bool(self.cfg.get('bubble_click_through', False)))
         desired_cursor_passthrough = bool(self.cfg.get('cursor_hidden_passthrough', True))
         if desired_cursor_passthrough != self._cursor_hidden_passthrough:
             self.set_cursor_hidden_passthrough(desired_cursor_passthrough)

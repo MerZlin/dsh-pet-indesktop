@@ -307,7 +307,9 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 按文件约定只随实测校准，不为达标压行（拆分仍是待办）。
 # 2026-10-22 上调到 2722：AI 域新增「场景扮演」组的一行 claim（roleplay_enabled /
 # roleplay_scene），行本体在 _AiSettingsPage。实测 2722。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2722  # 2026-10-22：场景扮演组 claim 一行
+# 2026-10-25 上调到 2724：issue #367 气泡鼠标穿透——`_write_config` 加 None 守卫
+# 写回两行（控件与行本体在 settings_pet_controls / settings_interaction）。实测 2724。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2724  # 2026-10-25：气泡穿透写回两行
 
 
 def _read(name: str) -> str:

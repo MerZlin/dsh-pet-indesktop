@@ -1945,6 +1945,7 @@ class OverlayShell(QObject):
         bubble = self._speech_bubble
         if bubble is not None:
             self._apply_bubble_text_scale(bubble, self._sprite_config(self.alert_target_sprite()))
+            self._apply_bubble_click_through(bubble, self._sprite_config(self.alert_target_sprite()))
             self._connect_alert_hidden(bubble)
         if self._quick_chat_resolved:
             # 快速对话可用性已解析过（不重付 import 成本）：新气泡直接对齐
@@ -1984,6 +1985,7 @@ class OverlayShell(QObject):
                 "self_talk_bubble_style", DEFAULT_SELF_TALK_BUBBLE_STYLE)
                 or DEFAULT_SELF_TALK_BUBBLE_STYLE))
         self._apply_bubble_text_scale(getattr(follower, "bubble", None), cfg)
+        self._apply_bubble_click_through(getattr(follower, "bubble", None), cfg)
         return follower
 
     def _ensure_sprite_bubble(self, sprite) -> None:
@@ -2123,6 +2125,7 @@ class OverlayShell(QObject):
                     "self_talk_bubble_style", DEFAULT_SELF_TALK_BUBBLE_STYLE)
                     or DEFAULT_SELF_TALK_BUBBLE_STYLE))
             self._apply_bubble_text_scale(bubble, cfg)
+            self._apply_bubble_click_through(bubble, cfg)
         refresh_anchor = getattr(follower, "refresh_anchor", None)
         if callable(refresh_anchor):
             try:
@@ -2146,6 +2149,22 @@ class OverlayShell(QObject):
             setter(max(0.5, min(3.0, scale)))
         except Exception:
             logging.debug("overlay: 气泡文字缩放注入失败", exc_info=True)
+
+    def _apply_bubble_click_through(self, bubble, cfg=None) -> None:
+        """把「气泡鼠标穿透」注入气泡控件（window.py 构造/重载点的 sprite 等价物）。
+
+        与 ``_apply_bubble_text_scale`` 同口径：getattr 守卫兼容测试替身气泡；
+        ``cfg`` = 该 sprite 的配置来源（缺省主配置）。setter 幂等，值不变时
+        气泡自己不动原生窗口。
+        """
+        setter = getattr(bubble, "set_click_through", None)
+        if not callable(setter):
+            return
+        source = self._config if cfg is None else cfg
+        try:
+            setter(bool(source.get("bubble_click_through", False)))
+        except Exception:
+            logging.debug("overlay: 气泡鼠标穿透注入失败", exc_info=True)
 
     # ---------------------------------------------------------------- B7b：per-slot 取源
     #

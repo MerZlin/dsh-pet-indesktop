@@ -172,7 +172,21 @@ def build_interaction_domain(dialog) -> QWidget:
                             "鼠标穿透",
                             "开启后桌宠不接收鼠标事件，点击穿透到下层窗口。",
                             dialog.mouse_through_check,
-                        )
+                        ),
+                        # 气泡穿透行与控件一起只在 Windows 创建（Windows 原生样式
+                        # 能力；说明必须写清与整宠穿透独立、审批按钮期间自动让位）。
+                        *(
+                            [SettingRow(
+                                "bubble_click_through",
+                                "气泡鼠标穿透",
+                                "点击落在气泡上时穿透到下层窗口，桌宠本体保持可交互；"
+                                "与上面的「鼠标穿透」相互独立，可任意组合。审批/提问按钮"
+                                "弹出期间自动恢复可点，穿透期间点气泡不再触发快速对话"
+                                "（点桌宠本体仍可打开）。仅 Windows。",
+                                dialog.bubble_through_check,
+                            )]
+                            if getattr(dialog, "bubble_through_check", None) is not None else []
+                        ),
                     ],
                 ),
                 ("点击反馈", build_click_rows(dialog)),

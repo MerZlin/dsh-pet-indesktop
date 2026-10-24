@@ -83,6 +83,41 @@ recovery
 
 ## 变更记录
 
+### 2026-10-25 — 新增全局键 `bubble_click_through`（「气泡鼠标穿透」行）
+
+本刀**新增 1 个持久设置键与 1 行设置项**（气泡独立于桌宠本体的鼠标穿透，issue #367），
+不改任何既有键的默认值、归属与保存语义。证据见
+[`PR-REPORT-BUBBLE-CLICK-THROUGH-2026-10-25.md`](PR-REPORT-BUBBLE-CLICK-THROUGH-2026-10-25.md)。
+
+| 项 | 本刀口径 |
+|---|---|
+| setting_id / 行键 | `bubble_click_through`（行键与配置键同名，`Config._initial_data` 默认 `False`） |
+| 归属 | 「互动」域 →「输入」组，紧随「鼠标穿透」行（用户找气泡穿透会先看整宠穿透那一行） |
+| 标题 / 说明 | 「气泡鼠标穿透」/ 说明写明四件事：点击穿透到下层、本体保持可交互、与整宠穿透相互独立可任意组合、审批/提问按钮弹出期间自动恢复可点且穿透期间点气泡不再触发快速对话（点本体仍可）；仅 Windows |
+| default | `False`（**关**）。关 = 气泡代码从不调用 Win32 穿透原语（测试钉死），行为与旧版逐位一致 |
+| 保存时机 / commit_policy | `immediate`（随设置窗关闭的既有 `_write_config` 写回，不新增写盘路径）；legacy `refresh_pet_settings` 与 overlay 壳三注入点热改即时生效，无需重启 |
+| capability / 平台可用性 | **仅 Windows 创建控件与行**（`WS_EX_TRANSPARENT` 是 Windows 原生样式；非 Windows 无独立穿透原语——同 `cursor_hidden_passthrough` 的平台闸门口径，不留"改了没反应"的活开关）。行键与配置键同名 ⇒ 默认值标记走"同名回落"自动覆盖，无需登记 |
+| 依赖 | 与 `mouse_through`（整宠穿透）**相互独立**；与捕获兼容模式（`stream_capture_mode`）互斥生效——气泡是主窗子控件、无独立 HWND 时整个开关静默不生效（不写主窗样式） |
+| 迁移 | **新键**：老配置没有它 → 取默认关（升级用户呈现不变）；`Config.reload` 白名单与 `_bool_or_default` 归一同步登记（`tests/test_config_schema.py` 快照 + `tests/test_bubble_click_through.py` 钉住字符串脏值不误开） |
+| 搜索 | 口语别名「气泡穿透」→ `bubble_click_through`（label 是「气泡鼠标穿透」，子串匹配认不出省掉"鼠标"的半截说法）；关键词「穿透到下层」经 hint 命中 |
+| 恢复 | 无需恢复路径：失败面只有写盘失败（既有设置窗关闭闸门）；隐藏期间改意愿由下次 showEvent 收敛，无半套状态 |
+| 不做 | 不给右键菜单/托盘加快捷开关（issue 只要求设置页）；不做非 Windows 的 `WindowTransparentForInput` 接入（重建原生窗口有频闪风险，无真实平台验证）；交互气泡（审批按钮）期间的让位是硬编码行为而非用户开关——按钮必须能点 |
+
+准出对应：
+
+1. **契约**：键、默认值、归属、依赖、平台可见性、披露层级（primary）、保存与生效时机
+   逐条见上表；新键无旧键/旧入口/旧别名迁移问题；失败路径不新增。
+2. **TDD**：`tests/test_bubble_click_through.py` 12 例先红（6 failed + 6 errors）后绿，
+   覆盖默认关零调用、生效判据三条件、showEvent 重放、捕获子模式、双宿主接线、设置行
+   默认/round trip/非 Windows 不建行、搜索别名、配置归一；schema 快照同步。
+3. **布局与可访问性**：无新增控件类型（复用 `ToggleSwitch` 与 `SettingRow`）；
+   「输入」组追加一行，组名与行序契约不变；说明全文入搜索索引。
+4. **跨平台**：产品代码平台分支只有既有的 `sys.platform == "win32"` 闸门；
+   ubuntu/macos CI 腿用 `sys.platform` 替换用例覆盖"零调用、不建行"两条契约；
+   真实 GUI 验收仅本机 Windows（真实平台命中路由探针五态全对，见 PR 报告 §五），
+   macOS / Linux 未跑（不推断）。
+5. **视觉与文档**：本记录即变更记录；PR 报告与 `docs/INDEX.md` 登记同步。
+
 ### 2026-10-21 — 新增一级域「功能」（功能模块启用/停用卡片，staged 语义）
 
 本刀**新增 1 个一级能力域与 1 个持久设置的可见入口**（`feature_activation` 键与迁移

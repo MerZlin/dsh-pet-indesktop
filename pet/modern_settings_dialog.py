@@ -2403,6 +2403,8 @@ class ModernSettingsDialog(QDialog):
             self.config.set("show_dock_icon", self.dock_icon_check.isChecked())
         self.config.set("no_move", self.no_move_check.isChecked())
         self.config.set("mouse_through", self.mouse_through_check.isChecked())
+        if self.bubble_through_check is not None:
+            self.config.set("bubble_click_through", self.bubble_through_check.isChecked())
         self.config.set("drag_physics", self.drag_physics_check.isChecked())
         self.config.set("drop_gravity", self.drop_gravity_check.isChecked())
         self.config.set("throw_strength", str(self.throw_strength_select.currentData() or "standard"))

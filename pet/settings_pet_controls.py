@@ -307,6 +307,13 @@ def build_pet_controls(host) -> None:
     host.no_move_check.setChecked(bool(host.config.get("no_move", False)))
     host.mouse_through_check = ToggleSwitch(host)
     host.mouse_through_check.setChecked(bool(host.config.get("mouse_through", False)))
+    # 气泡独立鼠标穿透（issue #367）：WS_EX_TRANSPARENT 是 Windows 原生样式，
+    # 其它平台无此原语 ⇒ 控件与行一起不创建（同 cursor_hidden_passthrough 的
+    # 平台闸门口径，避免非 Windows 上出现改了没反应的活开关）。
+    host.bubble_through_check = None
+    if sys.platform == "win32":
+        host.bubble_through_check = ToggleSwitch(host)
+        host.bubble_through_check.setChecked(bool(host.config.get("bubble_click_through", False)))
     # Windows 专属的光标隐藏穿透仅在 Windows 创建，避免非 Windows 未入布局时游离到窗口左上角。
     host.cursor_hidden_passthrough_check = None
     if sys.platform == "win32":

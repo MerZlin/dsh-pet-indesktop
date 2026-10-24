@@ -42,6 +42,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+# 气泡鼠标穿透（issue #367）复用主宠整窗穿透的 Win32 原语；platform_win 只在
+# 函数体内懒访问 windll，跨平台 import 安全。
+from .platform_win import _set_windows_click_through
+
 # 批6-2 拆分后纯函数区 re-export（维持既有 import 兼容；外部调用点本批不改）
 from .speech_bubble_text import (
     BUBBLE_BODY_FONT_PX,
@@ -384,6 +388,13 @@ class PetSpeechBubble(QFrame):
         self._layout.addWidget(self._button_row)
         self._interactive_active = False
         self._interactive_buttons: list[QPushButton] = []
+        # 气泡鼠标穿透（issue #367）：用户意愿（配置键 bubble_click_through）与
+        # 实际生效（原生 WS_EX_TRANSPARENT 样式位）分离——交互气泡在场与捕获
+        # 兼容子模式都要让位。_native_through_applied 只表达"是否碰过原生样式"
+        # （默认关路径零 Win32 调用的闸门），不缓存句柄：offscreen 等平台
+        # winId 恒定，靠句柄变化检测窗口重建不可移植。
+        self._click_through_wanted = False
+        self._native_through_applied: bool | None = None
         # 长文本分页状态：页列表 + 当前页 + 逐页停留表 + 自动翻页定时器。
         # 气泡对鼠标全透明（WA_TransparentForMouseEvents），无法靠点击翻页，
         # 因此采用「每页按字数停留一段后自动翻下一页」的方式保证全文可读完。
@@ -825,6 +836,51 @@ class PetSpeechBubble(QFrame):
             return
         self._apply_window_flags()
 
+    def set_click_through(self, on: bool) -> None:
+        """设置「气泡鼠标穿透」意愿（幂等，值不变不动原生窗口）。
+
+        点击落在气泡上时穿透到下层窗口，桌宠本体保持可交互——与整宠
+        「鼠标穿透」（mouse_through）相互独立。实际生效由
+        ``_sync_native_click_through`` 收敛：交互气泡（审批/提问按钮）在场
+        与捕获兼容子模式都会让位——前者的按钮要能点，后者气泡是主窗子
+        控件、没有可写的独立 HWND。
+        """
+        on = bool(on)
+        if on == self._click_through_wanted:
+            return
+        self._click_through_wanted = on
+        self._sync_native_click_through()
+
+    def _sync_native_click_through(self) -> None:
+        """把穿透意愿收敛到原生窗口样式（默认关时完全不碰原生窗口）。
+
+        - 非 Windows：无 ``WS_EX_TRANSPARENT`` 原语，零调用；
+        - 捕获子模式 / 不可见：无处可写，等 ``showEvent`` 重放；
+        - 从未开启过（``_native_through_applied is not True``）且目标也是
+          关：直接返回——默认关路径与旧版逐位一致；关着收起后再显示也无需
+          重放（新窗口本就没有穿透位）。
+        - 其余情况（开启中，或从开启回落的恢复写）都调一次 Win32 原语：
+          helper 自带"样式已相同则只读不写"的幂等（一次 ``GetWindowLongW``），
+          因此 ``setWindowFlags`` 重建原生窗口后由 ``showEvent`` **无条件
+          重放**即可保证样式不丢，不依赖句柄变化检测（offscreen 等
+          平台 winId 恒定，检测不可移植；同主窗 ``NonRudeHWND`` 的口径）。
+        """
+        if sys.platform != "win32" or self._capture_compat or not self.isVisible():
+            return
+        effective = self._click_through_wanted and not self._interactive_active
+        if not effective and self._native_through_applied is not True:
+            return
+        try:
+            hwnd = int(self.winId())
+        except (AttributeError, RuntimeError, TypeError):
+            return
+        try:
+            _set_windows_click_through(hwnd, effective)
+        except (AttributeError, OSError, RuntimeError):
+            log.debug("气泡鼠标穿透样式写入失败", exc_info=True)
+            return
+        self._native_through_applied = effective
+
     def set_interactive(self, on: bool) -> None:
         """开启后气泡可被鼠标点击（用于触发快速对话），默认全透明穿透。"""
         self._interactive = bool(on)
@@ -962,6 +1018,8 @@ class PetSpeechBubble(QFrame):
             self._setup_buttons(buttons)
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
             self._interactive_active = True
+            # 气泡穿透开着也要让位：按钮必须可点（issue #367）
+            self._sync_native_click_through()
         else:
             self._teardown_interactive()
         duration_ms = self._layout_text_content(anchor_rect, sticky=sticky, duration_ms=duration_ms)
@@ -1173,6 +1231,8 @@ class PetSpeechBubble(QFrame):
         if self._interactive_active:
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             self._interactive_active = False
+            # 交互让位结束：按用户意愿恢复（或保持关闭）气泡穿透（issue #367）
+            self._sync_native_click_through()
         while self._button_layout.count():
             item = self._button_layout.takeAt(0)
             w = item.widget()
@@ -1188,6 +1248,13 @@ class PetSpeechBubble(QFrame):
         self._reset_paging()
         self._teardown_interactive()
         self.hide()
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        """可见化时重放穿透样式：``_apply_window_flags`` 等路径会 ``setWindowFlags``
+        重建原生窗口、丢掉 ``WS_EX_TRANSPARENT`` 扩展样式位（同主窗 ``NonRudeHWND``
+        的 showEvent 重放口径）。不可见期间收到的意愿也在这里首次落地。"""
+        super().showEvent(event)
+        self._sync_native_click_through()
 
     def hideEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         """气泡被隐藏（超时 / dismiss / 父窗口隐藏）时通知上层。"""

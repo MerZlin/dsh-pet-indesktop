@@ -134,6 +134,8 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "quiet_also_on_fullscreen",
         "quiet_minutes_default",
         "bubble_text_scale",
+        # 气泡独立鼠标穿透（issue #367；全局键，默认关）
+        "bubble_click_through",
         # 2026-10-22 场景扮演 3 键（每宠键；默认关 / 场景与人物留空）
         "roleplay_cast",
         "roleplay_enabled",
