@@ -336,3 +336,19 @@ headless，本机两个发行名同版本并存、都提供 `cv2` 顶层模块�
   `scripts/export_android_assets.py::copy_notices`，2026-10-17 起）。
 - 手机使用的 WebP 动画与图标由第 2 节角色素材派生，继续保留其署名和
   个人非商业使用限制。工具与验收说明见 [Android 文档](docs/ANDROID.md)。
+
+---
+
+## 10. 可选离线 AI 增强工具
+
+- `tools/export_ai_upscale_model.py` 的 SRVGGNetCompact 网络改编自
+  [xinntao/Real-ESRGAN v0.2.5.0](https://github.com/xinntao/Real-ESRGAN/blob/v0.2.5.0/realesrgan/archs/srvgg_arch.py)。
+  Copyright (c) 2021, Xintao Wang，BSD-3-Clause；完整许可随本仓库保留于
+  [`tools/licenses/Real-ESRGAN-BSD-3-Clause.txt`](tools/licenses/Real-ESRGAN-BSD-3-Clause.txt)。
+- 官方 `realesr-animevideov3.pth` checkpoint 由使用者显式下载，模型和生成的
+  ONNX 不随仓库提交；导出器核对固定摘要并仅以 `weights_only=True` 加载。
+- PyTorch（BSD-style）、ONNX（Apache-2.0）和 ONNX Runtime（MIT）仅用于
+  可选的独立工具环境，不新增桌宠运行时依赖。
+- `docs/images/ai-upscale-2x-preview.png` 由第 2 节的角色动画派生，保留
+  原画作者上善无形与素材来源署名；继续遵循非商业及同方式共享限制，
+  不把 AI 生成细节当作原创角色或原生高清母版。

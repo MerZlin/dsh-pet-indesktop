@@ -1,0 +1,7 @@
+# Optional, isolated offline tool environment; not an application dependency.
+Pillow>=10.3
+numpy>=1.26
+onnxruntime-directml>=1.24,<2; sys_platform == "win32"
+onnxruntime>=1.20,<2; sys_platform != "win32"
+# Model export only (install separately in a CPU PyTorch environment):
+# torch>=2.6, onnx>=1.17
