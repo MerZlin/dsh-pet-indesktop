@@ -512,6 +512,24 @@ class TestVisionAndWatcherPhase2:
         assert vision.foreground_app_info() == ""
         assert vision.get_foreground_window_rect() is None
 
+    def test_foreground_app_info_skips_pet_own_process(self, monkeypatch):
+        """issue #366：前台是桌宠自己时不喂误导元数据。
+
+        点击/右键桌宠触发识屏时桌宠窗口抢到前台，随截图喂给模型的
+        「前台窗口：桌宠自己」只会让 AI 谈论"我自己的窗口"。桌宠全部窗口
+        同进程（4.4b 多进程层已退役），pid 命中即视为无前台上下文。
+        """
+        from pet import vision
+        own = {
+            "hwnd": 1,
+            "pid": os.getpid(),
+            "process": "dsh-pet-standalone-webm-chat.exe",
+            "title": "dsh-pet 桌宠",
+            "rect": (0, 0, 100, 100),
+        }
+        monkeypatch.setattr(vision, "foreground_window_info", lambda: own)
+        assert vision.foreground_app_info() == ""
+
     def test_get_system_idle_seconds_non_windows(self, monkeypatch):
         import sys
         from pet import vision

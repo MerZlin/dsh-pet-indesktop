@@ -145,6 +145,7 @@
 
 ## PR 报告存档
 
+- [识屏问答兜底同步与前台元数据修复（2026-10-24）](PR-REPORT-LOOK-SYNC-SESSION-2026-10-24.md)：issue #366——聊天窗从未打开时识屏问答同步必抛 `AttributeError`（v4.3.4 把 `AppShell._identity_config()` 搬进 `PetInstance`），取源改回 `self.config`（PetInstance 的配置面本就是每宠路由视图，与会话目录同源）；顺带 `foreground_app_info()` 前台=桌宠自己时返回空串（点击/右键触发识屏抢前台的误导元数据）。改 `sync_look_to_chat`、`vision.foreground_app_info`、或排查「识屏问答没进聊天记录」时必读。**先例**：`PetInstance.config` 与 `AppShell.config` 不是同一个东西——前者是每宠 slot 路由视图、后者是全局面；AppShell 语境的取源写法不能照搬进 PetInstance 方法。
 - [跨屏过缝通行与落点吸附（2026-10-22）](PR-REPORT-CROSS-SCREEN-CORRIDOR-2026-10-22.md)：跨屏移动语义从 band 收窄改为「通行域=并集（含空洞）、静止域=各屏、四处收口吸附」，含侧墙低速截止、两轮 k3 盲审记录与先红后绿证据；改跨屏拖拽/抛掷物理、写 `_clamp_rects` 多矩形域、动 `snap_to_nearest_screen` 或排查「宠物停在看不见的地方」时必读。**先例**：① 语义改动要逐个收口点查吸附（落地/原地放下/落岛/弹弓取消，漏一个就是把宠钉死在空洞）；② `__init__` 里 set_pos 先于字段初始化，钳制条件必须 getattr 兜底；③ 覆盖判定用并集（QRegion）而非中心点，否则半身悬空漏判。
 - [macOS 多屏与 Dock 修复（2026-10-21）](PR-REPORT-MACOS-DESKTOP-2026-10-21.md)：Mac 双屏每屏一窗、设置进程启动即 Accessory，含用户副屏可见及单 Dock 图标确认、75 秒焦点观察、构建安装与测试证据；改 Mac 拓扑或 Dock 启动策略时查阅；多个 Spaces 的后续修复见下一项。
 - [macOS 多屏 Spaces 可见性（2026-10-21）](PR-REPORT-MACOS-SPACES-2026-10-21.md)：合成窗加入所有 Spaces，并在窗口重建后重放；包含原生策略读回、构建安装与用户跨屏/切换桌面验收；修改 Mac 合成窗 Spaces 策略或排查切换桌面后宠物消失时查阅。

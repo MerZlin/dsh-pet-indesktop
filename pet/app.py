@@ -1242,10 +1242,13 @@ class PetInstance:
             from .chat.session_store import SessionStore
 
             store = SessionStore(self.config.dir, getattr(self.config, "instance_id", ""))
-            # ``character`` 是每宠键：会话按角色隔离，读主配置会稳定拿到出厂默认
-            # 角色，slot≠0 的宠聊天就串到默认角色的会话里（同族缺陷：进程级服务
-            # 读每宠键）。身份统一经 ``_identity_config()`` 取当前呈现身份。
-            character_id = str(self._identity_config().get(
+            # ``character`` 是每宠键：会话按角色隔离，读全局面会稳定拿到出厂
+            # 默认角色，slot≠0 的宠就串进默认角色的会话。本类（PetInstance）的
+            # ``config`` 就是每宠路由视图（主宠 = slot0、子宠 = slot-N，构造点
+            # 在 AppShell），每宠键直接可读、与会话目录同一视图。v4.3.4 曾把
+            # AppShell 语境的 ``_identity_config()`` 搬进本方法，而 PetInstance
+            # 没有该方法——聊天窗从未打开时兜底同步必崩（issue #366）。
+            character_id = str(self.config.get(
                 "character", catalog.DEFAULT_CHARACTER))
             sessions = store.list(character_id)
             if sessions:

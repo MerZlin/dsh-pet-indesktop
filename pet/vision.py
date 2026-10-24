@@ -12,6 +12,7 @@ import ctypes
 import ctypes.wintypes
 import json
 import logging
+import os
 import sys
 import time
 import urllib.error
@@ -267,9 +268,14 @@ def capture_window_rect(rect: tuple[int, int, int, int] | None) -> Any:
 
 def foreground_app_info() -> str:
     """前台窗口「进程名 | 标题」（免费的上下文，随截图喂给模型）；拿不到返回空串。
-    基于 foreground_window_info() 的薄封装，保持既有返回格式完全不变。"""
+    基于 foreground_window_info() 的薄封装，返回格式保持不变。
+
+    前台是桌宠自己也返回空串（issue #366）：点击/右键触发识屏时桌宠窗口
+    抢到前台，「前台窗口：桌宠自己」只会误导模型去谈"我自己的窗口"。
+    桌宠全部窗口同进程（多进程层 4.4b 已退役），pid 命中即全覆盖；本函数
+    只服务识屏元数据，其它走 foreground_window_info() 的调用方不受影响。"""
     info = foreground_window_info()
-    if not info:
+    if not info or info.get('pid') == os.getpid():
         return ''
     parts = [x for x in (info.get('process'), info.get('title')) if x]
     return ' | '.join(parts)
