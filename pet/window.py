@@ -387,6 +387,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                                               IDLE_LOW_FPS_DEFAULT_THRESHOLD)))
         )
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
+        self.on_character_renamed = None  # 由 app 注入：改名后刷新已打开的聊天窗（issue #370）
         self.on_open_chat = None
         self.on_open_quick_chat = None
         self.on_open_chat_settings = None
@@ -4059,6 +4060,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self.cfg.set_character_alias(cid, name)
         shown = self.cfg.character_display_name(cid)
         self.show_bubble(f'角色名：{shown}')
+        # 已打开的聊天窗即时跟随新名字（标题/头像），无需关窗重开（issue #370）
+        notify = getattr(self, 'on_character_renamed', None)
+        if callable(notify):
+            notify()
 
     def rename_character(self) -> None:
         """公开转发：自定义当前角色显示名（等价 _rename_character）。"""

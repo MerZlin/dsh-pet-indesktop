@@ -596,6 +596,12 @@ class SpriteMenuFacade:
             return
         self.cfg.set_character_alias(cid, name)
         self._bubble(f"角色名：{self.cfg.character_display_name(cid)}")
+        # 已打开的聊天窗即时跟随新名字（标题/头像），无需关窗重开（issue #370；
+        # legacy 入口经 PetWindow.on_character_renamed，此处 overlay 等价）
+        instance = getattr(self._shell, "_instance", None)
+        refresh = getattr(instance, "refresh_chat_identity", None)
+        if callable(refresh):
+            refresh()
 
     def on_spawn_pet(self) -> None:
         self._shell.spawn_pet()

@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QMouseEvent, QPainter, QPainterPath, QPalette
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QMouseEvent, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -734,11 +734,38 @@ class ChatWindow(QDialog):
         self._character_manifest = load_character_manifest(root, self.character_id)
         chat = self._character_manifest.get("chat", {})
         chat = chat if isinstance(chat, dict) else {}
-        self.character_name = str(self._character_manifest.get("name") or chat.get("name") or self.character_id)
+        # 显示名优先级链与现代窗一致（widgets._apply_character_theme）：
+        # 用户别名 → manifest 名 → 目录 id。经典窗此前漏了别名查询，
+        # 重命名后标题永远是目录名（issue #370）。
+        alias = self.config.character_alias(self.character_id)
+        self.character_name = alias or str(self._character_manifest.get("name") or chat.get("name") or self.character_id)
         self.accent_color = _safe_color(chat.get("theme_color"))
         self._base_accent = self.accent_color
         self.title_label.setText(f"{self.character_name} · AI 对话")
-        self.avatar_label.setText(_initial(self.character_id))
+        self._update_header_avatar()
+
+    def _update_header_avatar(self) -> None:
+        """标题栏头像（issue #370 对齐现代窗）：优先桌宠实时画面，回退显示名首字母。
+
+        回退用 ``character_name``（含别名）的首字符——旧实现取目录 id 首字母，
+        重命名后仍是 "S"。无桌宠（隐藏/未接）时 ``icon_pixmap`` 拿到空图，
+        走字母回退。
+        """
+        pet_window = self.pet_link.pet_window
+        icon_pixmap = getattr(pet_window, "icon_pixmap", None)
+        pixmap = icon_pixmap(42) if callable(icon_pixmap) else QPixmap()
+        if pixmap is not None and not pixmap.isNull():
+            self.avatar_label.setText("")
+            self.avatar_label.setPixmap(pixmap.scaled(
+                38, 38,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+            # 实时画面模式去掉彩色圆底，避免方图压在圆色块上
+            self.avatar_label.setStyleSheet("background: transparent; border: none; padding: 0;")
+            return
+        self.avatar_label.setPixmap(QPixmap())
+        self.avatar_label.setText(_initial(self.character_name))
         self._apply_avatar_style(self.avatar_label, self.accent_color)
 
     def _load(self) -> None:
@@ -1019,6 +1046,14 @@ class ChatWindow(QDialog):
             self.set_chat_always_on_top(desired_pin)
         else:
             self.pin_button.setChecked(desired_pin)
+
+    def refresh_character_identity(self) -> None:
+        """角色显示名（别名）变化后重读标题与头像（issue #370）。
+
+        供改名入口广播调用（``PetInstance.refresh_chat_identity``）：已打开的
+        聊天窗即时跟随新名字，无需关窗重开。角色/会话不动——只刷新呈现。
+        """
+        self._apply_character_theme()
 
     def switch_character(self, character_id: str) -> None:
         if not character_id or character_id == self.character_id:

@@ -1729,7 +1729,9 @@ class ChatWindow(QDialog):
             )
             return
         self.avatar_label.clear()
-        self.avatar_label.setText(_initial(self.character_id))
+        # 回退字母取**显示名**（含别名）首字符：旧实现取目录 id 首字母，
+        # 桌宠隐藏时重命名过的角色头像仍退回 "S"（issue #370 同族）。
+        self.avatar_label.setText(_initial(self.character_name))
 
     def _load(self) -> None:
         self._clear_message_rows()
@@ -2198,6 +2200,13 @@ class ChatWindow(QDialog):
             self.set_chat_always_on_top(desired_pin)
         else:
             self.pin_button.setChecked(desired_pin)
+
+    def refresh_character_identity(self) -> None:
+        """角色显示名（别名）变化后重读标题与头像（issue #370，与经典窗同 seam）。
+
+        供改名入口广播调用（``PetInstance.refresh_chat_identity``）。
+        """
+        self._apply_character_theme()
 
     def switch_character(self, character_id: str) -> None:
         if not character_id or character_id == self.character_id:

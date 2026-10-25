@@ -600,6 +600,9 @@ class PetInstance:
         其余均为本窗操作。批5.2 用 ``_slot_wrap`` 给每窗回调加日志槽位。
         """
         win.on_switch_character = self._slot_wrap(self.switch_character)
+        # 改名（character_aliases）后刷新已打开的聊天窗标题/头像（issue #370）；
+        # 不挂在 enable_chat 闸下：无聊天窗时广播是空转，无害
+        win.on_character_renamed = self._slot_wrap(self.refresh_chat_identity)
         # 构建变体能力（不含 chat 模块闸）：harness 菜单可用性按它判（registry）
         win.chat_build_capable = self.chat_build_capable
         win.on_open_chat = self._slot_wrap(self.open_chat) if self.enable_chat else None
@@ -810,6 +813,21 @@ class PetInstance:
         island_chat = getattr(self.shell, "island_chat", None)
         if island_chat is not None:
             island_chat.switch_character(character_id)
+
+    def refresh_chat_identity(self) -> None:
+        """改名（``character_aliases``）后刷新已打开聊天窗的标题与头像（issue #370）。
+
+        两个改名入口（legacy ``PetWindow._rename_character`` 的
+        ``on_character_renamed`` 回调与 overlay ``sprite_menu_facade``）都收敛到
+        这里广播。角色与会话不动——只刷新呈现；窗口读各自 ``character_id`` 的
+        别名，改的是别的角色时这里自然无变化。
+        """
+        for chat_window in (self.legacy_chat_window, self.modern_chat_window):
+            if chat_window is None:
+                continue
+            refresh = getattr(chat_window, "refresh_character_identity", None)
+            if callable(refresh):
+                refresh()
 
     def _apply_spawn_offset(self) -> None:
         """让新孵化的桌宠与母桌宠错开，避免两个窗口完全重叠。
