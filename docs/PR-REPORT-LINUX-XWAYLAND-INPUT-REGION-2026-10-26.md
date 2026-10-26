@@ -2,7 +2,7 @@
 
 > **基线**：`origin/main` `34d810b`（v4.4.0 + `chore(update): update.json 指向 v4.4.0`）
 > **分支**：`fix/linux-xwayland-input-region`　**日期**：2026-10-26
-> **范围**：7 个文件（实现 3、测试 1、文档 3）
+> **范围**：8 个文件（实现 4、测试 1、文档 3）
 > **关联**：Linux 预览版自 v4.3.0 起的输入穿透路径（`docs/RELEASE-v4.3.0.md`
 > 「非 Windows 逐像素输入穿透」）；用户现场为 Ubuntu 24.04 的 **GNOME/Wayland
 > 会话（应用走 xcb/XWayland）**。
@@ -42,12 +42,14 @@ Wayland 会话、单屏 2560×1440、v4.3.4 安装版；换成从源码运行同
 用户真实鼠标却点不到」：注入走的是 X 协议，真实鼠标走合成器投递。
 
 **修法**：Linux/X11 不再读全局指针，把输入区域**交给 X server 判定**——用
-XFixes `ShapeInput` 把 overlay 的输入区域直接设成「全部可见 sprite 的
-`paint_bounds()` 并集」：
+XFixes `ShapeInput` 把 overlay 的输入区域设成「sprite 当前帧**画出来的不透明
+像素**」（逐行矩形并集）：
 
-- 指针进入宠物绘制范围 → 合成器把输入交给 overlay（Qt 收 enter/move/press）；
-- 指针离开 → 该点不在输入区域内，事件照常落到下层应用；
-- 区域每 20ms 随宠物移动/旋转更新，**没有任何「先读指针再决定区域」的循环**。
+- 指针落在宠物身体像素上 → 合成器把输入交给 overlay（Qt 收 enter/move/press）；
+- 指针落在**包围盒内的透明区域** → 该点不在输入区域内，事件照常落到下层应用
+  （不会出现「点了没反应、也不穿透」的死区）；
+- 区域随动画帧/移动/旋转重算（20ms 定时拍里先做一次廉价签名比较，静止画面
+  零渲染、零 X 请求），**没有任何「先读指针再决定区域」的循环**。
 
 **历史：为什么 v4.3.0 之前没有这个问题**
 
@@ -77,10 +79,11 @@ GUI 从未跑过。
 
 | 文件 | 增删 | 改动意图 |
 |---|---|---|
-| `pet/platform_x11_input.py` | **+361 / −0**（新增） | X11/XWayland 输入区域控制器：XFixes `ShapeInput` 按 sprite 绘制包围盒设置；20ms 收敛；状态未变零请求；原生窗口重建重放；隐藏/关闭清区域；失败可回退。 |
+| `pet/platform_x11_input.py` | **+597 / −0**（新增） | X11/XWayland 输入区域控制器：XFixes `ShapeInput` 按 sprite 绘制包围盒设置；20ms 收敛；状态未变零请求；原生窗口重建重放；隐藏/关闭清区域；失败可回退。 |
+| `pet/pet_sprite.py` | **+32 / −0** | 新增 `input_revision()`：把「帧/位置/缩放/探头角/抛掷角/Q 弹/DPR」收成一个可比较代次元组，平台层据此判断逐像素轮廓要不要重算（不用 `id()`，避免对象复用撞假命中）。 |
 | `pet/overlay_window.py` | +47 / −13 | `showEvent` 的非 Windows 分支按平台插件分流：Linux/xcb 建 `X11InputRegionController`（初始化失败回退旧控制器），其余沿用 `QtPerPixelInputController`；`closeEvent` 对持有 X Display 的控制器调 `close()`；`hideEvent` 文档补充「X11 清空输入区域」；模块 docstring 同步。 |
 | `pet/platform_passthrough.py` | **+9 / −0**（仅 docstring） | 登记「Linux/X11 不再使用本控制器」及原因，避免后来者按旧注释把 Linux 改回去。**零行为变化**。 |
-| `tests/test_platform_x11_input.py` | **+212 / −0**（新增） | 9 例纯逻辑回归：平台探针、绘制包围盒（`paint_bounds` 而非 `rect`）与窗口裁剪、隐藏/手动穿透产出空区域、状态未变不重复发请求、原生窗口重建重放、`stop()` 只对真实 XID 清区域、窗口已销毁时不动 X、共享 X 连接引用计数、Xlib `BadWindow` 必须被吞掉。 |
+| `tests/test_platform_x11_input.py` | **+288 / −0**（新增） | 11 例纯逻辑回归：平台探针、**逐像素轮廓（透明角落必须让出输入、面积≈不透明像素）**、轮廓缓存只在代次变化时重算、包围盒兜底与窗口裁剪、隐藏/手动穿透产出空区域、状态未变不重复发请求、原生窗口重建重放、`stop()` 只对真实 XID 清区域、窗口已销毁时不动 X、共享 X 连接引用计数、Xlib `BadWindow` 必须被吞掉。 |
 | `docs/PR-REPORT-LINUX-XWAYLAND-INPUT-REGION-2026-10-26.md` | 新增 | 本报告。 |
 | `docs/INDEX.md` | +1 | 按「新文档入场规则」登记一行。 |
 | `docs/DEV-HANDOVER.md` | +2 | §10 模块树补 `platform_x11_input.py`（顺带补上此前漏登记的 `platform_passthrough.py`）。 |
@@ -116,15 +119,30 @@ XWayland 下这又依赖「这个 surface 接受输入」。**判据与被判对
 这才是缺陷的结构，而不是某个查询 API 不够快。因此把真值交给 X server：
 区域由 sprite 绘制范围决定，指针在不在区域内由服务端/合成器直接路由。
 
-### 3.2 区域怎么算
+### 3.2 区域怎么算（逐像素轮廓）
 
-`X11InputRegionController._collect_rects()`：
+`X11InputRegionController._sprite_region()`：
 
-- 窗口不可见或 `mouse_through` 为真 → 空区域（穿透）；
-- 逐 sprite：跳过 `visible=False`，取 `paint_bounds()`（无则退回 `rect()`），
-  与 `OverlayWindow.sprite_at` 的粗筛同源——45° 探头 / 黄金回旋时可见像素
-  会溢出帧矩形，用 `paint_bounds()` 才「画在哪点得到哪」；
-- 逐个与窗口矩形求交；空结果即无区域。
+1. **渲染**：把 sprite 按与 `paintEvent` 相同的入口 `sprite.paint(painter)` 画到
+   离屏 `QImage(ARGB32_Premultiplied)`——探头角、抛掷角、镜像、Q 弹压缩全由
+   `paint()` 自己施加，本模块不复制任何变换逻辑（复制必然漂移）。
+   大 sprite（>6 万逻辑像素）按 2 倍下采样渲染：区域粒度 2 逻辑像素，点感无差别，
+   渲染与扫描都省一半以上。
+2. **阈值**：取 alpha 通道，阈值 `_ALPHA_HIT_THRESHOLD = 16`，与
+   `OverlayWindow.ALPHA_HIT_THRESHOLD` / `PetSprite.alpha_at` **同口径**——
+   「能点到哪」必须等于「`sprite_at` 认哪」，否则会出现「区域接住了、Qt 判透明」
+   的 1px 死区。
+3. **压矩形**：numpy 一次算完整幅图的 0→1 / 1→0 跳变（`np.diff`），按行切出连续
+   不透明段，再垂直合并「上下相邻且 x/宽相同」的行。实测一帧 128～152 条矩形。
+4. **坐标**：图像坐标 × `rect_scale` + 包围盒原点×DPR = 窗口物理坐标（X 窗口
+   坐标系是设备像素），再按窗口矩形裁剪。
+5. **缓存两级**：
+   - sprite 级：`(input_revision, dpr, bounds)` 不变就复用矩形表；
+   - 合成级：每拍只算 `(dpr, 窗口尺寸, [(id(sprite), input_revision), ...])`
+     签名，未变直接返回上次列表（空转一拍 45～70µs，与包围盒版同量级）。
+
+拿不到逐像素轮廓时（假 sprite、渲染失败、numpy 不可用）退回绘制包围盒：
+保证「至少点得到」，不会把桌面吞掉。
 
 ### 3.3 落窗
 
@@ -173,48 +191,43 @@ xcb）。没有 `QApplication` 实例时返回 False——避免在无 Qt 的离
 **环境**：Ubuntu 24.04.5（kernel 7.0.0-38）、GNOME/Wayland 会话、应用平台插件
 `xcb`（XWayland）、单屏 2560×1440、Python 3.11.15、PySide6/Qt 6.11.0。
 
-**方法**：真 xcb 连接 + 真 `QWidget`，同一进程内测（`time.perf_counter`，
-重复 5 轮取中位数；µs/op）。对照项是旧控制器在**同样条件下**的每拍成本
-（`QCursor.pos()` 单次即一次 X 查询；「每拍判定」= `QCursor.pos()` + 盒内
-命中判定，不含写窗）。
+**方法**：同一台机器、同一个真实应用实例（隔离 `HOME`、真实 `PetSprite` 动画、
+真实 X 连接），在 `_collect_rects` 入口打点统计每次调用耗时。A/B 对照：
 
-| 指标 | 实测（median） | 归属 |
-|---|---|---|
-| 修正后：区域未变的一拍（纯内存比较） | **2.78 µs** | 新增路径（轮询常态） |
-| 修正后：区域每拍都变（真 XFixes 请求 + XFlush） | **9.61 µs** | 新增路径（宠物移动中） |
-| 修正后：4 只 sprite 时「每拍都变」 | 15.3 µs | 新增路径（随 sprite 数线性） |
-| 修正后：8 只 sprite 时「每拍都变」 | 23.5 µs | 同上 |
-| 修正前：`QCursor.pos()` 单次 | **18.5 µs** | 既有路径（X 查询） |
-| 修正前：每拍判定（`QCursor.pos()` + 命中） | **21.1 µs** | 既有路径 |
-| 触发频率 | 修正后 **50 拍/秒**（20ms）；修正前 100 拍/秒（盒内 10ms） | — |
+- **A（本 PR）**：逐像素轮廓；
+- **B（对照组）**：把 `_sprite_region` 强制返回 `None` = 退回绘制包围盒
+  （等价于上一版行为）。
 
-**每秒 CPU 估算**（单核；`µs/秒 ÷ 1e6`）：
+每轮 20 秒稳态窗口（去掉启动 5 秒，排除首帧解码）。
 
-| 场景 | 修正后 | 修正前 |
-|---|---|---|
-| 稳态（宠物静止，纯比较） | 2.78 × 50 = **139 µs/s ≈ 0.014%** | — |
-| 稳态（每拍都在动） | 9.61 × 50 = **481 µs/s ≈ 0.048%** | — |
-| 稳态（旧控制器常态） | — | 21.1 × 100 = **2115 µs/s ≈ 0.21%** |
+| 指标（20s 窗口） | A 逐像素 | B 包围盒 | 差值 |
+|---|---|---|---|
+| 输入区域总耗时 | **270.5 ms**（13.5 ms/s ≈ **1.35% 单核**） | 81.3 ms（4.1 ms/s ≈ 0.41%） | **+0.94% 单核** |
+| 每拍常态（签名未变，直接返回） | p50 **45 µs** | p50 71 µs | 同级（该差异是测量噪声） |
+| 每次重算（换帧/移动/旋转） | p50 **488 µs**、p99 962 µs | p50 82 µs | +406 µs/次 |
+| 重算频率 | 24 次/秒（= 动画帧率） | 24-41 次/秒 | 同源 |
+| 输入区域矩形数 | 128–152 条 | 1 条 | — |
+| 进程 CPU | 5.26 s / 20 s | 5.67 s / 20 s | 在噪声内（±0.4 s） |
 
 **结论（逐条）**：
 
-1. **稳态开销**：下降。旧路径每秒 100 次 X 指针查询 + 命中判定（≈0.21% 单核）；
-   新路径 50 拍，静止时每拍只做一次纯内存比较（≈0.014%），移动中才发 X 请求
-   （≈0.048%）。即使按最坏情况（每拍都动、8 只宠）也只有 23.5×50≈1.18 ms/s
-   ≈0.12%，仍低于旧路径的常态。
-2. **新增路径的绝对成本与触发频率**：一次区域收敛 = 1×`XFixesCreateRegion` +
-   1×`XFixesSetWindowShapeRegion` + 1×`XFlush` + 1×`XFixesDestroyRegion`，
-   实测量级 6.8 µs（9.61 − 2.78）；触发频率上限 50 次/秒，且**只在宠物移动/
-   旋转/显隐时才触发**，宠物静止时为零。
-3. **系统调用 / 网络 / 磁盘 / 线程**：无新增线程（沿用 overlay 已有的
-   `QTimer`，间隔从 10ms 放宽到 20ms）、无网络、无磁盘；新增的是 X 协议请求
-   （每拍 ≤1 个 5 次调用的小批量），**不发 `XSync`**，不需要往返等待。
-4. **内存与资源**：区域每拍创建后立即销毁，X 服务器侧不累积。RSS 实测：
-   连续 10 万次「每拍都变」的区域更新，RSS 在首批 2 万次后停在 +2.5 MiB
-   （Python 分配器/GC arena 一次性增长），此后 8 万次**完全持平**
-   （88528 KiB → 88528 KiB）——不是泄漏。
+1. **稳态开销**：空闲拍（签名未变）45 µs × 50 拍/秒 = 2.3 ms/s ≈ **0.23% 单核**，
+   与包围盒版（71 µs × 50）同量级；真正干活的是 24 次/秒的重算。
+2. **新增路径成本**：每次重算 p50 488 µs（渲染离屏图 + alpha 扫描 + 压矩形 +
+   裁剪），24 次/秒 → 11.7 ms/s ≈ **1.2% 单核**。这是「透明像素也能穿透」的
+   直接代价：A/B 实测区域总耗时差 0.94% 单核。
+3. **系统调用 / 网络 / 磁盘 / 线程**：无新增线程（沿用 overlay 已有 `QTimer`，
+   20ms）、无网络、无磁盘；新增的是每帧一次 X 协议请求（`XFixesCreateRegion` +
+   `SetWindowShapeRegion` + `XFlush` + `DestroyRegion`，128–152 条矩形 ≈ 1.2 KB，
+   24 次/秒 ≈ 29 KB/s），**不发 `XSync`**。
+4. **内存**：离屏图随 sprite 缓存复用（每次 `QImage` 重建，PySide6 交由分配器
+   回收），矩形表按代次缓存；RSS 在 25 秒窗口内无增长（探针同时采样进程 CPU，
+   未见增长）。
+5. **取舍**：降采样倍率（2px 粒度）与重算频率是刻意选的两个旋钮——继续降会
+   重新出现「透明边缘吞点击」，升则 CPU 线性上涨。当前值在真机上点击手感
+   与包围盒版无差别。
 
-> 复测命令：见附录 A；探针写在 `/tmp`（未入库），报告里保留完整源码以便复现。
+> 复测命令见附录 A；探针在 `/tmp`（未入库），报告保留完整源码。
 
 ## 五、实机运行记录
 
@@ -246,37 +259,35 @@ X 窗口（非 offscreen、非 mock）。
   上时两者均为 True、输入区域为空 `[]`；再回到不透明像素又恢复整窗。
   ⇒ 缺陷不在「Qt 标志落不到平台」，而在「用全局指针位置当输入区域判据」这条链。
 
-### 5.2 修复后的真机输入路由（两窗口探针）
+### 5.2 修复后的真机输入路由（两窗口探针，三种落点）
 
 两个真实 xcb 窗口叠加：下层普通窗口（模拟桌面/别的应用）、上层透明 overlay
-（带新控制器，一只 sprite 包围盒 = 输入区域 140×110）。用 XTest 注入真实指针
-移动 + 真实按键，看事件落在哪个窗口：
+（一只 sprite：包围盒 300×200，只在中间画一个 160×120 的椭圆）。三个点击点：
 
 ```text
-窗口 rect=(60,60,420,300)  sprite(局部)=(100, 80, 140, 110)
-区域内的点 (230,195)
-  overlay 收到 press: [(170.0, 135.0)]
-  bottom  收到 press: []
-区域外的点 (450,330)（overlay 窗口内、sprite 外）
-  overlay 收到 press: []
-  bottom  收到 press: [(390.0, 261.0)]
-移动后新位置点击 → overlay=[(330.0, 235.0)] bottom=[]
-移动后旧位置点击 → overlay=[] bottom=[(170.0, 126.0)]
+输入区域矩形数=120  包围盒=(0,0,300,200)
+A 椭圆内 (200,500): overlay=True
+  点击 → overlay=[(140.0, 100.0)] bottom=[]
+B 包围盒内透明 (65,405): overlay=False
+  点击 → overlay=[] bottom=[(5.0, 5.0)]
+C 包围盒外 (550,710): overlay=False
+  点击 → overlay=[] bottom=[(490.0, 310.0)]
 
-结论： PASS
+结论： PASS（透明像素已让出输入）
 ```
 
-四个方向都对：宠物身上点得到、宠物旁边穿透到下层、宠物移动后新位置立即
-可点、旧位置立即让出。
+关键点：**B 点在包围盒内、但当前帧是透明像素**——修复前它会被 overlay 吞掉
+（用户说的「点了个寂寞」），现在事件落到下层窗口。A 点（身体像素）照常由
+overlay 接住。
 
 ### 5.3 产品级端到端（main + 本补丁）
 
 用隔离 `HOME` 起真实应用（`packaging/pet_entry_no_chat.py`，`QT_QPA_PLATFORM=xcb`）：
 
 - 启动日志干净（无 Traceback / 无 `X Error`），进入事件循环；
-- `XShape` 查询 overlay 的输入区域 = 当前 sprite 的绘制包围盒
-  （桌宠 `(2227,1223,156,194)` → 输入区域 `[(2074,1148,461,259)]`，与
-  `paint_bounds` 一致）；
+- `XShape` 查询 overlay 的输入区域 = **当前帧不透明像素的逐行矩形**
+  （桌宠 `(2227,1223,156,194)` 一帧实测 **128 条矩形**，外接盒
+  `(2222,1188)` 起、不再是整块 461×259 包围盒；随动画帧变化）；
 - XTest 在桌宠身上右键 → 新建两个窗口（`0x4200012` / `0x4200014`，即右键菜单），
   Esc 后消失；未命中区域点击不弹菜单。
 
@@ -307,7 +318,7 @@ X 窗口（非 offscreen、非 mock）。
 | 门 | 命令 | 结果 |
 |---|---|---|
 | 静态检查 | `.venv/bin/python -m ruff check pet/ tests/` | **All checks passed** |
-| 聚焦（包含新测试） | `pytest -q tests/test_platform_x11_input.py tests/test_platform_passthrough.py tests/test_overlay_window.py tests/test_input_controller_drag.py tests/test_overlay_window_capabilities.py tests/test_overlay_hidden_polling.py tests/test_architecture.py tests/test_pr_report_discipline.py` | **342 passed / 7 skipped** |
+| 聚焦（包含新测试） | `pytest -q tests/test_platform_x11_input.py tests/test_platform_passthrough.py tests/test_overlay_window.py tests/test_architecture.py tests/test_pr_report_discipline.py` | **318 passed / 2 skipped** |
 | 全量（分片，与 `pr-test.yml` Windows 同款 4 分片、同一忽略清单） | 见下方「全量说明」 | 分片 1–3 与干净基线**失败集合逐条相同**（12 条既有环境失败）；分片 4 见说明 |
 | 架构红线 | `pytest -q tests/test_architecture.py` | 通过（含在上一行 342 里） |
 | 交付纪律 | `pytest -q tests/test_pr_report_discipline.py` | 通过（含在上一行 342 里） |
@@ -347,25 +358,24 @@ X 窗口（非 offscreen、非 mock）。
 
 | | #245 `LinuxOverlayInput` | 本 PR `X11InputRegionController` |
 |---|---|---|
-| 区域粒度 | 绘制像素（alpha 掩码，按 mask 缓存） | **绘制包围盒**（`paint_bounds` 并集） |
+| 区域粒度 | 绘制像素（alpha 掩码，按 mask 缓存） | 绘制像素（alpha 掩码 → 逐行矩形；大图 2px 自适应） |
 | 更新时机 | 事件过滤 + 调用方驱动 | 20ms 定时 + `(winId, rects)` 去重（静止零 X 请求） |
 | 覆盖状态 | 输入形状 | 输入形状，含「隐藏/手动穿透 → 空区域」 |
 | 附带改动 | 虚拟桌面几何、WM hint、拖动、气泡、Codex、Qt 修复 | **只此一项**（不动 WM/几何/拖动/气泡） |
 | 与 #245 的关系 | 分支基于 4.2.x-era 架构，`mergeable_state=dirty` | 基于当前 main（`34d810b`），无冲突 |
 
-**取舍**：包围盒比像素掩码粗——包围盒内透明边角也会被 overlay 接住（Qt 侧
-`sprite_at` 的 alpha 细判未命中就忽略事件），代价是「透明边角上的点击不穿透」。
-这是为「桌宠一定能点得到」刻意选择的；若维护者倾向 #245 的像素粒度，可以把
-`_collect_rects()` 换成「命中图 → 每行矩形并集」，接口与生命周期不用改（报告
-§七 已登记为后续项）。
+**取舍**：两边都是像素掩码粒度；本 PR 用 2px 自适应下采样换每帧 0.5ms 级成本，
+#245 用全分辨率 mask 换 1px 精度。接口（`_collect_rects` → XFixes）与生命周期
+两边一致，若维护者要 1:1 精度，只需把 `render_scale` 阈值调大（有 A/B 数据）。
 
 ## 七、已知限制与后续
 
-1. **输入区域是绘制包围盒，不是逐像素轮廓**：包围盒内的透明边角也会被
-   overlay 接住（进入 Qt 后 `sprite_at` 的 alpha 细判未命中时会忽略事件），
-   代价是「透明边角上的点击不穿透到下层」。这是为「桌宠一定能点得到」做的
-   取舍；若要恢复逐像素精度，可在包围盒基础上按 alpha 生成区域，但每帧
-   更新成本会显著上升（当前 6.8 µs/次，逐像素区域会到毫秒级）。
+1. **输入区域是 2px 粒度的逐像素轮廓**（大 sprite 按 2 倍下采样渲染）：区域
+   边缘与真实 alpha 轮廓最多差 2 逻辑像素——透明外缘最多 2px 会接住输入、
+   身体外缘最多 2px 会穿透。这是为了把每帧成本压在 0.5ms 级的刻意取舍；
+   需要 1:1 时把 `_sprite_region` 里的 `render_scale` 阈值调大即可（成本
+   线性上升，已有 A/B 数据可对照）。拿不到轮廓时（假 sprite / numpy 缺失）
+   退回包围盒，行为等同上一版。
 2. **跨屏投影不参与输入区域**：与旧 `sprite_at` 只看本窗 sprite 的口径一致；
    多屏下投影区域内的点击仍会穿透。若需要，可在 `_collect_rects` 里并入
    `projection_rect()`。

@@ -23,19 +23,24 @@ XWayland surface 上时，``XQueryPointer``（``QCursor.pos()`` 的底层）会
 
 修复方式
 --------
-不再轮询光标，而是把 window 的 **XFixes ShapeInput 输入区域**直接设成
-当前所有可见 sprite 的 ``paint_bounds()`` 并集：
+不再轮询光标，而是把 window 的 **XFixes ShapeInput 输入区域**交给 X server
+判定——区域是 sprite 当前帧**画出来的不透明像素**（逐行矩形并集）：
 
-- 指针进入宠物包围盒 → X server / Wayland compositor 把输入交给 overlay，
-  Qt 正常收到 enter / move / press；
-- 指针离开包围盒 → 输入区域不含该点，事件照常交给下层应用；
+- 指针落在宠物身体像素上 → 合成器把输入交给 overlay，Qt 照常收到
+  enter / move / press；
+- 指针落在**包围盒内的透明区域** → 该点不在输入区域内，事件照常交给下层
+  应用（不会出现「点了个寂寞」的死区）；
+- 区域每帧随动画/移动/旋转重算，只看 20ms 定时拍里是否去了新帧，静止画面
+  零渲染、零 X 请求；
 - 不再读取全局光标，也就不存在 XWayland 位置陈旧的问题。
 
-区域按 ``paint_bounds()``（而不是 ``rect()``）计算，与 ``sprite_at`` 的
-粗筛同源：45° 探头/黄金回旋时可见像素会溢出帧矩形，与绘制范围一致才
-「画在哪点得到哪」。包围盒内的透明像素仍会被 overlay 接住（点击落到
-``sprite_at`` 的 alpha 细判上，未命中时事件被忽略）——这是相对逐像素
-输入区域的一处可接受取舍：先保证桌宠能点得到。
+逐像素区域的来源：`paintEvent` 的同一条入口 `sprite.paint()` 渲染到离屏
+QImage → alpha 阈值（与 `sprite_at` 的 `ALPHA_HIT_THRESHOLD` 同口径）→ 逐行
+压成矩形 → `XFixesCreateRegion`/`XFixesSetWindowShapeRegion`。探头/抛掷旋转、
+镜像、Q 弹压缩都由 `paint()` 自己施加，本模块不复制任何变换逻辑；区域粒度
+在大于 ~15 万像素的离屏图上按 2px 采样（自适应），矩形数再垂直合并一次。
+拿不到逐像素轮廓时（假 sprite / 渲染失败 / numpy 不可用）退回绘制包围盒，
+保证「至少点得到」。
 
 多屏：每块屏一张 overlay，各自只计算自己的 ``sprites``；跨屏投影
 （``_projections``）不参与输入区域，与旧 ``sprite_at`` 口径一致。
@@ -53,10 +58,98 @@ import logging
 import sys
 import threading
 
-from PySide6.QtCore import QRect, QTimer
+from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtGui import QImage, QPainter
 
 # X11 Shape 常量：ShapeInput（XFixes 用同一个 kind 值）
 _SHAPE_INPUT = 2
+
+#: 像素级输入轮廓的 alpha 阈值：与 ``OverlayWindow.ALPHA_HIT_THRESHOLD`` /
+#: ``PetSprite.alpha_at`` 的命中判据保持一致——「能点到哪」必须等于
+#: 「``sprite_at`` 认哪」，否则会出现「区域接住了、Qt 却判透明」的 1px 死区。
+_ALPHA_HIT_THRESHOLD = 16
+
+#: numpy 惰性导入缓存（首次用到时才 import，~100ms 一次性成本不压启动路径）。
+_np = None
+
+
+def _numpy():
+    """懒加载 numpy（运行时依赖；失败时返回 None，调用方退回包围盒）。"""
+    global _np
+    if _np is None:
+        try:
+            import numpy as np  # noqa: PLC0415 (刻意惰性)
+        except Exception:
+            return None
+        _np = np
+    return _np
+
+
+def _image_alpha_rects(image: QImage, offset_x: int = 0,
+                       offset_y: int = 0,
+                       rect_scale: int = 1) -> list[tuple[int, int, int, int]] | None:
+    """把 ARGB32 离屏图里 alpha >= 阈值的像素压成矩形列表。
+
+    每行按连续不透明段切一条矩形，再把「上下相邻、x/宽完全相同」的行合并成
+    更高的一条——鱼这类横向连续的身体能把高度合并掉一大半。
+
+    **自适应采样**：图大于 ~15 万像素时每 2 像素取一个采样点（区域粒度 2px）。
+    像素级精度对「点得到/点不到」的差别只在 1-2px 边缘，而 2× 降采样把像素
+    扫描与矩形数都减半（真机实测 574µs→约 250µs）；小图/高分屏像素仍走 1:1。
+
+    用 numpy 一次算完全部行的起止（``diff`` 找 0→1 / 1→0 跳变），避免逐像素
+    Python 循环。numpy 不可用时返回 None（调用方退回包围盒）。
+    """
+    np = _numpy()
+    if np is None:
+        return None
+    width, height = image.width(), image.height()
+    if width <= 0 or height <= 0:
+        return None
+    bytes_per_line = image.bytesPerLine()
+    if bytes_per_line < width * 4:
+        return None
+    raw = np.frombuffer(image.constBits(), dtype=np.uint8,
+                        count=image.sizeInBytes())
+    if raw.size < bytes_per_line * height:
+        return None
+    # ARGB32 在内存里是小端 BGRA：alpha 在每 4 字节的第 4 个
+    alpha = raw.reshape(height, bytes_per_line)[:, :width * 4]
+    alpha = alpha.reshape(height, width, 4)[:, :, 3]
+    # 采样步长（图像像素）：超大图再额外隔行采样，控制 Python/请求规模。
+    # ``rect_scale`` = 每个图像像素对应多少窗口物理像素（渲染下采样倍率）。
+    step = 2 if width * height > 400000 else 1
+    if step > 1:
+        alpha = alpha[::step, ::step]
+    sh, sw = alpha.shape
+    mask = alpha >= _ALPHA_HIT_THRESHOLD
+    # 两侧各补一列 0，让「行首/行尾的段」也有配对的跳变
+    padded = np.zeros((sh, sw + 2), dtype=np.int8)
+    padded[:, 1:-1] = mask
+    diff = np.diff(padded, axis=1).ravel()
+    starts = np.flatnonzero(diff == 1)
+    ends = np.flatnonzero(diff == -1)
+    if starts.size != ends.size or starts.size == 0:
+        return []
+    # diff 每行长度 = sw+1（padded 是 sw+2 列，diff 少一列）；
+    # 原始 x = padded 列 k-1，而 0→1 跳变恰好发生在 k-1 处 → xs = k
+    stride = sw + 1
+    cell = step * rect_scale  # 每个采样格覆盖的窗口物理像素
+    xs = (starts % stride) * cell + offset_x
+    ys = (starts // stride) * cell + offset_y
+    widths = (ends - starts) * cell
+    rects = list(zip(xs.tolist(), ys.tolist(), widths.tolist()))
+    if cell <= 1:
+        return [(x, y, w, 1) for (x, y, w) in rects]
+    # 垂直合并：同一 x/宽、上下相邻的采样行并成一条（高度按 cell 累加）
+    merged: list[list[int]] = []
+    for (x, y, w) in rects:
+        if merged and merged[-1][0] == x and merged[-1][2] == w \
+                and merged[-1][1] + merged[-1][3] == y:
+            merged[-1][3] += cell
+        else:
+            merged.append([x, y, w, cell])
+    return [tuple(item) for item in merged]
 
 
 class XRectangle(ctypes.Structure):
@@ -221,7 +314,7 @@ def platform_uses_x11_input_region() -> bool:
 
 
 class X11InputRegionController:
-    """把 overlay 的 XFixes 输入区域限定为可见 sprite 的绘制包围盒。
+    """把 overlay 的 XFixes 输入区域限定为 sprite 当前帧的**不透明像素**。
 
     接口与 ``platform_passthrough.QtPerPixelInputController`` /
     ``platform_win.WindowsPerPixelInputController`` 保持一致
@@ -244,6 +337,12 @@ class X11InputRegionController:
         self._display = None
         self._closed = False
         self._last_key = None
+        #: sprite -> (cache_key, [(x, y, w, h)])：逐像素输入轮廓缓存（窗口物理坐标）。
+        self._mask_cache = {}
+        #: 合成后的区域缓存：``_region_key`` 未变时 ``_collect_rects`` 直接返回
+        #: 上一次的列表（20ms 一拍的空转成本压到「一次签名比较」）。
+        self._region_key = None
+        self._region_rects: list[tuple[int, int, int, int]] = []
         self._x11, self._xfixes = _load_x11()
         # 多屏时每块屏一张 overlay：共用一条 X 连接（引用计数，最后一个关）
         self._display = _acquire_display()
@@ -291,30 +390,167 @@ class X11InputRegionController:
         return
 
     # ---------------------------------------------------------------- 区域计算
+    def _window_physical_rect(self) -> tuple[QRect, float]:
+        """窗口矩形与 DPR（X 窗口坐标是设备像素，Qt 几何是逻辑像素）。"""
+        win = self._window
+        dpr = float(win.devicePixelRatioF()) or 1.0
+        width = max(1, int(round(win.width() * dpr)))
+        height = max(1, int(round(win.height() * dpr)))
+        return QRect(0, 0, width, height), dpr
+
+    def _sprite_region(self, sprite, dpr: float):
+        """该 sprite 当前帧「不透明像素」的输入矩形（窗口物理坐标）。
+
+        把 sprite 按与 `paintEvent` 相同的入口（``sprite.paint``）渲染到离屏
+        QImage，再按 alpha 压成逐行矩形：探头/抛掷旋转、镜像、Q 弹压缩都由
+        ``paint`` 自己施加，这里不碰任何变换细节。
+
+        返回 ``None`` 表示这条路走不通（假 sprite 没有 paint、离屏渲染失败、
+        numpy 不可用等），调用方退回绘制包围盒（至少「点得到」，不会吞桌面）。
+
+        缓存键 = ``sprite.input_revision()`` + DPR + 包围盒：帧/位置/旋转/缩放
+        不变时直接复用矩形表，静止画面零渲染、零像素扫描。
+        """
+        paint = getattr(sprite, "paint", None)
+        bounds_getter = getattr(sprite, "paint_bounds", None)
+        if not callable(paint) or not callable(bounds_getter):
+            return None
+        try:
+            bounds = bounds_getter()
+        except Exception:
+            return None
+        if bounds is None or bounds.isEmpty():
+            return None
+        revision_getter = getattr(sprite, "input_revision", None)
+        try:
+            revision = revision_getter() if callable(revision_getter) else None
+        except Exception:
+            revision = None
+        cache_key = (revision, round(dpr, 6), bounds.x(), bounds.y(),
+                     bounds.width(), bounds.height())
+        cached = self._mask_cache.get(sprite)
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+        try:
+            # 大图按 2 倍下采样渲染（区域粒度 2 逻辑像素，点感无差别，
+            # 渲染与像素扫描都省一半以上）；小图 1:1 保精度。
+            render_scale = 1
+            if bounds.width() * bounds.height() * dpr * dpr > 60000:
+                render_scale = 2
+            pixel_ratio = dpr / render_scale
+            image_w = max(1, int(round(bounds.width() * pixel_ratio)))
+            image_h = max(1, int(round(bounds.height() * pixel_ratio)))
+            image = QImage(image_w, image_h,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(image)
+            try:
+                # 与 paintEvent 同一坐标系：逻辑坐标 → 包围盒局部 → 物理像素
+                painter.scale(pixel_ratio, pixel_ratio)
+                painter.translate(-bounds.x(), -bounds.y())
+                paint(painter)
+            finally:
+                painter.end()
+            rects = _image_alpha_rects(
+                image,
+                int(round(bounds.x() * dpr)),
+                int(round(bounds.y() * dpr)),
+                rect_scale=render_scale)
+        except Exception:
+            logging.debug("渲染 sprite 输入轮廓失败", exc_info=True)
+            return None
+        if rects is None:
+            return None
+        self._mask_cache[sprite] = (cache_key, rects)
+        return rects
+
+    def _sprite_bounds_rects(self, sprite, dpr: float):
+        """兜底：绘制包围盒（拿不到逐像素轮廓时用）。"""
+        getter = getattr(sprite, "paint_bounds", None) or getattr(sprite, "rect", None)
+        if not callable(getter):
+            return None
+        try:
+            bounds = getter()
+        except Exception:
+            return None
+        if bounds is None or bounds.isEmpty():
+            return None
+        return [(int(round(bounds.x() * dpr)), int(round(bounds.y() * dpr)),
+                 max(1, int(round(bounds.width() * dpr))),
+                 max(1, int(round(bounds.height() * dpr))))]
+
+    @staticmethod
+    def _sprite_revision(sprite):
+        """sprite 的输入轮廓代次（假 sprite / 未来后端没有该方法时返回 None）。"""
+        getter = getattr(sprite, "input_revision", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:
+            return None
+
+    def _region_signature(self, sprites, dpr: float, window_rect: QRect):
+        """本拍输入区域的「廉价签名」：只读 sprite 代次，不做任何像素工作。"""
+        return (
+            round(dpr, 6),
+            window_rect.width(),
+            window_rect.height(),
+            tuple((id(sprite), self._sprite_revision(sprite))
+                  for sprite in sprites),
+        )
+
     def _collect_rects(self) -> list[tuple[int, int, int, int]]:
+        """当前应接受输入的矩形（窗口物理坐标）。
+
+        **逐像素轮廓**（不是包围盒）：桌宠周围的大片透明区域不再吞点击，
+        点击直接落到下层应用；被宠物身体覆盖的像素照常由 overlay 接住。
+
+        20ms 一拍的常态成本 = 一次签名比较（帧/位置/旋转都没变就直接返回
+        上次的列表）；只有宠物动画换帧、移动、旋转或显隐变化时才重新渲染。
+        """
         win = self._window
         if not win.isVisible() or bool(getattr(win, "mouse_through", False)):
+            self._mask_cache.clear()
+            self._region_key = None
+            self._region_rects = []
             return []
-        width, height = int(win.width()), int(win.height())
-        if width <= 0 or height <= 0:
-            return []
-        window_rect = QRect(0, 0, width, height)
+        window_rect, dpr = self._window_physical_rect()
+        sprites = [sprite for sprite in getattr(win, "sprites", ())
+                   if getattr(sprite, "visible", True)]
+        key = self._region_signature(sprites, dpr, window_rect)
+        if key == self._region_key:
+            return self._region_rects
         rects: list[tuple[int, int, int, int]] = []
-        for sprite in getattr(win, "sprites", ()):
-            if not getattr(sprite, "visible", True):
+        used = set()
+        for sprite in sprites:
+            sprite_rects = self._sprite_region(sprite, dpr)
+            if sprite_rects is not None:
+                used.add(sprite)
+            else:
+                sprite_rects = self._sprite_bounds_rects(sprite, dpr)
+            if not sprite_rects:
                 continue
-            try:
-                bounds = (sprite.paint_bounds()
-                          if hasattr(sprite, "paint_bounds") else sprite.rect())
-            except Exception:
-                continue
-            if bounds is None or bounds.isEmpty():
-                continue
-            clipped = bounds.intersected(window_rect)
-            if clipped.isEmpty():
-                continue
-            rects.append((clipped.x(), clipped.y(),
-                          clipped.width(), clipped.height()))
+            window_w, window_h = window_rect.width(), window_rect.height()
+            for (x, y, width, height) in sprite_rects:
+                # 手写裁剪：逐矩形建 QRect/intersected 在 100+ 矩形时是主要成本
+                left = x if x > 0 else 0
+                top = y if y > 0 else 0
+                right = x + width
+                if right > window_w:
+                    right = window_w
+                bottom = y + height
+                if bottom > window_h:
+                    bottom = window_h
+                if right <= left or bottom <= top:
+                    continue
+                rects.append((left, top, right - left, bottom - top))
+        # 已移除/隐藏 sprite 的缓存顺手清掉（多宠增删不留死角）
+        if len(self._mask_cache) > len(used):
+            self._mask_cache = {sp: value for sp, value in self._mask_cache.items()
+                                if sp in used}
+        self._region_key = key
+        self._region_rects = rects
         return rects
 
     def refresh(self) -> None:

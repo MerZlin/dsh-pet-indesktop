@@ -1192,6 +1192,38 @@ class PetSprite(QObject):
         if abs(throw_angle) >= 1e-6:  # 与上面的 begin 配对出栈
             self._end_throw_rotation(painter, throw_angle)
 
+    def input_revision(self) -> tuple:
+        """逐像素输入轮廓的代次（供平台层判断「这一帧算过没有」）。
+
+        平台层（Linux/X11 的 XFixes 输入区域）需要「画出来的像素」而不是外接
+        矩形：把当前帧渲染到离屏图再取 alpha 掩码是纯像素级操作，每 20ms 重做
+        一次没有必要——只有帧、位置、旋转、缩放任一变化时才需要重算。这里把
+        全部影响因素收成一个**可比较的元组**：
+
+        - ``_pixmap.cacheKey()``：当前帧的缓存键（换帧/换镜像/换缩放都会变）；
+        - ``_hit_image.cacheKey()``：命中图缓存键（帧交付侧独立维护，双保险）；
+        - ``pos`` / ``scale`` / ``_probe_angle`` / ``_throw_angle``：绘制变换输入；
+        - ``_squash_progress``：Q 弹压缩会改绘制矩形；
+        - ``_dpr``：命中图/绘制位图的分辨率倍率。
+
+        不用 ``id(...)``：对象释放后 id 可能被复用，会撞出「同一代次、不同内容」
+        的假命中。
+        """
+        pixmap = self._pixmap
+        hit = self._hit_image
+        return (
+            None if pixmap is None else pixmap.cacheKey(),
+            None if hit is None else hit.cacheKey(),
+            round(float(self.pos.x()), 3),
+            round(float(self.pos.y()), 3),
+            round(float(self.scale), 6),
+            round(float(self._probe_angle), 6),
+            round(float(self._throw_angle), 6),
+            None if self._squash_progress is None
+            else round(float(self._squash_progress), 6),
+            float(self._dpr),
+        )
+
     def alpha_at(self, local: QPoint | QPointF) -> int:
         """sprite 局部**逻辑**坐标处的 alpha（0-255）。镜像已烘焙进缓存帧，无需再翻转。
 
