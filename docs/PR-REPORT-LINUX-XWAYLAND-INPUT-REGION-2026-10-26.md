@@ -49,6 +49,19 @@ XFixes `ShapeInput` 把 overlay 的输入区域直接设成「全部可见 sprit
 - 指针离开 → 该点不在输入区域内，事件照常落到下层应用；
 - 区域每 20ms 随宠物移动/旋转更新，**没有任何「先读指针再决定区域」的循环**。
 
+**历史：为什么 v4.3.0 之前没有这个问题**
+
+| 版本 | 输入区域怎么来 | 结果 |
+|---|---|---|
+| v4.2.1 及更早（`PetWindow` 单宠真窗口） | **非 Windows 每帧 `QWidget.setMask(alpha mask)`**（`window.py::_sync_mask`，`git show v4.2.1:pet/window.py` 2269 行）：窗口小、mask 由**当前帧的 alpha 轮廓**算出，X11 侧由 Qt 下发成 XShape（bounding + input）——区域由画面决定，**与指针位置无关**。Windows 走另一条：不 `setMask`（1-bit 裁剪会破坏半透明边缘），改用 `WS_EX_TRANSPARENT` 轮询（`GetCursorPos`），Win32 的光标查询恒准。 | 正常。点宠物命中窗口，点旁边穿透。 |
+| v4.3.0 起（默认拓扑改成**单张全屏 overlay**） | 一个铺满全屏的透明窗承载**全部**宠物，无法再「一个窗口一个 alpha mask」（全屏逐帧 alpha 位图代价过大；且 Windows 明确不用 mask）。非 Windows 的穿透实现（`2288870`，2026-10-07，随 v4.3.0 首次发布）**照搬了 Windows 的轮询协议**：每 10/50ms `QCursor.pos()` 决定整窗「输入/穿透」。 | 在本机（X11/macOS）失效。作者在提交信息与发布稿里**明确登记未实机验证**：「非 Windows 的逐像素输入穿透有若干路径只有替身证据」「macOS / Linux 的真实 GUI 未实机验收……请当预览对待」。`platform_passthrough.py` 至今保留这段自我声明。 |
+
+也就是说：**4.3.0 换掉了「由画面决定输入区域」的机制，换成「由全局指针位置决定」，
+而后者在 Win32 上成立的假设（`GetCursorPos` 恒准）在 X11/XWayland 上不成立**。
+这不是某个函数写错，而是把「查询全局指针」当成了跨平台事实——`platform_passthrough`
+的模块 docstring 里甚至写了「Qt 6.8 源码证据 + 本机 offscreen 实测」，但真实 X11
+GUI 从未跑过。
+
 **红线 / 不变量**：
 
 - Windows（`WindowsPerPixelInputController`）与 macOS（`QtPerPixelInputController`）
@@ -81,6 +94,19 @@ XFixes `ShapeInput` 把 overlay 的输入区域直接设成「全部可见 sprit
   新控制器同样只读 `window.mouse_through`。
 
 ## 三、实现要点
+
+### 3.0 为什么不是 `setMask`，也不是继续用 Qt 标志
+
+- **`QWidget.setMask` 不行**：它会同时设 bounding 与 input 两个 shape。我们有一个
+  必须表达的状态——**窗口完整可见、但对输入完全透明**（用户手动「鼠标穿透」；以及
+  `mouse_through` 语义）——这只有 input-only 能表达：`setMask(空)` 按 Qt 语义是
+  「清除 mask」= 恢复整窗输入，正是会吞桌面的那个 bug（issue #195 的原话：
+  「不能交空 mask」）。用 mask 就等于把输入区域绑死到绘制裁剪上，代价还有
+  bounding 变化引起的重绘/合成开销。
+- **继续用 `Qt::WindowTransparentForInput` 标志也不行**：那是「整窗开/关」的二进制
+  状态，必须*先知道*指针在哪才能决定——就是本 bug 的自锁本身。
+- **不是不能复用旧代码**：macOS/原生 Wayland 仍用旧控制器（它们没有 XFixes 输入
+  区域可用），Linux 只在初始化失败时回退它。
 
 ### 3.1 为什么是「服务端输入区域」而不是「更准的指针查询」
 
@@ -303,6 +329,35 @@ X 窗口（非 offscreen、非 mock）。
   未纳入本报告的判定依据——**它覆盖的用例与本次改动零重叠**（设置页 / 精灵 /
   天气 / TTS 等），且其头部的 `test_settings_stale_form_exit.py` 已被上面
   的干净基线对照证明会独立崩溃。
+
+## 六点五、与 #245（社区 X11 兼容 PR）的关系
+
+本仓库已有一个 **open** 的社区 PR **#245**（`Huffer342-WSH:fix/pyside612-runtime`），
+其中 `fix(overlay)` 主题也做了 X11 输入形状（`pet/linux_overlay.py` 的
+`LinuxOverlayInput`，用 `XShapeCombineRectangles` 按**绘制像素**设 input shape），
+并附带虚拟桌面几何 / `X11BypassWindowManagerHint` / 拖动与气泡修复。
+
+维护者 klxxya 在 #245 下的分流结论（2026-10-14）：
+
+> Codex 联动与 X11 兼容部分计划下个版本按现行架构另开小 PR 移植（整段合会与
+> agent_link 重写冲突）。本 PR 先保持 open 跟踪这两块。
+
+本 PR 就是那句话里的「X11 兼容——输入区域」这一刀，按**当前 main 架构**重写，
+范围刻意收窄到「桌宠点得到 + 桌面不被吞」：
+
+| | #245 `LinuxOverlayInput` | 本 PR `X11InputRegionController` |
+|---|---|---|
+| 区域粒度 | 绘制像素（alpha 掩码，按 mask 缓存） | **绘制包围盒**（`paint_bounds` 并集） |
+| 更新时机 | 事件过滤 + 调用方驱动 | 20ms 定时 + `(winId, rects)` 去重（静止零 X 请求） |
+| 覆盖状态 | 输入形状 | 输入形状，含「隐藏/手动穿透 → 空区域」 |
+| 附带改动 | 虚拟桌面几何、WM hint、拖动、气泡、Codex、Qt 修复 | **只此一项**（不动 WM/几何/拖动/气泡） |
+| 与 #245 的关系 | 分支基于 4.2.x-era 架构，`mergeable_state=dirty` | 基于当前 main（`34d810b`），无冲突 |
+
+**取舍**：包围盒比像素掩码粗——包围盒内透明边角也会被 overlay 接住（Qt 侧
+`sprite_at` 的 alpha 细判未命中就忽略事件），代价是「透明边角上的点击不穿透」。
+这是为「桌宠一定能点得到」刻意选择的；若维护者倾向 #245 的像素粒度，可以把
+`_collect_rects()` 换成「命中图 → 每行矩形并集」，接口与生命周期不用改（报告
+§七 已登记为后续项）。
 
 ## 七、已知限制与后续
 
