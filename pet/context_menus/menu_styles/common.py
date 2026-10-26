@@ -6,7 +6,7 @@ import sys
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QFont, QFontDatabase
-from PySide6.QtWidgets import QMenu, QProxyStyle, QStyle
+from PySide6.QtWidgets import QApplication, QMenu, QProxyStyle, QStyle
 
 # 右键菜单样式表的 font-family 在 Windows 上必须是**单族**，而且该族要覆盖菜单里的中文。
 # 2026-09-28 真 Qt(Windows 6.11) 分步实测：QFontDatabase 的族枚举本身只要 ~16MB，但只要
@@ -26,28 +26,25 @@ else:
 class ResponsiveMenuStyle(QProxyStyle):
     """Keep submenu aim protection without its one-second sibling stall."""
 
+    _MENU_HINTS = {
+        QStyle.StyleHint.SH_Menu_Scrollable: 1,
+        QStyle.StyleHint.SH_Menu_SubMenuPopupDelay: 60,
+        QStyle.StyleHint.SH_Menu_SubMenuSloppyCloseTimeout: 120,
+        QStyle.StyleHint.SH_Menu_SubMenuSloppySelectOtherActions: 1,
+        QStyle.StyleHint.SH_Menu_SubMenuUniDirection: 0,
+        QStyle.StyleHint.SH_Menu_SubMenuUniDirectionFailCount: 1,
+    }
+
     def styleHint(self, hint, option=None, widget=None, return_data=None):  # noqa: N802 - Qt API
-        overrides = {
-            QStyle.StyleHint.SH_Menu_Scrollable: 1,
-            QStyle.StyleHint.SH_Menu_SubMenuPopupDelay: 60,
-            QStyle.StyleHint.SH_Menu_SubMenuSloppyCloseTimeout: 120,
-            QStyle.StyleHint.SH_Menu_SubMenuSloppySelectOtherActions: 1,
-            QStyle.StyleHint.SH_Menu_SubMenuUniDirection: 0,
-            QStyle.StyleHint.SH_Menu_SubMenuUniDirectionFailCount: 1,
-        }
-        if hint in overrides:
-            return overrides[hint]
+        if isinstance(widget, QMenu) and hint in self._MENU_HINTS:
+            return self._MENU_HINTS[hint]
         return super().styleHint(hint, option, widget, return_data)
 
-def install_responsive_menu_style(menu: QMenu) -> None:
-    for action in menu.actions():
-        submenu = action.menu()
-        if submenu is not None:
-            install_responsive_menu_style(submenu)
-    proxy = ResponsiveMenuStyle()
-    proxy.setParent(menu)
-    menu.setStyle(proxy)
-    menu._responsive_menu_style = proxy
+
+def install_responsive_menu_style(app: QApplication) -> None:
+    # QMenu 在构造时缓存交互参数；创建后 setStyle 不会刷新这些缓存。
+    if not isinstance(app.style(), ResponsiveMenuStyle):
+        app.setStyle(ResponsiveMenuStyle(app.style()))
 
 
 class StayOpenMenuFilter(QObject):

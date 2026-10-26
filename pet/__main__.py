@@ -101,6 +101,9 @@ def _run_settings(config=None) -> int:
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
+    from .context_menus.menu_styles.common import install_responsive_menu_style
+
+    install_responsive_menu_style(app)
     from .platform_mac import _mac_set_dock_icon_visible
 
     # The main pet owns the Dock item; its settings helper remains a GUI accessory.

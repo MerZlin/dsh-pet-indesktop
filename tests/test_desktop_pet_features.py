@@ -1035,6 +1035,7 @@ def test_context_menu_always_applies_the_modern_style():
     from PySide6.QtWidgets import QApplication, QMenu, QStyle, QWidget
 
     from pet.context_menu import populate_context_menu
+    from pet.context_menus.menu_styles.common import install_responsive_menu_style
 
     class Config:
         def get(self, key, default=None):
@@ -1059,6 +1060,7 @@ def test_context_menu_always_applies_the_modern_style():
             return lambda *args, **kwargs: None
 
     app = QApplication.instance() or QApplication([])
+    install_responsive_menu_style(app)
     menu = QMenu()
     populate_context_menu(menu, Pet())
     assert menu.objectName() == "modernContextMenu"
@@ -2381,10 +2383,10 @@ def test_long_submenus_enable_qt_scrolling():
     from pet.context_menus.menu_styles.common import install_responsive_menu_style
 
     app = QApplication.instance() or QApplication([])
+    install_responsive_menu_style(app)
     menu = QMenu()
     for index in range(100):
         menu.addAction(f"动作 {index}")
-    install_responsive_menu_style(menu)
     assert menu.style().styleHint(QStyle.StyleHint.SH_Menu_Scrollable, None, menu) == 1
     app.processEvents()
 
