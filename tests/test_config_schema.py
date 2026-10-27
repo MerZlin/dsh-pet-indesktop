@@ -129,6 +129,9 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "pet_opacity",
         "playback_speed",
         "pnpm_bin",
+        # 外部截图后端（vision_capture_command）：argv 模板 + 超时
+        "vision_capture_command",
+        "vision_capture_timeout_seconds",
         "predict_prewarm_lead_ms",
         "quick_launch_apps",
         "quiet_also_on_fullscreen",

@@ -5279,6 +5279,14 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
         config = Config(instance_id="")
         _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
         _setup_logging(config)
+        # 外部截图后端（vision_capture_command）：在起任何 GUI/服务之前定下来；
+        # 非法配置由 set_capture_command 自行忽略并回落内置 ImageGrab。
+        # 放在日志初始化之后，启用时那一行才进得了 pet.log。
+        from . import vision as _vision_mod
+        _vision_mod.set_capture_command(
+            config.get("vision_capture_command"),
+            config.get("vision_capture_timeout_seconds"),
+        )
         # 功能模块激活：在创建任何可选服务（AppShell 及其服务树）之前完成
         # 一次性迁移判定并冻结本次运行快照；功能页写盘只影响下次启动。
         feature_activation_mod.decide_and_freeze(config)

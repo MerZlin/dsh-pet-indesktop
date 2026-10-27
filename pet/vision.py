@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """看看屏幕：截屏 → 内存 JPEG → 发给视觉模型 → 返回人设口吻的回应。
 
-隐私约定：截图只在内存中处理，全程不落盘，
-除用户自己配置的聊天 API 外不发送到任何地方。
+隐私约定：截图只在内存中处理，除用户自己配置的聊天 API 外不发送到任何地方。
+（配置了 vision_capture_command 时，外部命令会写一个临时 PNG 中转，
+本模块读完立即删除；见 `_external_capture_png`。）
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import ctypes
 import ctypes.wintypes
 import json
 import logging
+import os
 import sys
 import time
 import urllib.error
@@ -68,6 +70,112 @@ def get_cursor_visibility(user32=None) -> str:
 MAX_EDGE = 768        # 缩到最长边 768px：够看懂屏幕，token 又不贵
 JPEG_QUALITY = 70
 DEFAULT_VISION_MODEL = 'deepseek-v4-flash-vision-exp'
+
+# ---------------------------------------------------------------------------
+# 可选的外部截图后端（vision_capture_command）
+#
+# 「看看屏幕」和「主动识屏」默认走内置 ImageGrab；把 `vision_capture_command`
+# 配成一个 argv 模板后，改为先跑那条外部命令、读它写出的 PNG，失败再逐调用点
+# 回落到内置实现——所以截图能力永远不依赖外部命令（没装、被策略挡住、超时、
+# 换了机器都只是回落，不会让「看看屏幕」失效）。
+#
+# 占位符：{mode}（full / region）、{rect}（x,y,w,h，full 时是 0,0,0,0）、
+# {out}（本次要写入的 PNG 路径，命令必须写到这里）。
+# 只接受字符串数组：误配成单条命令行字符串会被忽略，代码里不引入 shell。
+# ---------------------------------------------------------------------------
+_CAPTURE_COMMAND: tuple[str, ...] = ()
+_CAPTURE_TIMEOUT = 20.0     # 秒；冷启动一个 PowerShell 约 0.3~1s
+_external_capture_announced = False  # 每次进程只记一条成功日志，避免每次截图刷屏
+
+
+def set_capture_command(command: Any, timeout: Any = None) -> None:
+    """配置外部截图命令（argv 模板，见上方约定）；空/非法 = 回到内置 ImageGrab。
+
+    只接受全部由非空字符串组成的列表/元组。字符串（例如把整条命令行塞进
+    配置）一律忽略——这条路径不经过 shell，避免把配置变成命令注入面。
+    timeout 只接受正数，缺省沿用默认值。
+    """
+    global _CAPTURE_COMMAND, _CAPTURE_TIMEOUT
+    if (
+        isinstance(command, (list, tuple))
+        and command
+        and all(isinstance(item, str) for item in command)
+    ):
+        items = tuple(item.strip() for item in command)
+        _CAPTURE_COMMAND = items if all(items) else ()
+    else:
+        _CAPTURE_COMMAND = ()
+    if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0:
+        _CAPTURE_TIMEOUT = float(timeout)
+    if _CAPTURE_COMMAND:
+        log.info('外部截图后端已启用: %s（超时 %.0fs）', ' '.join(_CAPTURE_COMMAND[:2]), _CAPTURE_TIMEOUT)
+    else:
+        log.info('外部截图后端未配置，使用内置 ImageGrab')
+
+
+def capture_command() -> tuple[str, ...]:
+    """当前生效的外部截图命令（空元组 = 内置 ImageGrab）。"""
+    return _CAPTURE_COMMAND
+
+
+def _external_capture_png(mode: str, rect: 'tuple[int, int, int, int] | None' = None) -> 'bytes | None':
+    """跑外部截图命令，返回它写出的 PNG 字节；任何异常都返回 None（调用方回落）。"""
+    global _external_capture_announced
+    if not _CAPTURE_COMMAND:
+        return None
+    try:
+        import subprocess
+        import tempfile
+
+        rect_text = '%d,%d,%d,%d' % rect if rect else '0,0,0,0'
+        fd, out_path = tempfile.mkstemp(prefix='dsh-pet-shot-', suffix='.png')
+        os.close(fd)
+        try:
+            args = [
+                arg.replace('{mode}', mode).replace('{rect}', rect_text).replace('{out}', out_path)
+                for arg in _CAPTURE_COMMAND
+            ]
+            kwargs = {}
+            if os.name == 'nt':
+                kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            proc = subprocess.run(
+                args, capture_output=True, text=True,
+                timeout=_CAPTURE_TIMEOUT, **kwargs,
+            )
+            if proc.returncode != 0:
+                log.debug('外部截图命令失败 rc=%s: %s', proc.returncode, (proc.stderr or '').strip()[:300])
+                return None
+            data = Path(out_path).read_bytes()
+            if not data:
+                return None
+            if not _external_capture_announced:
+                _external_capture_announced = True
+                log.info('截屏走外部命令: %s', ' '.join(_CAPTURE_COMMAND[:2]))
+            return data
+        finally:
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
+    except Exception as exc:                      # noqa: BLE001 - 截屏绝不能因外部命令崩掉
+        log.debug('外部截图命令不可用，回落内置抓屏: %s', exc)
+        return None
+
+
+def _external_capture_image(mode: str, rect: 'tuple[int, int, int, int] | None' = None):
+    """外部截图命令 → PIL Image；不可用返回 None。"""
+    png = _external_capture_png(mode, rect)
+    if png is None:
+        return None
+    try:
+        import io
+        from PIL import Image
+        img = Image.open(io.BytesIO(png))
+        img.load()
+        return img
+    except Exception as exc:                      # noqa: BLE001
+        log.debug('外部截图解码失败，回落内置抓屏: %s', exc)
+        return None
 
 
 class VisionError(RuntimeError):
@@ -230,9 +338,13 @@ def capture_window_rect(rect: tuple[int, int, int, int] | None) -> Any:
     仅允许在后台 worker 线程调用！
     针对多屏负坐标：抓取全屏后按虚拟屏幕原点平移裁剪。
     """
-    from PIL import ImageGrab  # 懒导入：PIL 不随模块加载常驻（见模块头注释）
     if not rect or rect[2] <= 0 or rect[3] <= 0:
         return None
+    # 先走配置的外部截图命令（vision_capture_command），失败回落内置 ImageGrab
+    shared = _external_capture_image('region', rect)
+    if shared is not None:
+        return shared
+    from PIL import ImageGrab  # 懒导入：PIL 不随模块加载常驻（见模块头注释）
     try:
         vx, vy = 0, 0
         if sys.platform == 'win32':
@@ -279,7 +391,10 @@ def capture_screen_bytes() -> bytes:
     """截全屏（含多显示器）→ 缩到最长边 MAX_EDGE → 内存 JPEG bytes，全程不落盘。"""
     import io
     from PIL import Image, ImageGrab  # 懒导入：PIL 不随模块加载常驻（见模块头注释）
-    img = ImageGrab.grab(all_screens=True)
+    # 先走配置的外部截图命令（vision_capture_command），失败回落内置 ImageGrab
+    img = _external_capture_image('full')
+    if img is None:
+        img = ImageGrab.grab(all_screens=True)
     w, h = img.size
     scale = MAX_EDGE / max(w, h, 1)
     if scale < 1.0:

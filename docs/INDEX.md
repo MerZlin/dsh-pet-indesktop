@@ -145,6 +145,8 @@
 
 ## PR 报告存档
 
+- [外部截图后端（2026-10-26）](PR-REPORT-VISION-CAPTURE-BACKEND-2026-10-26.md)：新增可选键 `vision_capture_command`（argv 模板 + `{mode}` / `{rect}` / `{out}`），让「看看屏幕」「主动识屏」可以先跑外部截图命令、失败再逐调用点回落内置 `ImageGrab`；默认空 = 行为逐字不变，配置只接受字符串数组（不走 shell）。实测内置 87 ms / 外部 658 ms（每次抓屏）、无新增线程与网络。改 `pet/vision.py` 两个抓屏入口、`pet/app.py` 启动接线、或新增 `vision_capture_*` 键时必读。**先例**：① `Config.reload()` 走白名单，新键不加进白名单则手改 `config.json` 静默不生效（本次实现中真踩到，`tests/test_config_schema.py` 的快照会红）；② 外部命令必须「失败回落」，截图能力不能依赖外部程序是否装好。
+
 - [跨屏过缝通行与落点吸附（2026-10-22）](PR-REPORT-CROSS-SCREEN-CORRIDOR-2026-10-22.md)：跨屏移动语义从 band 收窄改为「通行域=并集（含空洞）、静止域=各屏、四处收口吸附」，含侧墙低速截止、两轮 k3 盲审记录与先红后绿证据；改跨屏拖拽/抛掷物理、写 `_clamp_rects` 多矩形域、动 `snap_to_nearest_screen` 或排查「宠物停在看不见的地方」时必读。**先例**：① 语义改动要逐个收口点查吸附（落地/原地放下/落岛/弹弓取消，漏一个就是把宠钉死在空洞）；② `__init__` 里 set_pos 先于字段初始化，钳制条件必须 getattr 兜底；③ 覆盖判定用并集（QRegion）而非中心点，否则半身悬空漏判。
 - [macOS 多屏与 Dock 修复（2026-10-21）](PR-REPORT-MACOS-DESKTOP-2026-10-21.md)：Mac 双屏每屏一窗、设置进程启动即 Accessory，含用户副屏可见及单 Dock 图标确认、75 秒焦点观察、构建安装与测试证据；改 Mac 拓扑或 Dock 启动策略时查阅；多个 Spaces 的后续修复见下一项。
 - [macOS 多屏 Spaces 可见性（2026-10-21）](PR-REPORT-MACOS-SPACES-2026-10-21.md)：合成窗加入所有 Spaces，并在窗口重建后重放；包含原生策略读回、构建安装与用户跨屏/切换桌面验收；修改 Mac 合成窗 Spaces 策略或排查切换桌面后宠物消失时查阅。
