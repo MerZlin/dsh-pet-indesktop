@@ -2689,7 +2689,9 @@ class OverlayShell(QObject):
     def show_bubble(self, text: str, duration_ms: int = 3200,
                     subtitle: str | None = None, *, sticky: bool = False,
                     buttons: list | None = None, title_first: bool = False,
-                    width_locked: bool = False, reserve: bool = True, **_ignored) -> bool:
+                    width_locked: bool = False, reserve: bool = True,
+                    agent_title: str = "", agent_status: str = "",
+                    agent_final: bool = False, **_ignored) -> bool:
         """向主 sprite 头顶冒泡（window.py:3850-3886 的 sprite 等价语义）。
 
         返回是否真上了屏：不可见/飞行期/正挂提醒让路时为 False。免打扰结束的
@@ -2718,7 +2720,9 @@ class OverlayShell(QObject):
         return self._show_bubble_text(str(text), duration_ms,
                                       subtitle=str(subtitle or ""),
                                       title_first=title_first,
-                                      width_locked=width_locked)
+                                      width_locked=width_locked,
+                                      **(dict(agent_title=agent_title, agent_status=agent_status,
+                                              agent_final=agent_final) if agent_title else {}))
 
     def alert_target_sprite(self):
         if not self._any_host_visible():

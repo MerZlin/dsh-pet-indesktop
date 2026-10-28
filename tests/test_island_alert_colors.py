@@ -226,19 +226,20 @@ def _count_color(image, expected: str, *, island=None, x0=None, x1=None) -> int:
     return count
 
 
-def _narrow_to(island, screen, predicate, *, lo=200, hi=1600, step=4):
+def _narrow_to(island, screen, predicate, *, lo=1, hi=1600, step=4):
     """把岛挪到"收缩级满足 ``predicate``"的那块屏上（从宽往窄搜）。
 
     屏宽按**真实字体实测**搜索而不是写死 px：段宽来自当前系统字体，写死阈值
     换台机器就落到别的收缩级上。
     """
+    # 小字号字体的全折叠可能在 200px 或以下，搜索不能提前截断。
     for width in range(hi, lo, -step):
         screen._rect = QRect(0, 0, width, 768)
         island.refresh_from_config()
         plan = island._row_plan()
         if predicate(plan):
             return width, plan
-    raise AssertionError("在 200–1600px 的屏宽里找不到满足条件的收缩级")
+    raise AssertionError("在有效屏宽里找不到满足条件的收缩级")
 
 
 # ------------------------------------------------------- 阈值/滞回真值表（纯函数）

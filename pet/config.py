@@ -262,6 +262,7 @@ def _default_agent_link_data() -> dict:
         "claude": False,
         "cursor": False,
         "opencode": False,
+        "codex": False,
         # 自定义联动 Agent（协议见 docs/AGENT_LINK_PROTOCOL.md §4）：只读监听
         # 用户指定的事件文件，不写外部配置、无需授权弹窗，默认空
         "custom_agents": [],
@@ -301,7 +302,7 @@ def _clean_click_sound_pack(value: Any) -> dict:
 
 
 # 内置联动 Agent 键：custom_agents 的 key 不得与之重复
-_AGENT_LINK_BUILTIN_KEYS = ("dsh", "claude", "cursor", "opencode")
+_AGENT_LINK_BUILTIN_KEYS = ("dsh", "claude", "cursor", "opencode", "codex")
 # 自定义联动 Agent 条目上限（防配置文件被塞爆）
 _CUSTOM_AGENT_MAX = 8
 
@@ -350,7 +351,13 @@ def _clean_custom_agents(raw: Any) -> list[dict]:
             continue
         name = str(item.get("name") or "").strip()[:50] or key
         seen.add(key)
-        result.append({"key": key, "name": name, "path": path})
+        entry = {"key": key, "name": name, "path": path}
+        protocol = item.get("protocol", "jsonl")
+        if protocol == "session-snapshot-v1":
+            entry["protocol"] = protocol
+        elif protocol != "jsonl":
+            continue
+        result.append(entry)
     return result
 
 
@@ -361,12 +368,40 @@ def _clean_agent_link_data(raw: Any) -> dict:
     result = dict(defaults)
     # 保留传入的额外合法键（例如 thinking_text, thinking_texts 等）
     result.update(raw)
-    result["custom_agents"] = _clean_custom_agents(raw.get("custom_agents"))
+    # Preserve both the first experimental snapshot and unrelated old JSONL channels.
+    custom = raw.get("custom_agents")
+    custom = custom if isinstance(custom, list) else []
+    migrated = []
+    used = {str(item.get('key') or '').strip().lower() for item in custom if isinstance(item, dict)}
+    legacy_channel = snapshot_channel = False
+    for item in custom:
+        if isinstance(item, dict) and str(item.get('key') or '').strip().lower() == 'codex':
+            if item.get('protocol') == 'session-snapshot-v1':
+                result['codex_state_path'] = str(item.get('path') or '')[:500]
+                snapshot_channel = True
+                continue
+            key = 'codex-legacy'
+            index = 1
+            while key in used:
+                key = f'codex-legacy-{index}'
+                index += 1
+            used.add(key)
+            item = dict(item, key=key)
+            result[key] = bool(raw.get('codex', False))
+            legacy_channel = True
+        migrated.append(item)
+    result["custom_agents"] = _clean_custom_agents(migrated)
+    snapshot_path = result.get('codex_state_path')
+    if isinstance(snapshot_path, str) and snapshot_path.strip():
+        result['codex_state_path'] = snapshot_path.strip()[:500]
+    else:
+        result.pop('codex_state_path', None)
     for key in (
         "dsh",
         "claude",
         "cursor",
         "opencode",
+        "codex",
         "sound_enabled",
         "sound_start_enabled",
         "sound_done_enabled",
@@ -374,6 +409,8 @@ def _clean_agent_link_data(raw: Any) -> dict:
     ):
         if key in raw:
             result[key] = bool(raw[key])
+    if legacy_channel and not snapshot_channel:
+        result['codex'] = False
     for key in ("sound_start_path", "sound_done_path", "sound_error_path"):
         if key in raw:
             val = str(raw[key] or "").strip()[:500]

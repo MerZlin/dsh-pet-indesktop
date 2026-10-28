@@ -347,6 +347,10 @@ class ChatWindow(QDialog):
         self._follow_reposition_timer.setSingleShot(True)
         self._follow_reposition_timer.setInterval(40)
         self._follow_reposition_timer.timeout.connect(self._reposition_after_pet_move)
+        self._bottom_timer = QTimer(self)
+        self._bottom_timer.setSingleShot(True)
+        self._bottom_timer.setInterval(80)
+        self._bottom_timer.timeout.connect(self._apply_bottom)
 
         self._build()
         self._connect()
@@ -1316,12 +1320,13 @@ class ChatWindow(QDialog):
 
     def _bottom(self) -> None:
         self._prepend_anchor = None  # 显式贴底：解除 prepend 视口锚定
+        self._apply_bottom()
+        # 布局可能稍后才落定；由窗口持有并合并延迟回调，关窗时可停止。
+        self._bottom_timer.start()
+
+    def _apply_bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
-        # 切会话后布局更新可能晚于当前事件循环拍；加一拍兜底，
-        # 保证切回长会话时落在底部（与新版窗口一致）。
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(80, self, lambda bar=bar: bar.setValue(bar.maximum()))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -1332,6 +1337,7 @@ class ChatWindow(QDialog):
         同款）。Esc 走 ``reject() → done()`` 不经过 closeEvent——收尾（停止生成、
         解除桌宠位置监听）必须挂在公共出口上（发版终审 A1）。
         """
+        self._bottom_timer.stop()
         self.service.stop()
         self.set_pet_window(None)
         super().done(result)

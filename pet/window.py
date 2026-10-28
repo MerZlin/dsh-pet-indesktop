@@ -3784,7 +3784,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
     def show_bubble(self, text: str, duration_ms: int = 3200, subtitle: str | None = None,
                     *, sticky: bool = False, buttons: list[tuple[str, object]] | None = None,
                     title_first: bool = False, width_locked: bool = False,
-                    reserve: bool = True) -> bool:
+                    reserve: bool = True, agent_title: str = "",
+                    agent_status: str = "", agent_final: bool = False) -> bool:
         """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。
 
         ``sticky=True`` 显示「一直挂到主动关闭」的气泡（审批等）：不启动自动
@@ -3824,7 +3825,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(
             str(text), window_placement.bubble_anchor_rect(self), duration_ms, pet_scale=self.scale,
-            subtitle=str(subtitle or ""), title_first=title_first, width_locked=width_locked)
+            subtitle=str(subtitle or ""), title_first=title_first, width_locked=width_locked,
+            **(dict(agent_title=agent_title, agent_status=agent_status,
+                    agent_final=agent_final) if agent_title else {}))
         return True
 
     def hide_bubble(self, *args, **kwargs):

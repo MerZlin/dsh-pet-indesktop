@@ -1996,7 +1996,8 @@ def test_agent_link_module_off_stops_dsh_tracker_and_harness_autostart(tmp_path)
     assert app_mod.AppShell._harness_autostart_wanted(shell) is True
 
 
-def test_shared_subsystems_skips_agent_link_construction_when_inactive(tmp_path):
+@pytest.mark.parametrize("codex_enabled", [False, True])
+def test_shared_subsystems_skips_agent_link_construction_when_inactive(tmp_path, monkeypatch, codex_enabled):
     """构造前挡：模块停用时共享容器**不构造** agent_link 管理器。
 
     ``SharedAgentLinkManager.__init__`` 末尾就是 ``apply_config()``（起监视器
@@ -2008,14 +2009,23 @@ def test_shared_subsystems_skips_agent_link_construction_when_inactive(tmp_path)
 
     app = _qapp()
     _freeze_all_but("agent_link")
-    shell = app_mod.AppShell(app, Config(tmp_path), enable_chat=True, slot_id=0)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    cfg = Config(tmp_path)
+    cfg.set("agent_link", {"codex": codex_enabled})
+    shell = app_mod.AppShell(app, cfg, enable_chat=True, slot_id=0)
     assert shell._shared is not None
     assert shell._shared.agent_link is None
     assert shell._shared.proactive is not None  # proactive 那一半不受本模块影响
 
     fa.freeze_snapshot_for_tests(MIGRATION_BASELINE)
-    shell2 = app_mod.AppShell(app, Config(tmp_path), enable_chat=True, slot_id=0)
+    shell2 = app_mod.AppShell(app, cfg, enable_chat=True, slot_id=0)
     assert shell2._shared.agent_link is not None
+    monitor = shell2._shared.agent_link.monitors["codex"]
+    assert monitor._running is codex_enabled
+    assert (monitor._file_watch.watcher is not None) is codex_enabled
+    assert not (tmp_path / "codex").exists()
+    shell2._shared.stop_all()
+    assert monitor._file_watch.watcher is None
 
 
 def test_island_settings_domain_absent_when_inactive(tmp_path, monkeypatch):

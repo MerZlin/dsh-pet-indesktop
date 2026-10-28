@@ -347,6 +347,11 @@ class PetSpeechBubble(QFrame):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(13, 10, 13, 17)
         self._layout.addWidget(self.label)
+        from .agent_bubble_content import AgentBubbleContent
+        self._agent_content = AgentBubbleContent(self)
+        self._agent_content.hide()
+        self._layout.addWidget(self._agent_content)
+        self._agent_data = None
         self._subtitle_label = QLabel(self)
         self._subtitle_label.setObjectName("pet-speech-subtitle")
         # The subtitle is user/LLM supplied (for example the watchdog's
@@ -812,6 +817,8 @@ class PetSpeechBubble(QFrame):
         if self._host_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
+        from .platform_linux import keep_on_all_desktops
+        keep_on_all_desktops(self)
         if was_visible:
             self.show()
 
@@ -884,6 +891,9 @@ class PetSpeechBubble(QFrame):
         buttons: list[tuple[str, object]] | None = None,
         title_first: bool = False,
         width_locked: bool = False,
+        agent_title: str = "",
+        agent_status: str = "",
+        agent_final: bool = False,
     ) -> None:
         """显示文本气泡。
         ``title_first`` 会把 ``subtitle`` 放到正文上方并使用正文字号——
@@ -899,7 +909,7 @@ class PetSpeechBubble(QFrame):
         收起/隐藏时恢复穿透。
         """
         text = str(text).strip()
-        if not text:
+        if not text and not agent_title:
             return
         interactive = bool(buttons)
         # 交互提醒（如循环检测的三按钮弹窗）必须保持按钮和回调绑定。
@@ -907,6 +917,13 @@ class PetSpeechBubble(QFrame):
         # show_text 覆盖这里，视觉上文字还在，但按钮已被 teardown。
         if self._interactive_active and not interactive:
             return
+        if self._agent_data:
+            self._layout.setContentsMargins(13, 10, 13, 17)
+            self._layout.setSpacing(-1)
+        self._agent_data = (agent_title, agent_status, text, agent_final) if agent_title else None
+        self._agent_content.hide()
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(16777215, 16777215)
         self._content_kind = "text"
         self._raw_text = text
         # 带 subtitle 的气泡是"标题 + 内容"结构，正文里可能自带换行，
@@ -988,7 +1005,9 @@ class PetSpeechBubble(QFrame):
         # 本次实际使用的文本列宽（呼吸泡为 None：内宽由画布推出），
         # 供副标题宽度上限取「不与正文列宽打架」的口径。
         column: int | None = None
-        if self._preset.get("shape") == "breath_bubble" and not interactive:
+        if self._agent_data and not interactive:
+            self._configure_agent_content(anchor_rect)
+        elif self._preset.get("shape") == "breath_bubble" and not interactive:
             self._configure_breath_content(anchor_rect, pet_scale)
             self._page_indicator.hide()
         else:
@@ -1076,6 +1095,29 @@ class PetSpeechBubble(QFrame):
         # 内同步过（那里的 label 宽度是画布推出来的，column=None），此处幂等。
         self._sync_subtitle_max_width(self.label.width(), column)
         return duration_ms
+
+    def _configure_agent_content(self, anchor_rect):
+        title, status, body, final = self._agent_data
+        available = self._available_geometry(anchor_rect)
+        max_width = available.width() - 16 if available else 800
+        max_height = available.height() - 16 if available else 600
+        breath = self._preset.get("shape") == "breath_bubble"
+        width = min(round(280 * self._text_scale), max_width)
+        # Keep text inside the organic shape's central safe area.
+        left, right = (round(width * .13), round(width * .22)) if breath else (16, 16)
+        top, bottom = (round(width * .20), round(width * .18)) if breath else (12, 18)
+        self._layout.setContentsMargins(left, top, right, bottom)
+        self._layout.setSpacing(0)
+        self.label.hide()
+        self._subtitle_label.hide()
+        self._agent_content.configure(
+            title, status, body, self.label.font(), self._preset["foreground"],
+            max(1, width - left - right), 3 if final else 2,
+            max_height - top - bottom)
+        self._agent_content.show()
+        self._breath_scale = width / 240.0
+        self.setFixedSize(width, top + self._agent_content.height() + bottom)
+        self._layout.activate()
 
     def _setup_buttons(self, buttons: list[tuple[str, object]]) -> None:
         """清空旧按钮并按元素重建按钮行（仅交互气泡用）。
@@ -1285,6 +1327,14 @@ class PetSpeechBubble(QFrame):
             pixmap = QPixmap(str(image_path))
         if pixmap.isNull():
             return False
+        if self._agent_data:
+            self.setMinimumSize(0, 0)
+            self.setMaximumSize(16777215, 16777215)
+            self._layout.setContentsMargins(13, 10, 13, 17)
+            self._layout.setSpacing(-1)
+        self._agent_data = None
+        self._agent_content.hide()
+        self.label.show()
         self._content_kind = "image"
         self._raw_text = ""
         self._source_pixmap = pixmap
@@ -1330,7 +1380,7 @@ class PetSpeechBubble(QFrame):
         self.setMaximumSize(16777215, 16777215)
         if self._content_kind == "image":
             self._layout_image_content(anchor_rect)
-        elif self._raw_text:
+        elif self._raw_text or self._agent_data:
             self._layout_text_content(anchor_rect, sticky=not self._hide_timer.isActive(),
                                       preserve_paging=True)
         self.adjustSize()
@@ -1775,7 +1825,10 @@ class PetSpeechBubble(QFrame):
         water.closeSubpath()
         painter.save()
         painter.setClipPath(self._main_bubble_path)
-        painter.fillPath(water, QColor(self._water_fill))
+        water_color = QColor(self._water_fill)
+        if self._agent_data and QColor(self._preset["foreground"]).lightness() > 180:
+            water_color = background.lighter(125)
+        painter.fillPath(water, water_color)
         painter.restore()
 
         outline_width = max(2.2, 3.2 * self._breath_scale)

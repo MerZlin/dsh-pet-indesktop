@@ -1160,6 +1160,13 @@ class ChatWindow(QDialog):
         self._follow_reposition_timer.setSingleShot(True)
         self._follow_reposition_timer.setInterval(40)
         self._follow_reposition_timer.timeout.connect(self._reposition_after_pet_move)
+        self._bottom_deferred_timer = QTimer(self)
+        self._bottom_deferred_timer.setSingleShot(True)
+        self._bottom_deferred_timer.timeout.connect(self._apply_bottom)
+        self._bottom_timer = QTimer(self)
+        self._bottom_timer.setSingleShot(True)
+        self._bottom_timer.setInterval(80)
+        self._bottom_timer.timeout.connect(self._apply_bottom)
 
         self._build()
         self._connect()
@@ -2634,10 +2641,10 @@ class ChatWindow(QDialog):
         self._prepend_anchor = None  # 显式贴底：解除 prepend 视口锚定
         self._scroll_pin = True
         self._apply_bottom()
-        QTimer.singleShot(0, self, self._apply_bottom)
+        self._bottom_deferred_timer.start()
         # 切会话后布局更新可能晚于 singleShot(0)（内容高度尚未重算，
         # maximum 仍为 0）；再加一拍兜底，保证切回长会话时落在底部。
-        QTimer.singleShot(80, self, self._apply_bottom)
+        self._bottom_timer.start()
 
     def _apply_bottom(self) -> None:
         if self._scroll_pin and not self._stream_follow_output:
@@ -2784,6 +2791,8 @@ class ChatWindow(QDialog):
         # 落库并复位（_complete_finished 内含 _reset），再走原有关窗流程。
         if self._pending_finish_text is not None:
             self._complete_finished(self._pending_finish_text)
+        self._bottom_deferred_timer.stop()
+        self._bottom_timer.stop()
         self._typewriter_timer.stop()
         self.service.stop()
         self.set_pet_window(None)

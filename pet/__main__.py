@@ -155,7 +155,14 @@ def _run_ocr_worker() -> int:
     return ocr_worker_main()
 
 
+def _run_agent_hook() -> int:
+    from .hook_runtime import main
+    return main()
+
+
 def _main() -> int:
+    if "--agent-hook" in sys.argv:
+        return _run_agent_hook()
     # 卸载清理走无 GUI 路径：不导入 pet.app（避免拉起 QApplication/事件循环），
     # 并与两个冻结入口共用 pet.uninstall_cleanup.main——逐步诊断输出、配置目录留痕、
     # 退出码语义只有那一处实现，入口侧不再自己复刻一份。

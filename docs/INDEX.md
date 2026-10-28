@@ -62,7 +62,7 @@
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
 | [`WINDOW_PY_SPLIT_GUIDE.md`](WINDOW_PY_SPLIT_GUIDE.md) | `pet/window.py`（`PetWindow`）的演进指南：功能驱动的拆分流程、控制器边界与架构红线。 | **给 `window.py` 加功能前必读**（README 口径）；凡新功能预计超过约 100 行、或需改 3 个以上同域方法、或行数预算告警时，先按本文拆控制器。现行行数预算的实测值与「为什么这次只能校准而不是拆分」见 [`PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md`](PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md)。 |
-| [`QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md`](QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md) | Qt 生命周期与全量套件稳定性收口记录：Windows/offscreen 下原生崩溃（0xC0000005 / 0xC0000374）的归属分析与 QObject owner 清理方案。 | 全量套件出现随机原生崩溃、或改动 `PetWindow.closeEvent()`、`PetSpeechBubble` owner 清理、菜单执行 seam、后台资源 teardown 时。 |
+| [`QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md`](QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md) | Qt 生命周期与全量套件稳定性收口记录：Windows/offscreen 下原生崩溃（0xC0000005 / 0xC0000374）的归属分析与 QObject owner 清理方案。 | 经典聊天窗延迟贴底销毁另见 [`PR-REPORT-CHAT-SCROLL-LIFECYCLE-2026-10-28.md`](PR-REPORT-CHAT-SCROLL-LIFECYCLE-2026-10-28.md)；全量套件出现随机原生崩溃、或改动 `PetWindow.closeEvent()`、`PetSpeechBubble` owner 清理、菜单执行 seam、后台资源 teardown 时。 |
 | [`ISLAND-SEGMENTS-EXTENSION.md`](ISLAND-SEGMENTS-EXTENSION.md) | 灵动岛**第三方段扩展契约**（P3 Slice F1 契约 + F2 宿主链）：声明字段表、四态与宽度纪律、120px 超宽降级规则、恶意/失控段护栏（格式化异常 → error 态、巨型串在度量前截断、多行压平、原因限长）、一个可跑的完整示例，以及**组件安装面**（可信目录 + 标准库 JSON 清单 + 仅运行期导入 provider）、采样与生命周期纪律（一条有界线程、0 订阅零调用、慢读熔断不冒充杀线程、退订/代次拒收迟到结果）、准入口径（内置 ∪ 声明清单；停用 ≠ 暂缺 ≠ 卸载）与宿主接线现状表（2026-10-10：`gpu` 段真实读数、第三方段整条胶囊/卡片/折叠/卸载链已接通）。 | **给灵动岛加第三方（外部）指标段、安装组件、或改动 `pet/island_segments.py` 的公开注册面（`register_segment` / `SegmentDeclaration` / `judge_oversize` / `oversize_segment_ids`）、`pet/island_extension_host.py` 的清单与采样器之前必读**；判断"超长段为什么被先折""第三方段为什么拿不到 QPainter""格式化函数炸了会怎样""组件装了为什么没上岛""停用与卸载差在哪""一个组件慢读会不会卡住界面"时也看它（§八 有状态表、清单格式与准入口径）。 |
 
 > 与 ffmpeg 派生、预热调度、Windows 关机/注销路径相关的权威档案是 issue #111（见下方「专项 issue 档案与事故复盘」分组），因为改这几处代码同时牵涉渲染生命周期与会话拆除时序。
@@ -144,6 +144,12 @@
 ---
 
 ## PR 报告存档
+
+- [聊天窗延迟滚动生命周期与窄屏测试边界（2026-10-28）](PR-REPORT-CHAT-SCROLL-LIFECYCLE-2026-10-28.md)：窗口持有延迟贴底计时器、关窗取消回调与字体折叠边界回归；维护聊天滚动或销毁路径时阅读。
+
+- [X11 工作区、跨屏气泡与重绘（2026-10-27）](PR-REPORT-X11-DESKTOP-2026-10-27.md)：工作区提示、全局气泡锚点与透明脏区验证；修改这些 X11 路径时阅读。
+
+- [Codex 联动与结构化气泡（2026-10-27）](PR-REPORT-CODEX-LINK-2026-10-27.md)：安装/关闭插件、文件通知、进展气泡与门控验证；维护 Codex 联动时阅读。
 
 - [跨屏过缝通行与落点吸附（2026-10-22）](PR-REPORT-CROSS-SCREEN-CORRIDOR-2026-10-22.md)：跨屏移动语义从 band 收窄改为「通行域=并集（含空洞）、静止域=各屏、四处收口吸附」，含侧墙低速截止、两轮 k3 盲审记录与先红后绿证据；改跨屏拖拽/抛掷物理、写 `_clamp_rects` 多矩形域、动 `snap_to_nearest_screen` 或排查「宠物停在看不见的地方」时必读。**先例**：① 语义改动要逐个收口点查吸附（落地/原地放下/落岛/弹弓取消，漏一个就是把宠钉死在空洞）；② `__init__` 里 set_pos 先于字段初始化，钳制条件必须 getattr 兜底；③ 覆盖判定用并集（QRegion）而非中心点，否则半身悬空漏判。
 - [macOS 多屏与 Dock 修复（2026-10-21）](PR-REPORT-MACOS-DESKTOP-2026-10-21.md)：Mac 双屏每屏一窗、设置进程启动即 Accessory，含用户副屏可见及单 Dock 图标确认、75 秒焦点观察、构建安装与测试证据；改 Mac 拓扑或 Dock 启动策略时查阅；多个 Spaces 的后续修复见下一项。

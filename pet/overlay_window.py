@@ -87,6 +87,8 @@ class OverlayWindow(QWidget):
                             | Qt.WindowType.WindowDoesNotAcceptFocus
                             | _mac_no_window_shadow_flag())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        from .platform_linux import keep_on_all_desktops
+        keep_on_all_desktops(self)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         # macOS：显示本窗不许抢走前台焦点（issue #314：窗口操作伴随 App 激活，
         # 用户正在输入的窗口被踢失活）。Windows 已有 WS_EX_NOACTIVATE 等价物，
@@ -743,6 +745,11 @@ class OverlayWindow(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         region = event.region()
+        # Replace old backing-store pixels with transparent alpha before redraw.
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        for rect in region:
+            painter.fillRect(rect, Qt.GlobalColor.transparent)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         for sprite in self.sprites:  # 列表序 = z-order：先画底层，尾部最上
             if not getattr(sprite, "visible", True):
                 continue  # M14：隐藏 sprite 跳过绘制（脏区域照旧被覆盖擦除）

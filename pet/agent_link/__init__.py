@@ -37,7 +37,7 @@ from stat import S_ISREG
 from typing import Any, Callable
 from urllib.parse import unquote
 
-from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from . import cost as agent_cost_mod
@@ -1750,6 +1750,8 @@ class BaseAgentMonitor(QObject):
         # 摄入事件，账本没有任何存在理由；下次启动空账本等价于全新摄入。
         self._event_ledger.clear()
         self._worker_stop.set()
+        if hasattr(self, "_worker_wake"):
+            self._worker_wake.set()
 
     def finish_stop(self, deadline: float | None = None) -> None:
         worker = self._worker
@@ -1810,6 +1812,8 @@ class BaseAgentMonitor(QObject):
             if getattr(mon, "_destroyed_conn", None) is not None:
                 mon._destroyed_conn = None
             mon._worker_stop.set()
+            if hasattr(mon, "_worker_wake"):
+                mon._worker_wake.set()
             mon._emit_gen = -1
             mon._running = False
             mon._paused = False
@@ -3113,6 +3117,69 @@ class OpenCodeMonitor(BaseAgentMonitor):
                 self._emit_tool(tool, emit_gen)
 
 
+class SnapshotAgentMonitor(BaseAgentMonitor):
+    """Read-only session snapshots; reuse the existing worker/Qt lifecycle."""
+
+    snapshot_event = Signal(str, object, int)
+    watch_paths = Signal(object, int)
+
+    def __init__(self, agent_key, config_dir, events_path, parent=None):
+        super().__init__(agent_key, config_dir, parent)
+        from ..agent_snapshot import SnapshotReader
+        from ..codex_install import codex_home
+        self._snapshot_path = events_path
+        self._codex_home = codex_home() if agent_key == 'codex' else None
+        self._reader = SnapshotReader(events_path, codex_home=self._codex_home)
+        self._mkdir_on_start = False
+        from ..agent_file_watch import AgentFileWatch
+        self._worker_wake = threading.Event()
+        self._file_watch = AgentFileWatch(self._worker_wake, self)
+        self.watch_paths.connect(self._file_watch.update_paths, Qt.ConnectionType.QueuedConnection)
+
+    def start(self):
+        if not super().start():
+            return False
+        self._file_watch.generation = self._emit_gen
+        self._file_watch.update_paths([self._snapshot_path], self._emit_gen)
+        self._worker_wake.set()
+        return True
+
+    def begin_stop(self):
+        self._file_watch.stop()
+        super().begin_stop()
+
+    def resume(self):
+        super().resume()
+        self._worker_wake.set()
+
+    def _work_loop(self, gen):
+        self._worker_started()
+        while not self._worker_stop.is_set():
+            # Wake only for file events or an existing session's expiry deadline.
+            self._worker_wake.wait(None if self._paused else self._reader.expiry_delay())
+            self._worker_wake.clear()
+            if self._worker_stop.is_set():
+                break
+            if not self._paused:
+                try:
+                    self._poll(gen)
+                except Exception:
+                    log.debug("Snapshot reader failed", exc_info=True)
+
+    def _worker_started(self):
+        from ..agent_snapshot import SnapshotReader
+        self._reader = SnapshotReader(self._snapshot_path, codex_home=self._codex_home)
+
+    def _poll(self, gen=None):
+        summary = self._reader.read()
+        generation = self._emit_gen if gen is None else gen
+        self.watch_paths.emit(self._reader.watch_paths(), generation)
+        if self._reader.has_backlog():
+            self._worker_wake.set()
+        if summary is not None:
+            self._emit(self.snapshot_event, (self.agent_key, summary, self._emit_gen if gen is None else gen))
+
+
 class CustomAgentMonitor(BaseAgentMonitor):
     """自定义联动 Agent 监视器（agent_link.custom_agents 配置驱动）。"""
 
@@ -3205,7 +3272,7 @@ class AgentLinkManager(QObject):
     dsh_user_message = Signal(str, str)
 
     # 联动气泡展示名
-    AGENT_NAMES = {"dsh": "DSH", "claude": "Claude Code", "cursor": "Cursor", "opencode": "OpenCode"}
+    AGENT_NAMES = {"dsh": "DSH", "claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "opencode": "OpenCode"}
     # 过程汇报：工具名 → 用户可读文案（不展示原始命令/路径）
     TOOL_LABELS = {
         "read": "正在读文件", "write": "正在写文件", "edit": "正在改代码",
@@ -3352,6 +3419,10 @@ class AgentLinkManager(QObject):
             "cursor": CursorMonitor(self.config_dir, self),
             "opencode": OpenCodeMonitor(self.config_dir, self),
             }
+        from ..codex_install import state_path
+        self.monitors['codex'] = SnapshotAgentMonitor(
+            'codex', self.config_dir, self.cfg.get('agent_link', {}).get('codex_state_path') or str(state_path()), self)
+        self.monitors['codex'].snapshot_event.connect(self._on_session_snapshot)
         # 自定义联动 Agent：配置驱动的只读监视器（key/path 已在 config 清洗时
         # 保证合法唯一）；显示名合并进实例级 agent_names，类级 AGENT_NAMES
         # 保持仅内置（modern_settings_dialog 等按内置枚举处不受影响）。
@@ -3361,9 +3432,12 @@ class AgentLinkManager(QObject):
             key = str(item.get("key") or "")
             if not key or key in self.monitors:
                 continue
-            self.monitors[key] = CustomAgentMonitor(
+            monitor_type = SnapshotAgentMonitor if item.get("protocol") == "session-snapshot-v1" else CustomAgentMonitor
+            self.monitors[key] = monitor_type(
                 key, self.config_dir, str(item.get("path") or ""), self,
             )
+            if isinstance(self.monitors[key], SnapshotAgentMonitor):
+                self.monitors[key].snapshot_event.connect(self._on_session_snapshot)
             self.agent_names[key] = str(item.get("name") or key)
 
         # 阻塞交互兜底清理：会话/turn 结束或 agent 停止时，任何 pending 的
@@ -3421,6 +3495,125 @@ class AgentLinkManager(QObject):
             self.win.set_link_next_provider(self._next_busy_anim)
 
         self.apply_config()
+
+    def _on_session_snapshot(self, agent_key, summary, gen):
+        from ..codex_transcript import short_text
+
+        if not self._gen_current(agent_key, gen):
+            return
+        previous = getattr(self, '_snapshot_status', {}).get(agent_key, {})
+        if not hasattr(self, '_snapshot_status'):
+            self._snapshot_status = {}
+        self._snapshot_status[agent_key] = summary
+        self._cancel_done_check(agent_key)
+        # These snapshots distinguish waiting/interruption from successful work.
+        # Never enter the legacy busy->attention/idle completion inference path.
+        busy = summary['busy'] > 0
+        if busy:
+            state = 'thinking' if summary['thinking'] == summary['busy'] else 'working'
+            self._on_agent_state(agent_key, state, gen)
+            if summary['tool'] and not summary.get('detail'):
+                self._on_agent_activity(agent_key, summary['tool'], gen)
+        else:
+            self._last_raw[agent_key] = 'idle'
+            self._last_applied.pop(agent_key, None)
+            self._cost.abort(agent_key)
+            if not self.any_busy() and hasattr(self.win, 'request_link_idle'):
+                self.win.request_link_idle()
+        name = self.agent_names.get(agent_key, agent_key)
+        waiting_changed = (summary['waiting'] != previous.get('waiting') or
+                           summary.get('detail', {}).get('key') != previous.get('detail', {}).get('key'))
+        if summary['waiting'] and waiting_changed:
+            anim = self._snapshot_anim(agent_key, 'waiting')
+            if anim and getattr(self.win, 'isVisible', lambda: False)() and hasattr(self.win, 'request_link_anim'):
+                self.win.request_link_anim(anim)
+        if summary['waiting']:
+            if waiting_changed:
+                title = short_text(summary.get('detail', {}).get('title', name), 12)
+                self._show_link_bubble(f"{title}\n{name} 有 {summary['waiting']} 个回合等待处理，请回到原窗口查看。", important=True,
+                                       agent_content=dict(title=summary.get('detail', {}).get('title', name),
+                                                          status='等待处理',
+                                                          body='请回到原窗口确认权限或回答问题。'))
+        elif summary['unknown'] and summary['unknown'] != previous.get('unknown'):
+            self._show_link_bubble(f"{name} 的联动状态暂不可用，请到原窗口确认。", important=False)
+        elif summary.get('final'):
+            final = summary['final']
+            self._show_link_bubble(
+                f"{short_text(final['title'], 12)} · 回复结束\n{short_text(final['text'], 40)}",
+                important=True, agent_content=dict(title=final["title"], status="回复结束",
+                                                   body=final["text"], final=True,
+                                                   owner=(agent_key, gen, final.get("key"))))
+        elif summary['ended']:
+            if 'interrupted' in summary['ended']:
+                text = f"{name} 的回合已中断。"
+            elif 'stopped' in summary['ended']:
+                text = f"{name} 的回合已停止，请查看结果。"
+            else:
+                text = f"{name} 的会话已关闭。"
+            self._show_link_bubble(text, important=True)
+        elif summary.get('opened') and not summary['waiting']:
+            self._show_link_bubble(f"{short_text(summary['opened'][-1], 12)}\nCodex 会话已就绪。", important=False,
+                                   agent_content=dict(title=summary['opened'][-1], status='已就绪', body=''))
+        elif summary.get('detail') and not summary['waiting']:
+            self._schedule_snapshot_detail(agent_key, gen)
+
+    def _schedule_snapshot_detail(self, agent_key, gen):
+        """Coalesce progress without allowing late timers to revive an old turn."""
+        if not hasattr(self, '_snapshot_bubble_pending'):
+            self._snapshot_bubble_pending = set()
+        if (agent_key, gen) in self._snapshot_bubble_pending:
+            return
+        self._snapshot_bubble_pending.add((agent_key, gen))
+        QTimer.singleShot(80, self, lambda: self._show_snapshot_detail(agent_key, gen))
+
+    def _show_snapshot_detail(self, agent_key, gen):
+        self._snapshot_bubble_pending.discard((agent_key, gen))
+        if not self._gen_current(agent_key, gen):
+            return
+        summary = self._snapshot_status.get(agent_key, {})
+        detail = summary.get('detail')
+        if not detail or summary.get('waiting') or summary.get('ended'):
+            return
+        if not hasattr(self, '_snapshot_bubble_last'):
+            self._snapshot_bubble_last = {}
+        now = self._clock()
+        last, stamp = self._snapshot_bubble_last.get(agent_key, (None, now - .5))
+        if last == detail:
+            return
+        if now - stamp < .5:
+            self._snapshot_bubble_pending.add((agent_key, gen))
+            QTimer.singleShot(max(1, int((.5 - (now - stamp)) * 1000)), self,
+                              lambda: self._show_snapshot_detail(agent_key, gen))
+            return
+        from ..codex_transcript import short_text
+
+        activity = detail.get('activity') or ('思考中' if detail['state'] == 'thinking' else '调用工具')
+        # Transcript commentary persists across hook activity changes. Track
+        # delivered text per turn, independently of the status and foreground
+        # session, so switching tools cannot replay an old reply.
+        if not hasattr(self, '_snapshot_bubble_text'):
+            self._snapshot_bubble_text = {}
+        owner = (agent_key, gen, detail['key'])
+        body = detail['text']
+        if self._snapshot_bubble_text.get(owner) == body:
+            body = ''
+        # Keep the status visible; only truncate presentation, not session data.
+        text = f"{short_text(detail['title'], 12)} · {activity}"
+        if body:
+            text += f"\n{short_text(body, 40)}"
+        shown = self._show_link_bubble(text, important=False, agent_content=dict(
+            title=detail['title'], status=activity, body=body, final=False,
+            owner=owner))
+        if shown:
+            self._snapshot_bubble_last[agent_key] = (dict(detail), now)
+            if body:
+                self._snapshot_bubble_text.pop(owner, None)
+                self._snapshot_bubble_text[owner] = body
+                while len(self._snapshot_bubble_text) > 128:
+                    self._snapshot_bubble_text.pop(next(iter(self._snapshot_bubble_text)))
+        elif (agent_key, gen) not in self._snapshot_bubble_pending:
+            self._snapshot_bubble_pending.add((agent_key, gen))
+            QTimer.singleShot(200, self, lambda: self._show_snapshot_detail(agent_key, gen))
 
     def _on_normalized_event(self, event) -> None:
         """Consume semantic events for streak tracking and interaction cleanup."""
@@ -3536,6 +3729,24 @@ class AgentLinkManager(QObject):
             return
         if token is not None:
             self._install_pending.pop(agent_key, None)
+        if agent_key == 'codex':
+            desired = getattr(self, '_codex_install_desired', False)
+            agent_cfg = dict(self.cfg.get('agent_link', {}))
+            agent_cfg['codex'] = bool(desired and ok)
+            if desired and ok:
+                from ..codex_install import state_path
+                # Menu installation owns the local channel; retire the old manual path.
+                agent_cfg.pop('codex_state_path', None)
+                monitor = self.monitors['codex']
+                if monitor._running:
+                    monitor.stop()
+                monitor._snapshot_path = str(state_path())
+            self.cfg.set('agent_link', agent_cfg)
+            self.cfg.save()
+            self.apply_config()
+            if hasattr(self.win, 'show_bubble'):
+                self.win.show_bubble(msg if ok else f'Codex 联动未就绪：{msg}', duration_ms=8000)
+            return
         if ok:
             ag_cfg = dict(self.cfg.get("agent_link", {}))
             ag_cfg[agent_key] = True
@@ -3556,12 +3767,61 @@ class AgentLinkManager(QObject):
         hooks/桥接插件是全局状态，别的实例还在用就不能卸。"""
         return other_instances_use_agent(self.cfg, agent_key)
 
+    def _change_codex_install(self, enabled):
+        if 'codex' in self._install_pending:
+            return False
+        self._install_token += 1
+        token = self._install_token
+        self._install_pending['codex'] = token
+        self._codex_install_desired = enabled
+        if not enabled:
+            cfg = dict(self.cfg.get('agent_link', {}))
+            cfg['codex'] = False
+            self.cfg.set('agent_link', cfg)
+            self.cfg.save()
+            self.apply_config()
+        if hasattr(self.win, 'show_bubble'):
+            self.win.show_bubble('正在安装 Codex 联动插件…' if enabled else '正在卸载 Codex 联动插件…', duration_ms=4000)
+        def work():
+            try:
+                from ..codex_install import install_bridge, remove_bridge
+                ok, message = (install_bridge if enabled else remove_bridge)(cancel=self._worker_cancel)
+                if not self._shutdown:
+                    self.install_finished.emit('codex', ok, message, token)
+            except Exception as exc:
+                if not self._shutdown:
+                    try:
+                        self.install_finished.emit('codex', False, str(exc), token)
+                    except RuntimeError:
+                        pass
+            finally:
+                with self._respond_threads_lock:
+                    self._respond_threads.discard(threading.current_thread())
+        worker = threading.Thread(target=work, daemon=True, name='codex-plugin-install')
+        with self._respond_threads_lock:
+            self._respond_threads.add(worker)
+        worker.start()
+        return False  # QAction stays unchecked until the queued success callback.
+
     def set_enabled(self, agent_key: str, enabled: bool) -> bool:
         """开启或关闭指定 Agent 监视器（必要时弹出确认框）。
 
         返回 False 表示未生效（用户拒绝授权 / hooks 安装失败），调用方应回滚 UI 勾选态。"""
         if agent_key not in self.monitors:
             return False
+
+        if agent_key == 'codex':
+            if not enabled:
+                self._last_raw.pop('codex', None)
+                self._last_applied.pop('codex', None)
+                getattr(self, '_snapshot_status', {}).pop('codex', None)
+                self._cancel_done_check('codex')
+                self._cost.abort('codex')
+                if not self.any_busy() and hasattr(self.win, 'request_link_idle'):
+                    self.win.request_link_idle()
+            if enabled or not self._other_instances_enabled('codex'):
+                return self._change_codex_install(bool(enabled))
+            # Another pet still uses the global plugin: only stop this reader.
 
         if enabled:
             # 针对需要注入 hooks 的 Agent 弹窗征求用户同意
@@ -4306,10 +4566,11 @@ class AgentLinkManager(QObject):
             # busy 动作池轮换（写代码/吃Token 为主，每第 3 次插播短摸鱼），
             # 经 request_link_anim 平滑衔接：正在播的一次性动作不被打断。
             # 隐藏中不切动画（零功耗语义），气泡仍经改道上岛。
-            anim = self._next_link_anim_rotation()
+            anim = self._snapshot_anim(agent_key, state) or self._next_link_anim_rotation()
             if anim and not hidden and hasattr(self.win, "request_link_anim"):
                 self.win.request_link_anim(anim)
-            self._maybe_notify_start(agent_key, prev_raw, state)
+            if not getattr(self, '_snapshot_status', {}).get(agent_key, {}).get('detail'):
+                self._maybe_notify_start(agent_key, prev_raw, state)
         elif state == "attention":
             # busy 后的 attention（如 Claude Stop=回合结束）由完成确认流程接管，
             # 避免「需要看一眼」和「完成通知」双气泡；独立出现的才立即提醒
@@ -4335,6 +4596,17 @@ class AgentLinkManager(QObject):
     _LINK_BREAK = ("轻快记录", "漂浮踏步")
     _LINK_MAIN_KEYWORDS = ("代码", "工作", "写", "打字", "敲")
     _LINK_BREAK_KEYWORDS = ("记录", "踏步", "伸懒腰")
+
+    def _snapshot_anim(self, agent_key, state):
+        if state not in ('thinking', 'waiting') or agent_key not in getattr(self, '_snapshot_status', {}):
+            return None
+        acts = list(getattr(self.win, 'cats', {}).get('acts', []) or [])
+        keywords = ('思考',) if state == 'thinking' else ('等待', '张望', '挠头', '惊醒')
+        matches = [name for name in acts if any(word in name for word in keywords)]
+        if matches:
+            self._link_seq += 1
+            return matches[(self._link_seq - 1) % len(matches)]
+        return None
 
     def any_busy(self) -> bool:
         """Return whether an enabled monitor currently reports active work.
@@ -4377,6 +4649,12 @@ class AgentLinkManager(QObject):
         """window 动画结束回调用：仍有 Agent 在忙 → 下一个联动动作；否则 None。
         全员空闲时重置轮换计数——下一个任务从「写代码」重新开始。"""
         if any(s in self._BUSY_STATES for s in self._last_raw.values()):
+            busy = [(key, state) for key, state in self._last_raw.items() if state in self._BUSY_STATES]
+            if all(state == 'thinking' for _, state in busy):
+                for key, state in busy:
+                    anim = self._snapshot_anim(key, state)
+                    if anim:
+                        return anim
             return self._next_link_anim_rotation()
         self._link_seq = 0
         return None
@@ -5650,13 +5928,22 @@ class AgentLinkManager(QObject):
         play_sound(path, volume=float(agent_cfg.get("sound_volume", 0.65)))
 
     def _show_link_bubble(self, text: str, *, important: bool, duration_ms: int = 4500,
-                          _retried: int = 0) -> None:
+                          _retried: int = 0, agent_content: dict | None = None) -> bool:
         """联动气泡：提醒消息队列非空时一律让路（审批/问题/失败等常驻提醒优先）。
 
         无提醒队列时：普通气泡直接让路丢弃；重要气泡每 2.5s 重试至多 4 次
         （约 10s 窗口），仍被占才放弃——主动识屏长答复可能占位 15-20s。"""
+        if getattr(self.win, '_bubble_suppressed', False):
+            return False
+        owner = agent_content.get('owner') if agent_content else None
+        if owner:
+            if not self._gen_current(owner[0], owner[1]):
+                return False
+            current = getattr(self, '_snapshot_status', {}).get(owner[0], {}).get('detail')
+            if agent_content.get('final') and current and current.get('key') != owner[2]:
+                return False
         if not hasattr(self.win, "show_bubble"):
-            return
+            return False
         # 桌宠隐藏时 show_bubble/show_alert 会静默丢弃：改道灵动岛反馈面
         # （AppShell 经 hidden_bubble_redirect 注入；无注入/岛不可用维持丢弃）。
         # 审批/问题等常驻提示气泡不经本函数（走 show_alert 队列），仍需桌宠可见。
@@ -5665,27 +5952,46 @@ class AgentLinkManager(QObject):
             from .. import window_alerts as _window_alerts
 
             if _window_alerts.redirect_hidden_bubble(self.win, text, duration_ms=duration_ms):
-                return
+                return True
+            if agent_content:
+                return False
         # 提醒消息队列激活：任何其他弹窗（含重要气泡）都不覆盖提醒
         if getattr(self.win, "_alert_current", None) is not None or \
                 getattr(self.win, "_alert_queue", None):
-            return
-        if not important and getattr(self.win, "_sticky_bubble_active", False):
+            return False
+        if (not important or agent_content) and getattr(self.win, "_sticky_bubble_active", False):
             # 兼容旧路径：审批等一直挂着的气泡优先
-            return
+            return False
         busy_until = getattr(self.win, "_bubble_busy_until", 0.0)
         # window.hold_bubble 以 time.monotonic() 写入 _bubble_busy_until，这里必须
         # 用同一时钟域比较——曾误用 time.time()（epoch 秒），在真实桌宠上恒判
         # "未被占用"，让位/重试门禁失效（普通气泡顶掉识屏占位、重要气泡不排队
         # 重试直接覆盖）。同步修正于 PR57 合并后审计（F1）。
-        if time.monotonic() < busy_until:
+        owned = owner and getattr(self, '_link_bubble_owner', None) == (owner, busy_until)
+        bubble = getattr(self.win, '_speech_bubble', None)
+        if owned and bubble is not None:
+            frame = getattr(bubble, '_agent_data', None)
+            owned = frame is not None and frame is getattr(self, '_link_bubble_frame', None)
+        if time.monotonic() < busy_until and not owned:
             if not important or _retried >= 4:
-                return
+                return False
             QTimer.singleShot(2500, self,
                               lambda t=text, n=_retried: self._show_link_bubble(
-                                  t, important=True, _retried=n + 1))
-            return
-        self.win.show_bubble(text, duration_ms=duration_ms)
+                                  t, important=True, duration_ms=duration_ms, _retried=n + 1,
+                                  agent_content=agent_content))
+            return False
+        if agent_content:
+            shown = self.win.show_bubble(
+                agent_content['body'], duration_ms=duration_ms,
+                agent_title=agent_content['title'], agent_status=agent_content['status'],
+                agent_final=agent_content.get('final', False))
+        else:
+            shown = self.win.show_bubble(text, duration_ms=duration_ms)
+        if shown is False:
+            return False
+        self._link_bubble_owner = (owner, getattr(self.win, '_bubble_busy_until', 0.0))
+        self._link_bubble_frame = getattr(bubble, '_agent_data', None)
+        return True
 
     # 阻塞交互兜底清理（approval / question / cordis 共用）。
     # 审批/问题等待期间 Agent 不会走到 turn/end（DSH 仍处于 running）；

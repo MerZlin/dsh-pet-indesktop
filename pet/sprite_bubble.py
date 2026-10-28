@@ -92,7 +92,9 @@ class SpriteBubbleFollower:
         self._on_sprite_moved(sprite)
 
     def anchor(self) -> QRect:
-        return sprite_anchor_rect_global(self._sprite, self._origin)
+        origin = (self._overlay.mapToGlobal(QPoint(0, 0))
+                  if hasattr(self._overlay, "mapToGlobal") else self._origin)
+        return sprite_anchor_rect_global(self._sprite, origin)
 
     def _on_sprite_moved(self, sprite) -> None:
         if self._closed or self.bubble is None:
@@ -205,7 +207,8 @@ class SpriteBubbleFollower:
 
     def show(self, text: str, duration_ms: int = 3200, *, subtitle: str = "",
              sticky: bool = False, buttons: list | None = None,
-             title_first: bool = False, width_locked: bool = False) -> bool:
+             title_first: bool = False, width_locked: bool = False,
+             agent_title: str = "", agent_status: str = "", agent_final: bool = False) -> bool:
         """按 ``PetWindow.show_bubble`` 的形参面呈现一句气泡。
 
         ``sticky`` / ``buttons`` 原样透传给 ``PetSpeechBubble.show_text``——
@@ -213,8 +216,12 @@ class SpriteBubbleFollower:
         切换），本层只补锚点与降级。返回是否真的展示。
         """
         text = str(text or "").strip()
-        if self.bubble is None or not text:
+        if self.bubble is None or (not text and not agent_title):
             return False
+        agent_options = (
+            dict(agent_title=agent_title, agent_status=agent_status, agent_final=agent_final)
+            if agent_title else {}
+        )
         try:
             self.bubble.show_text(
                 text, self.anchor(), duration_ms,
@@ -223,7 +230,7 @@ class SpriteBubbleFollower:
                 buttons=list(buttons) if buttons else None,
                 title_first=bool(title_first),
                 width_locked=bool(width_locked),
-                pet_scale=getattr(self._sprite, "scale", None))
+                pet_scale=getattr(self._sprite, "scale", None), **agent_options)
             return True
         except Exception:
             logger.debug("overlay: 气泡播放失败", exc_info=True)
