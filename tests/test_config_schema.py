@@ -116,6 +116,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "music_browser_media_enabled",
         "foobar_lyrics_enabled",
         "foobar_title_format",
+        "lxmusic_enabled",
         "music_lyric_cache_limit",
         "music_lyric_enabled",
         "music_lyric_lead_seconds",

@@ -107,6 +107,7 @@ _ROW_DEFAULT_PATHS: dict[str, str | tuple[str, float]] = {
     "music_lyric": "music_lyric_enabled",
     "music_browser_media": "music_browser_media_enabled",
     "foobar_lyrics": "foobar_lyrics_enabled",
+    "lxmusic": "lxmusic_enabled",
     # 常规
     "autostart": "autostart_wanted",
     "stream_capture": "stream_capture_mode",

@@ -304,6 +304,7 @@ FEATURES: dict[str, FeatureSpec] = {
             "music_browser_media_enabled",
             "foobar_lyrics_enabled",
             "foobar_title_format",
+            "lxmusic_enabled",
             "music_player_paths",
         ),
         needs_network=True,  # 取词三源并发（pet/music_lyric.py:772-775）

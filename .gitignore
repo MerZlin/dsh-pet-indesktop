@@ -4,6 +4,16 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 
+# 本地虚拟环境（源码运行/打包用，不入库）
+.venv/
+venv/
+# 源码运行时用来复用打包版数据目录的变体标识（本地生成，不入库）
+/build_variant.py
+# 源码运行的本地覆盖目录（变体标识等，不入库）
+.local/
+# 本机自用的源码版启动器（硬编码 .venv 路径，不入库；仓库自带 run.bat）
+run-pet*.bat
+
 # 运行时产物
 tmp_appdata/
 tests/_tmp_*/

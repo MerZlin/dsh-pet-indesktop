@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from . import foobar as foobar_playing
+from . import lxmusic as lxmusic_playing
 
 # 判定"不上报进度"的阈值：末位时长小于该值视为无效时间轴。
 _MIN_VALID_DURATION = 0.01
@@ -447,13 +448,40 @@ def _read_foobar_playback(allow_foobar: bool, title_format: str) -> Playback | N
     )
 
 
+def _read_lx_playback(allow_lxmusic: bool = True) -> Playback | None:
+    """洛雪音乐（LX Music）优先源：走它自己的开放 API 拿真实进度。
+
+    与 foobar 的补充源不同，这里**优先于 SMTC**：LX 在系统媒体控制里报
+    Unknown、且经常不给时间轴，歌词只能按"检测到切歌的时刻"估算；而它的
+    ``/status`` 直接给 ``progress`` 秒数，与播放器内部状态同源。
+
+    ``allow_lxmusic=False``（设置页「洛雪音乐歌词」关闭）时整条源不参与，行为
+    与引入本能力之前逐位一致。
+
+    没在播（暂停/停止）、开放 API 没开、端口不通时一律返回 ``None``——链路
+    照旧走 SMTC，不改变原有任何行为。异常绝不外抛（歌词是锦上添花）。
+    """
+    if not allow_lxmusic:
+        return None
+    try:
+        return lxmusic_playing.read_playback()
+    except Exception:  # noqa: BLE001 - 第三方接口异常不得影响采样
+        return None
+
+
 async def _read_async(
     tracked_app_id: str | None = None,
     *,
     allow_browser: bool = True,
     allow_foobar: bool = False,
     foobar_title_format: str = "",
+    allow_lxmusic: bool = True,
 ) -> Playback | None:
+    # 洛雪优先：拿到真实进度就不必再问 SMTC（见 _read_lx_playback）。
+    # 放在 WinRT 之前，没装 winrt 的机器上这项能力也照常可用。
+    lx_playback = _read_lx_playback(allow_lxmusic)
+    if lx_playback is not None:
+        return lx_playback
     manager_cls = _import_winrt()
     if manager_cls is None:
         # 没有 WinRT（非 Windows / 未装可选依赖）：SMTC 无从查起。foobar 的窗口
@@ -667,6 +695,7 @@ def get_now_playing(
     allow_browser: bool = True,
     allow_foobar: bool = False,
     foobar_title_format: str = "",
+    allow_lxmusic: bool = True,
 ) -> Playback | None:
     """返回当前播放信息；无播放器/无会话/任何异常时返回 ``None``。
 
@@ -683,6 +712,9 @@ def get_now_playing(
     ``pet/foobar_playing.py``）。``foobar_title_format`` 是用户在 foobar 里配置的
     窗口标题格式串，空串 = 自动（不猜歌名/歌手顺序）。
 
+    ``allow_lxmusic=False``（设置页「洛雪音乐歌词」关闭）时，不读洛雪音乐的本地
+    开放 API，直接走系统媒体控制那条路（见 ``pet/music/lxmusic.py``）。
+
     本函数绝不抛异常——歌词只是锦上添花，不能因为第三方接口异常影响桌宠本体。
     """
     if sys.platform != "win32":
@@ -694,6 +726,7 @@ def get_now_playing(
                 allow_browser=allow_browser,
                 allow_foobar=allow_foobar,
                 foobar_title_format=foobar_title_format,
+                allow_lxmusic=allow_lxmusic,
             )
         )
     except Exception:

@@ -223,6 +223,46 @@ def foobar_lyrics_rows(dialog) -> list[SettingRow]:
     ]
 
 
+def lxmusic_supported() -> bool:
+    """「洛雪音乐歌词」是否在本平台可用——读它桌面版自带的本地服务（HTTP 回环）。
+
+    接口本身跨平台，但洛雪桌面版的分发以 Windows 为主；与相邻两个来源开关同规，
+    只在 Windows 建控件与设置行，避免出现"控件/行只在部分平台"的不对称。
+    """
+    return sys.platform == "win32"
+
+
+def lxmusic_rows(dialog) -> list[SettingRow]:
+    """「洛雪音乐歌词」设置行（**仅 Windows**，与 browser_media_rows 同规）。
+
+    文案里要如实写清三件事，否则用户会以为是"功能坏了"：
+
+    1. 需要先在洛雪里打开「开放服务」开关（设置 → 其他），默认端口 23330；
+    2. 它比系统媒体控制**更准**（洛雪在系统媒体接口里常不报时间轴，歌词只能按
+       检测到切歌的时刻估算，快进/中途起播会错位）；
+    3. 关掉或接口没开时**自动回落**到原来的系统媒体控制链路，不报错。
+
+    文案纪律（settings 文案规范）：主视线里不出现缩写黑话，所以这里不写产品
+    英文名、也不写接口缩写，只写用户看得懂的说法。
+    """
+    check = getattr(dialog, "lxmusic_check", None)
+    if check is None or not lxmusic_supported():
+        return []
+    # 进程级歌词源开关（不在 PER_SLOT_SETTING_KEYS，歌词源解析读主配置）：子宠页
+    # 保存由设置进程的配置路由直写主配置（pet/settings_slot_config.py）。
+    return [
+        SettingRow(
+            "lxmusic",
+            "洛雪音乐歌词",
+            "让桌宠直接读洛雪音乐自己上报的播放进度，歌词逐句对齐，快进或中途开始"
+            "播放也不会错位。使用前请在洛雪里打开「设置 → 其他 → 开放服务」"
+            "（默认端口 23330）。关闭本开关、洛雪没在播或接口没开时，会自动回落到"
+            "系统媒体控制那条路，不影响其它播放器。",
+            check,
+        )
+    ]
+
+
 #: 「音乐关联」里的高级折叠组名——播放器路径与标题格式是**故障恢复入口**（歌词对不上
 #: /换了安装位置时来改），组名必须直说，不藏。
 PLAYER_GROUP_TITLE = "播放器路径与标题格式（高级）"
@@ -260,6 +300,7 @@ def save_music_player_settings(dialog) -> None:
 _SOURCE_SWITCHES = (
     ("music_browser_media_check", "music_browser_media_enabled"),
     ("foobar_lyrics_check", "foobar_lyrics_enabled"),
+    ("lxmusic_check", "lxmusic_enabled"),
 )
 
 

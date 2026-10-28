@@ -682,6 +682,17 @@ class MusicLyricController(QObject):
         except Exception:
             return False
 
+    def _lxmusic_enabled(self) -> bool:
+        """「洛雪音乐歌词」开关（配置缺失/脏值一律按开处理）。
+
+        与 foobar 那个开关相反：洛雪的开放 API 给的是**真实进度**，读不到时
+        整条源自己返回 None、自动回落 SMTC，所以默认开不带来副作用。
+        """
+        try:
+            return bool(self.win.cfg.get("lxmusic_enabled", True))
+        except Exception:
+            return True
+
     def _foobar_title_format(self) -> str:
         """foobar 窗口标题格式串（配置缺失/非字符串一律按"自动"处理）。"""
         try:
@@ -734,6 +745,7 @@ class MusicLyricController(QObject):
                     allow_browser=self._browser_media_enabled(),
                     allow_foobar=self._foobar_lyrics_enabled(),
                     foobar_title_format=self._foobar_title_format(),
+                    allow_lxmusic=self._lxmusic_enabled(),
                 )
             except Exception:
                 playback = None

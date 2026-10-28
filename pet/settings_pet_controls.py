@@ -454,6 +454,13 @@ def build_pet_controls(host) -> None:
         )
         host.foobar_title_format_edit.setMaxLength(FOOBAR_FORMAT_MAX_CHARS)
         host.foobar_title_format_edit.setPlaceholderText("留空 = 自动")
+    # 洛雪音乐（LX Music）歌词：走它自己的本地开放 API（HTTP），不需要 Win32
+    # 枚举，但桌面版洛雪目前只有 Windows/macOS/Linux 客户端——仍按 Windows 建
+    # 控件，与相邻两个来源开关保持一致的外观与门禁口径。
+    host.lxmusic_check = None
+    if sys.platform == "win32":
+        host.lxmusic_check = ToggleSwitch(host)
+        host.lxmusic_check.setChecked(bool(host.config.get("lxmusic_enabled", True)))
     host.agent_cost_check = ToggleSwitch(host)
     host.agent_cost_check.setChecked(bool(host.config.get("agent_cost_enabled", False)))
     host.music_lyric_lead_spin = BrowserDoubleSpinBox(host)

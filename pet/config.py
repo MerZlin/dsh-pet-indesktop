@@ -1208,6 +1208,12 @@ class Config:
             # 主窗口标题当补充源。**默认关**：窗口标题分辨不出播放状态（foobar
             # 开着没在播时可能读到上一首），且只在 SMTC 没有在播会话时才生效。
             "foobar_lyrics_enabled": False,
+            # 洛雪音乐（LX Music）歌词：它自带本地开放 API（默认 127.0.0.1:23330，
+            # 设置 → 其他 → 开放 API 服务），直接给真实播放进度——比系统媒体控制
+            # 那条路准（LX 在 SMTC 里报 Unknown、且常不给时间轴）。
+            # **默认开**：接口没开/没在播时整条源自己返回 None，自动回落 SMTC，
+            # 不产生任何副作用；关掉它就完全走原来的链路。
+            "lxmusic_enabled": True,
             # foobar 窗口标题的 titleformat 串（「显示 → 默认用户界面 → 窗口标题」）。
             # 空 = 自动：不猜歌名/歌手顺序（见 pet/music_title.py）。出厂默认值随
             # 版本与主题变化，没有稳定契约，所以做成可配置而不是硬编码一份。
@@ -1569,6 +1575,7 @@ class Config:
             "music_browser_media_enabled",
             "foobar_lyrics_enabled",
             "foobar_title_format",
+            "lxmusic_enabled",
             "music_player_paths",
             "agent_cost_enabled",
             "golden_spin_on_click",
@@ -2105,6 +2112,11 @@ class Config:
         self.data["foobar_lyrics_enabled"] = _bool_or_default(
             self.data.get("foobar_lyrics_enabled"), False
         )
+        # 洛雪音乐歌词：布尔同规。默认开——读不到它的接口时这条源自己返回 None，
+        # 回落 SMTC，不会因为"默认开"而产生任何可见行为。
+        self.data["lxmusic_enabled"] = _bool_or_default(
+            self.data.get("lxmusic_enabled"), True
+        )
         from .music.title import FOOBAR_FORMAT_MAX_CHARS
 
         raw_format = self.data.get("foobar_title_format")
@@ -2282,6 +2294,7 @@ class Config:
             "music_browser_media_enabled",
             "foobar_lyrics_enabled",
             "foobar_title_format",
+            "lxmusic_enabled",
             "agent_cost_enabled",
             "music_player_paths",
             "mem_skip_foreground",
