@@ -3908,3 +3908,447 @@ Smart App Control（`VerifiedAndReputablePolicyState=1`）拦下 CodeIntegrity 3
 - 没做真实登录（无账号），登录 SSO 跳转域未全量验证，靠设置页「额外白名单」补。
 - Edge 应用窗口模式无法限制窗口内跳转；内嵌 Chromium 常驻 ≈330 MB 且关窗不释放。
 - 仅 Windows 11 本机验证；非 Windows 的 `webbrowser` 分支未测。
+
+## L111 — 2026-10-28 — 联网检索不再污染进程路由 + 断流保留半条回答
+
+**主题**：用户报「明明判断了不需要联网，AI 对话也会失败」（红色错误卡：联网检索过程 /
+请求失败：网络不可达 / 本次回复未保存 / 顶部「出错：网络不可达」）。
+
+**根因（静态核实，三条叠加）**
+1. `petcore/net/http.py` 的 `urlopen()` 把「代理失败 → 直连成功」固化成**进程级**
+   `_force_direct`；`petcore/net/websearch.py` 的 `_open()` 正走这条路径。于是检索轮里
+   baidu/duckduckgo 直连成功一次，进程就改成「只直连」，紧随其后的正式回答请求不再尝试代理，
+   在必须走代理的网络里抛 `NetworkError(network)`。这违反 `petcore/AGENTS.md`
+   「显式路由请求不得改写进程级『固定直连』结论」。
+2. 读流中断时 `stream_chat` 直接抛错，已累积的正文随异常丢失；mod 的失败分支手里握着
+   `partial` 却一律 `chat.error(...)`，界面把流式气泡覆盖成「请求失败」并标注「本次回复未保存」。
+3. 附带：判定轮（planner）用满额 `timeout`（默认 60s），离线时要拖到 60s 才降级。
+
+**实现**
+- `petcore/net/http.py`（+4/−1）：`urlopen(..., pollute: bool = True)`；只有
+  `opener is None and pollute and not use_proxy and not _force_direct` 才写 `_force_direct`。
+- `petcore/net/websearch.py`（+2/−0）：搜索/读页传 `pollute=False`（一处覆盖全模块）。
+- `petcore/api/chat.py`（+24/−2）：planner 改用 `net_timeout`（≤20s）；读流已有增量时不抛错，
+  关掉响应后返回 `ChatResult(incomplete=True, end_reason="interrupted")` 并先发状态行；
+  一个字都没收到仍抛 `NetworkError`。`ChatResult`/`stream_chat` docstring 补该取值。
+- `examples/petcore-mods/ai.chat/host/runtime.py`（+14/−0）：`partial` 非空时
+  `done(半条 + "（{detail}：这次回答没有正常结束，已保留前面的内容。）")`；空正文仍 `error`。
+
+**验证**
+- `QT_QPA_PLATFORM=offscreen pytest tests/test_petcore_api_chat.py
+  tests/test_petcore_api_chat_stream.py tests/test_petcore_websearch.py
+  tests/test_petcore_ai_mod.py -q` → 84 passed（改前 4 failed，含 `assert True is False`
+  的路由污染复现与 `assert not [('error','network','网络不可达')]`）。
+- `ruff check petcore/ examples/petcore-mods/ai.chat tests/` → All checks passed。
+
+**未覆盖 / 风险**
+- 本机没有「必须走代理才能连 API」的网络，无法端到端复现原故障；证据到单元层（假 opener 的
+  `use_proxy` 序列 `[True, False]` + `force_direct() is False`）。需用户在出问题的机器上复跑，
+  并确认日志里不再出现「网络请求改走直连：系统代理不可用」紧跟检索轮。
+- 断流保留半条后，会话里会多一条带括注的不完整回答——这是有意的（AUD-15 口径），不是新 bug。
+
+## L112 — 2026-10-28 — 图片彩蛋支持 GIF 动图（气泡 + 弹窗，按 DPR 解码）
+
+**主题**：用户要求「让显示图片彩蛋可以支持 GIF 格式」。
+
+**根因**：`petcore/media/images.py::load_pixmap()` 用 `QImageReader.read()`，对 GIF 只取第 0 帧；
+petcore 全仓没有 `QMovie`，所以 `.gif` 能显示但永远是静态首帧。
+
+**实现**
+- `petcore/media/images.py`（+44/−0）：新增 `is_animated()`（先看 `imageCount()`：1 = 静态、
+  >1 = 动图、-1 才退 `supportsAnimation()`——Qt 对**单帧 GIF** 也报 supportsAnimation）与
+  `logical_size_for()`（只读图片头尺寸，不解码像素）。
+- `petcore/ui/animated_image.py`（新建 199 行）：`AnimatedImage(QWidget)`。`QMovie` 帧的
+  `devicePixelRatio()` 恒为 1，所以不用 `QLabel.setMovie()`；改为 `setScaledSize(逻辑 × dpr)`、
+  `paintEvent` 里 `setDevicePixelRatio(dpr)` + `drawPixmap(0, 0, pm)`，与静态图的
+  「按物理像素解码」口径一致。`show/hide` 起停播，`set_path` 同路径复用，`close` 停播 +
+  断 `frameChanged` + `deleteLater`。
+- `petcore/ui/easter_egg.py`（+33/−6）：`EasterEggPopup` 按 `is_animated` 分叉；静态路径原样
+  （`load_scaled_pixmap` + `setPixmap`），动图用 `AnimatedImage`，窗口尺寸公式形状不变；
+  新增 `closeEvent` 停播（`WA_DeleteOnClose` 只删 widget）。
+- `petcore/ui/bubble.py`（+69/−6）：`show_image()` 路径入参且为动图时，动图作为 `image_label`
+  （白色圆角底板）的子控件贴在 8px 内边距里；`show_text()` 与 `hideEvent` 停播。
+
+**验证**
+- `QT_QPA_PLATFORM=offscreen pytest tests/test_petcore_images.py
+  tests/test_petcore_easter_egg.py tests/test_petcore_bubble.py tests/test_petcore_self_talk.py
+  tests/test_click_talk_dialog.py tests/test_petcore_animated_image.py -q` → 79 passed（新增 18 例；
+  既有 PNG 用例一条未改）。
+- 实机探针（offscreen，480×288 五帧 GIF，`PYTHONPATH=. .venv/Scripts/python
+  .scratch/probe_docs_perf.py`）：`is_animated` 中位 0.045 ms（n=50）、`AnimatedImage` 构造
+  1.076 ms（n=20）、重绘 0.012 ms / p95 0.021 ms（n=200）；静态 `show_image` 1.262 ms 对
+  动图 1.282 ms（n=20），差异在噪声内。
+- 真实对象抓帧（`.scratch/probe_docs_live.py`）：弹窗 504×368、`is_running == True`、抓帧中心
+  像素 `#28c83c`；`close()` 后停播；气泡 `show_image(gif)` 在播、`show_text()` 后停播。
+- `ruff check petcore/ tests/` → All checks passed。
+
+**未覆盖 / 风险**
+- 没有在 150%/200% DPI 真机上目视确认清晰度（offscreen 的 DPR 恒为 1，只断言
+  `movie.scaledSize() == 逻辑 × dpr` 与 DPR 写回）。
+- 只测到 480×288 五帧 GIF；10 MB 级 / 几百帧的 GIF 未测（`imageCount()` 扫描成本未知）。
+- 若某格式声称多帧却让 `QMovie` 打不开，当前没有「退回静态首帧」兜底（未构造出该场景）。
+
+## L113 — 2026-10-28 — API 页出厂预填 DeepSeek（只填 Key）+ 开放平台跳转按钮
+
+**主题**：用户要求「供应商和模型的初始值先设成 deepseek 官网的内容，减少小白填写步骤，
+只需填 api；下面放 deepseek api 官网 + 跳转默认浏览器的按钮」。
+
+**现状**：`ApiService` 无预设，`ApiStore` 无种子，`ApiSettingsPage._start_draft()` 起的是
+`name=""/base_url=""` 的空草稿——名称、地址、模型全要手填。
+
+**实现**
+- `petcore/ui/external_links.py`（新建 12 行）：`REPO_URL` / `QUARK_URL` / `DEEPSEEK_API_URL`
+  （`https://platform.deepseek.com/api_keys`）/ `CHARACTER_PACKS_URL`；`page_about.py` 改为复用
+  （+1/−2，去掉重复字面量）。
+- `petcore/ui/settings/page_api.py`（+54/−9）：出厂默认常量（`DeepSeek` /
+  `https://api.deepseek.com` / `/v1/chat/completions` / `deepseek-v4-flash` /
+  `deepseek-v4-flash-vision-exp` / 余额协议 `deepseek`，与主分支 `pet/chat/models.py:60`、
+  `pet/vision.py:70` 同值）；`_start_draft()` 用它们构造草稿并改状态文案；新增「API 申请」行
+  （`value_field(DEEPSEEK_API_URL)` + 「打开 DeepSeek 开放平台」按钮 → `QDesktopServices.openUrl`）；
+  模型行 hint 写清「如账号不支持可改成 deepseek-chat」；`keywords()` 补别名。
+- 不改 `spec.py` / `store.py`：预填只发生在设置页草稿，`_populate()` 走同一批值，所以
+  `_baseline` 一致、`dirty()` 在未改动时仍为 False。
+
+**验证**
+- `pytest tests/test_petcore_api.py tests/test_petcore_settings.py -q` → 82 passed
+  （新增 3 例：预填值与 `dirty() is False`；只填 Key 能保存且 `api.json` 不含 Key、钥匙串有值；
+  开放平台按钮 URL）。720×500 下「保存服务」可达的既有用例仍绿。
+- `ruff check petcore/ tests/` → All checks passed。
+
+**未覆盖 / 风险**
+- 本机无真实 Key，`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 与余额接口均未实测。
+- 外链按钮只验证到 `QDesktopServices.openUrl` 入参，未真开浏览器。
+
+## L114 — 2026-10-28 — 常规页「数据」新增两个素材包外链模块
+
+**主题**：用户要求「『角色资源包』下方添加两个模块（完整角色素材包 / 高清完整角色素材包），
+每个模块两个横排按钮，一个跳 GitHub 素材包页，一个跳夸克网盘（用现在的地址）」。
+
+**实现**
+- `petcore/ui/settings/pages_core.py`（+36/−0）：`data_card` 在 `角色资源包` 之后追加两行；
+  新增 `GeneralPage._pack_links_row(pairs)`（`QWidget` + `QHBoxLayout`，margins 0、spacing 8，
+  每项 `make_button` + `QDesktopServices.openUrl`）；URL 取 `external_links`；`keywords()` 补
+  `素材包/下载/高清/网盘/github`。没有新增配置键、没有 `setFixedWidth`、没有动 `coverage.py`。
+- `tests/test_petcore_settings_assets_links.py`（新建 160 行）：两行都在「数据」卡片且排在
+  角色资源包之后、每行恰 2 个按钮、pack 行 `sizeHint ≤ 280`、`page_search_texts` 命中、
+  点击 URL 依次为 `CHARACTER_PACKS_URL/QUARK_URL`、`dirty()` 仍 False。
+
+**验证**
+- `pytest tests/test_petcore_settings_assets_links.py tests/test_petcore_pages_smoke.py
+  tests/test_petcore_settings.py tests/test_petcore_settings_coverage.py
+  tests/test_petcore_extensions_geometry.py -q` → 62 passed（新增 5 例改前全红）。
+- 搜索唯一性实测：`外观 → ['外观与交互']`、`DIAGNOSTICS → ['关于与诊断']`、
+  `生成子宠 → ['多宠']` 仍各 1 页；`素材包/高清/完整角色 → ['常规']`。
+- `ruff check petcore/ tests/` → All checks passed。
+- 四项合并后的全量门禁：`QT_QPA_PLATFORM=offscreen pytest -q` →
+  10734 passed, 18 skipped, 19 warnings in 1592.84s（本机单进程）。
+
+## L115 — 2026-10-28 — 气泡/桌宠/右键菜单的窗口层级修复
+
+**主题**：用户报两个层级 bug：①「窗口置顶关着，打开别的应用时鱼还是会突然跳出来」；
+②「右键菜单开着时桌宠冒泡，桌宠与气泡会刷新盖过菜单」。前提是**气泡与桌宠同图层要保留**
+（owned window 不许回退成独立顶层窗口）。
+
+**根因（真机 `GW_HWNDPREV` / `WS_EX_TOPMOST` 实测）**
+1. 裸 `show()` 就会把整条 owner 链抬到普通层最上面——`SpeechBubble` 的 `show(); raise_()`
+   三处（`_apply_window_flags` / `show_text` / `show_image`）在 `always_on_top` 为假时也照抬。
+2. `petcore/ui/menu.py` 的 `prepare_menu` 只在 `topmost=True` 时才抬菜单；**置顶层才是破口**
+   （默认配置下桌宠/气泡带 `WindowStaysOnTopHint`，气泡再抬一次就压住菜单）。
+3. 桌宠自己的 `set_visible(True)` 无条件 `raise_()`。
+
+**实现**
+- `petcore/ui/bubble.py`（+160/−5，文件 numstat 229/11 含上一批 GIF 改动）：新增 Win32 z 序
+  原语 `_user32/_window_above/_place_after/_is_above`（`SetWindowPos(insertAfter,
+  NOACTIVATE|NOOWNERZORDER)`；实测 `QWidget.stackUnder()` 对顶层窗口是空操作），以及统一出口
+  `_present()`：菜单会话 → 沉到菜单下方；宿主置顶/直播 → 照旧 `raise_()`；非置顶 → 记住宿主的
+  上邻居，`show()` 之后把宿主塞回原位、气泡贴宿主下方。`_window_flags()`、`SpeechBubble(self)`
+  的 parent、`WA_ShowWithoutActivating` 一行未改。
+- `petcore/ui/menu.py`（+65/−7）：`menu_open()` / `active_menu()` / `menu_session()`
+  （可重入计数，异常也恢复），`show_context_menu()` 用会话包住整段 `exec`；`prepare_menu`
+  的 `topmost` 规则不变（没把菜单永久置顶）。docstring 纠正「菜单需要 hint 才置顶」的错误
+  认知（实测 Windows 上 Qt 弹出菜单本来就带 `WS_EX_TOPMOST`）。
+- `petcore/ui/pet_window.py`（+7/−4）：`set_visible(True)` 的 `raise_()` 加 `menu_open()` 闸；
+  删掉「`raise_()` 不会越过别的应用或右键菜单」这句已经不成立的注释。
+- 测试：新增 `tests/test_petcore_window_layers.py`（374 行 / 11 例），真机用例在 offscreen 下 skip。
+
+**验证**
+- `.scratch/probe_layers.py` 真机（Windows，单屏，非 offscreen）修复前：冒泡后
+  `z(other)=57 z(pet)=55 z(bubble)=54`（桌宠/气泡压在别的窗口上）、置顶层
+  `z(menu)=12 z(pet)=11 z(bubble)=10`（气泡压菜单）→ 4 项 FAIL；修复后
+  `z(other)=55 z(pet)=56 z(bubble)=57`、`z(menu)=10 z(pet)=11 z(bubble)=12`、
+  `foreground 0x1A0AD0 -> 0x1A0AD0`（没抢前台）→ 全 PASS。
+- `pytest tests/test_petcore_bubble.py tests/test_petcore_menu*.py
+  tests/test_petcore_window_layers.py tests/test_petcore_settings.py -q` → 142 passed, 1 skipped。
+- `ruff check petcore/ tests/` → All checks passed。
+
+**未覆盖 / 风险**
+- 单屏 + 单 DPI 实测；跨屏、DWM/独占全屏、150% DPI 下的 z 序未测。
+- 非 Windows 走「不 raise」分支，未在 macOS/Linux 真机验证。
+- **托盘右键菜单**由 Shell 原生弹出（`QSystemTrayIcon.setContextMenu`），不经
+  `show_context_menu`，不在会话保护内；气泡理论上仍可能盖住托盘菜单（已知边界，未改
+  `ui/tray.py`）。
+
+## L116 — 2026-10-28 — 全屏自动隐藏（搬主分支能力）
+
+**主题**：用户要求「常规设置里补上主分支的全屏自动隐藏」。
+
+**实现**
+- 新建 `petcore/platform/fullscreen.py`（329 行，零 Qt）：搬 `pet/platform_win.py` 的
+  `_fullscreen_geometry_hit` / `_fs_user_busy_state` / `_fg_fullscreen_probe` 口径，前台信息
+  复用 `platform/foreground.py`。纯几何 `fullscreen_geometry_hit()`（2px 容差）、
+  `monitor_rect_for()`（按相交面积选窗口自己那块屏，跨屏不误判）、`user_busy_state()`
+  （QUNS 只认 3/4）、`probe_fullscreen() -> (hit, reason)`：永不抛异常，非 Windows 报
+  「不支持」，排除本进程/桌宠自身/Progman/WorkerW/任务栏/CoreWindow/截图工具/`WS_EX_TOOLWINDOW`，
+  原因摘要只含类名/进程名/样式位/矩形数字，**不含标题正文**。
+- 新建 `petcore/ui/fullscreen_hide.py`（222 行）：`FullscreenHideController`，进程内唯一、
+  1Hz `QTimer`；状态机 `_known/_auto_hidden/_overridden`：命中只隐藏当时**可见**的宠并记账，
+  离开只恢复仍在隐藏的已记录宠；全屏期间用户手动显示/隐藏以用户为准；重复命中幂等；
+  配置关/平台不支持时**不建定时器**（探测 0 次），关闭那一刻立即恢复。
+- `petcore/config.py`（+8）：`auto_hide_fullscreen=True`（`DEFAULTS` + `_normalize` +
+  `GLOBAL_CONFIG_KEYS`），`SCHEMA_VERSION` 未动。
+- `petcore/ui/settings/pages_core.py`：「常规 → 桌宠」加「全屏时自动隐藏」行（提示
+  「全屏游戏或视频期间自动隐藏桌宠。」），勾选实时生效，dirty/confirm/discard 语义与其它行
+  一致；非 Windows 置灰并说明。
+- `petcore/ui/app.py`（+46）：`start_fullscreen_hide()` / `apply_fullscreen_hide()` /
+  `set_auto_hide_fullscreen()` / `stop_fullscreen_hide()`，`run()` 启动、`finish()/quit_app()`
+  停表。
+- 测试：新增 `tests/test_petcore_fullscreen_hide.py`（492 行 / 22 例）。
+
+**验证**
+- 真机探测（`.scratch/probe_fullscreen.py`，Windows，独立进程开真全屏窗）：
+  `baseline hit=False`（Kimi Code 1920×1128、任务栏在内 → 不误判，`busy=5` 也不命中）→
+  `fullscreen detected=True after=0.20s` → `pets before: [True, True]` →
+  `after enable: visible=[False, False]`（两只真 QWidget 桌宠被隐藏）→ 再探 3 拍仍隐藏 →
+  关掉全屏窗后 `after leave: visible=[True, True]`；本进程自己的整屏窗口按 pid 自排除；
+  `timer_active_after_disable=False`。
+- `pytest tests/test_petcore_fullscreen_hide.py tests/test_petcore_settings.py
+  tests/test_petcore_pages_smoke.py tests/test_petcore_architecture.py -q` → 72 passed。
+- 变异验证：把「离开只恢复自动隐藏的」改成「全恢复」→ 3 红；去掉 `supported` 闸门 → 1 红；
+  去掉「用户刚显示的让位」首轮全绿（无覆盖）→ 补用例后再变异 1 红。
+
+**未覆盖 / 风险**
+- 独占全屏 D3D 游戏、钉住/永在最前的 UWP 与 cloaked 窗口、真双屏、macOS/Linux 真机未实测；
+  `SHQueryUserNotificationState` 的「命中」路径只走单测（基线只出现 busy=5）。
+- 灵动岛不隐藏：与主分支一致（主分支全屏只按 `quiet_also_on_fullscreen` 抑制通知），
+  petcore 暂无该开关，属后续项。
+
+## L117 — 2026-10-28 — 音乐 mod 三修：唱歌续播 / 歌词不被自语打断 / 单曲循环继续出词
+
+**主题**：用户报 `media.music`（只在网易云上测过）三个问题：①唱歌动作被打断后不再唱、
+只剩正常轮询；②歌词播放期间被自语气泡打断；③单曲循环第二遍不出歌词。
+
+**根因**
+1. `PetWindow._play_spec()` 是循环的唯一清除点，探头/击飞/拖拽/换动作都会清 `_loop_active`；
+   旧 runtime 只要租约还在（`current <= self._leases`）就直接 return，于是「租约在、循环没了」
+   永远不再请求动画。
+2. 歌词与自言自语共用同一个 `SpeechBubble`，presentation 端口没有「谁在占用」的概念。
+3. 曲目身份 `Playback.key` 不变，网易云不上报 position（恒 `None`），本地时钟只增不减 →
+   `_lyric_index` 停在末句，第二遍不再出词。
+
+**实现**
+- `examples/petcore-mods/media.music/host/runtime.py`（+265/−18）：`_reap_lost_loops()` 每拍用
+  `animation_state()` 复核（`loop=True`/`locked=True`/`None` 什么都不做；`loop=False` 只丢租约、
+  **不发** `release_loop()`），补播走 2^n 退避（`_rearm_pending` 保证永不放弃，切歌清零）；
+  `_sync_scene()` 在「在放歌 + 有歌词或唱起来过」时 `begin_scene("media.music")` 并每拍
+  `refresh_scene`，停止/暂停/纯音乐/关歌词时 `end_scene`；`_is_rewind`（回退 ≥5s、新位置
+  ≤15s、上一拍已过 0.75 曲长）/`_advance_round`（不上报进度按估算曲长回绕）/`_restart_after_pause`
+  三路判「新一圈」，只重置行号与节流、**不重新取词**（60s 冷却与每曲 3 次不受影响）。
+- `petcore/contracts/host.py`（+39）：`PresentationPort` 增量面 `say/say_sequence(owner=)`、
+  `begin_scene/end_scene/refresh_scene/animation_state` + `AnimationState`；核心只认 owner 字符串。
+- 新建 `petcore/ui/presentation_gate.py`（149 行）：进程级可重入闸门（RLock、同 owner 重入计数、
+  **45s 无续期自动释放**），`allows(owner)` 判定。
+- `petcore/ui/app.py`（+55/−3）：`_PresentationAdapter` 在 `say/say_sequence` 里查闸门（非持有者
+  且非 `force` → 返回 False，不弹不报错），新增四个端口方法；`animation_state` 读
+  `window._loop_active` / `state.current.name` / 探头·击飞·拖拽·抛掷等锁定位。
+- 主代理收口：`fun.self-talk/host/factory.py`（+3/−1）把「气泡被拒仍朗读」改成
+  `if shown:`；`petcore/ui/reminders.py`（+3/−1）定时提醒改 `force=True`（用户设的提醒要压过歌词，
+  拿不到气泡才退系统通知）；`PresentationPort.show_image`（`contracts/host.py`）也加
+  `force/owner` 并在适配器（`ui/app.py`）过同一道闸门——否则自言自语 30% 概率的**配图**照样会
+  盖掉歌词；`fun.click-talk/host/factory.py`（+1）点击台词的配图传 `force=True`（用户动作）。
+- 测试：`tests/test_petcore_music_mod.py` +367/−3（8 例）、新增
+  `tests/test_petcore_presentation_gate.py`（358 行 / 13 例，含 mod×真实适配器×真实闸门的端到端）。
+
+**验证**
+- mod 侧红→绿：8 failed, 39 passed → 48 passed（`SCENE_OWNER` 不存在、循环不补、第二遍不出词）。
+- `pytest tests/test_petcore_music_mod.py tests/test_petcore_music_lyric_quality.py
+  tests/test_petcore_presentation_gate.py tests/test_petcore_self_talk.py
+  tests/test_click_talk_dialog.py tests/test_petcore_architecture.py -q` → 104 passed；
+  补上 `show_image` 闸门用例后同批（gate/click-talk/self-talk/music）→ 82 passed。
+- `scripts/music_probe.py --seconds 2` 本机真跑通（SMTC 无会话、枚举 9 个会话、220ms）。
+- `ruff check petcore/ examples/petcore-mods/media.music tests/` → All checks passed。
+
+**未覆盖 / 风险**
+- **本机没有真实播放器在放**：网易云/酷狗的真实 SMTC 行为、真实动画被打断、真有歌时的第二遍
+  循环都未实机验证；不上报进度路径的每一圈有「尾奏长度」级的漂移（估算曲长 = 末句 + 6s），
+  连续多圈会比声音略早，尾奏里手动暂停再播也会被当成新一圈。
+- 歌词期间被拒的自语气泡现在**连朗读一起跳过**（主代理收口）；提醒仍显示但形态可能变成
+  系统通知之外的路径（已改 force，实际以气泡为准）。
+- 灵动岛上不显示歌词，不受影响。
+
+## L118 — 2026-10-28 — 角色重命名（别名）
+
+**主题**：用户要求「主分支可以修改动画角色的名称，本分支也加上」。
+
+**实现**
+- `petcore/config.py`（+75）：`ALIAS_MAX_CHARS=24`；`DEFAULTS["character_aliases"]={}`；
+  `GLOBAL_CONFIG_KEYS` 加键（用户级偏好，所有宠共用一份，`config-pet-N.json` 不出现）；
+  `_normalize` 里逐项清洗（非 dict → 空表、值 strip 后截断 24、空白/含控制字符的项丢弃）；
+  `Config.character_alias()/set_character_alias()`（空名删键、不抛异常）+ `ScopedConfig` 转发。
+- `petcore/ui/app.py`（+72）：`_display_spec()` 统一「别名 or 目录名」（`CharacterSpec` 是
+  frozen，用 `dataclasses.replace`），`characters()/character_for()/available_characters()`
+  全部经它，目录层 `_characters` 不被写回；新增 `character_alias/set_character_alias/
+  character_default_name/character_display_name/refresh_character_names`。
+- `petcore/ui/pet_window.py`（+47）：`rename_character()`（输入 → 写主配置并立即落盘 → 刷新
+  设置页下拉 → 气泡「角色名：…」）。
+- `petcore/ui/menu_actions.py`（+5）：「切换角色」子菜单末尾 `addSeparator()` +
+  「重命名当前角色…」。**没新增菜单项 id**，`coverage.py` / 菜单模板 JSON /
+  `migrate_pNN_menu` 全未动，因此不需要布局迁移。
+- 新建 `petcore/ui/rename_dialog.py`（75 行）：两入口共用的 `prompt_alias()` 与提示/气泡文案。
+- `petcore/ui/settings/pages_core.py`（+95）：角色行改成 `QComboBox + 重命名…`；
+  `dirty()/confirm_save()/discard_changes()` 都覆盖别名（取消/Esc 恢复打开时的名字）；
+  `keywords()` 补「重命名/改名/别名」。
+- 测试：新增 `tests/test_petcore_character_alias.py`（438 行 / 25 例）。
+
+**验证**
+- 红证据（`.scratch/alias_red.py`，逐个 `delattr` 掉本次新增接口后跑同一份测试）：
+  13 failed, 2 passed, 10 errors；实现后 25 passed。
+- `pytest tests/test_petcore_character_alias.py tests/test_petcore_settings.py
+  tests/test_petcore_settings_coverage.py tests/test_petcore_pages_smoke.py
+  tests/test_petcore_architecture.py -q` → 79 passed。
+- `ruff check petcore/ tests/` → All checks passed。
+- 本批四项合并后的全量门禁：`QT_QPA_PLATFORM=offscreen pytest -q` →
+  10819 passed, 19 skipped, 18 warnings in 1224.93s（本机单进程，最终代码）。
+
+**未覆盖 / 风险**
+- 没在真桌面鼠标点菜单/设置按钮（`QInputDialog.getText` 被 monkeypatch）；真窗口模态输入框
+  观感与菜单开着时的气泡落位未目视确认。
+- 灵动岛胶囊上的角色名只在建岛时取一次，重命名后要等重建/重启才换（与切角色同一条既有边界，
+  本次未修）。
+
+## L119 — 2026-10-28 — 清单收 `summary` / `summary_zh`；首次出未签名安装包
+
+**主题**：用户要求「编一个 setup，不签名生成试试」。`-Installer` 构建在冒烟门
+（`--check --strict`）被顶红，诊断是 `dsh.channel: unknown field: summary_zh`。
+
+**根因**：`petcore/mods/manifest.py` 的 `KNOWN_FIELDS` 没有 `summary` / `summary_zh`，而市场
+索引（`petcore/market/model.py:63`）用的就是 `summary_zh`；第三方扩展在 `mod.json` 里写简介
+就会被记成 unknown field 警告。警告进 `diagnostics`，而构建脚本要求「零诊断」才放行。
+
+**实现**
+- `petcore/mods/manifest.py`（+3/−0）：`KNOWN_FIELDS` 补 `summary` 与 `summary_zh`（只用于
+  展示，缺省不影响加载，不新增必填项、不改 `SCHEMA_VERSION`）。
+- 验证：`load_manifest(<数据目录>/mods/dsh.channel)` → 无诊断；
+  `python -m petcore --check --strict` → `diagnostics: []`、`strict.problems: []`、
+  `characters: 1`、`menu_template: json`。
+
+**未签名安装包（实测记录，产物不入库）**
+- 命令：`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 -Clean -Installer
+  -OutputRoot dist-unsigned-2026-10-28`（不传 `-SignThumbprint`）。
+- 产物：`dist-unsigned-2026-10-28\dsh-pet-core-setup.exe`，275 MB，
+  sha256 `ad2074ac287844845425fe4037df3292e1da73da750b0b0e83795cf1bcd68c01`，
+  `Get-AuthenticodeSignature` → `NotSigned`。
+- 本机 SAC `VerifiedAndReputablePolicyState=0`（未强制），未签名产物可以启动：
+  setup 起来后弹出「选择安装语言」向导（实测窗口标题），打包后的
+  `dsh-pet-core\dsh-pet-core.exe --check --strict` 退出码 **0**、`diagnostics: []`。
+- 安装器是 `PrivilegesRequired=lowest`（按用户安装、不弹 UAC）；本次只验证「能启动」，
+  没有点完向导，因此**没有真正安装到本机**（重复启动留下的 3 个 `dsh-pet-core-setup.tmp`
+  子进程已 `Stop-Process` 清掉）。
+
+**未覆盖 / 风险**
+- 未签名产物在 `SAC=1`（强制模式）或 SmartScreen 的机器上仍会被拦（`AGENTS.md` 的构建纪律
+  要求正式分发签名，本次是用户明确要求的未签名试跑）。
+- 没有走完安装流程，所以「安装后首次启动、快捷方式、卸载器」未验证。
+
+## L120 — 2026-10-28 — 联网失败不再谎报「网络不可达」；路由污染面清零
+
+**主题**：用户报「刚打开桌宠时『看看屏幕』和『AI 对话』都报网络不可达，打开设置点一次
+『测试连接』再关掉就正常了」。
+
+**根因（两条，第一条确定，第二条排除）**
+1. **mod 的「说谎式兜底」**：`ai.chat` 的四条失败路径都写着
+   `reason = str(getattr(exc, "reason", "") or "network")`（看看屏幕那处更糟：`or exc` 直接把异常
+   对象当 reason），于是 `KeyError("unknown api service")`、`ValueError`、`json`/`ssl` 这类
+   **根本不是链路问题**的异常全被显示成「网络不可达」，而且失败路径**一条日志都没有**。
+2. **不是路由污染**：真机探针（`.scratch/probe_ai_startup.py`、`.scratch/probe_startup_urlopen.py`）
+   在真实数据目录、无 warm 的情况下首次调用即成功（`force_direct` 全程 False）；30 秒真实启动
+   （11 个扩展全加载）期间 `urlopen` 调用数 **0**，启动窗口内没有任何请求会碰
+   `petcore/net/http.py` 的 `_force_direct` 闩；`ssl.create_default_context()` 在 worker 线程正常
+   （0–47 ms）；首启 `credentials.get("core.api","api1")` 有值；`metadata()` 只在服务 ID 不存在时抛
+   `KeyError`（`.reason=None`）——那正是过去被兜底成「网络不可达」的真实路径。
+
+**实现**
+- `petcore/net/errors.py`（+9/−1）：新增稳定分类 `INTERNAL="internal"` +
+  `REASON_TEXT` 文案「内部错误（不是网络问题，详情见日志）」。既有六类一字未改。
+- `examples/petcore-mods/ai.chat/host/runtime.py`（约 +119/−41）：统一 `self._failure_reason(exc, service_id)`
+  ——有 `.reason` 用它，没有就 `internal`，并**只记一条** `ai call failed: type=… reason=… service=… cause=…`
+  （只打异常类型名，不打 Key/URL/响应体/异常文本）；`AiChatFailure(reason, detail)` 包住截图问答与
+  动作回退；新增 `_require_service()`：发请求前发现没有服务就直接 `internal` + 「还没有可用的 API
+  服务」，**一次请求都不发**。
+- 主代理顺手清零同类污染面：`petcore/net/market.py`（两处）与 `petcore/update/service.py` 的
+  `urlopen` 加 `pollute=False`（市场索引/下载、更新检查是第三方 CDN 的一次性取数，不该决定整个
+  进程是否只走直连），并新增源码守卫
+  `tests/test_petcore_http_safety.py::test_only_api_hosts_may_pin_the_process_route`：除
+  `api/chat.py`/`api/probe.py`/`account/service.py` 三个 API 主机外，任何 `urlopen` 调用点必须传
+  `pollute=False`，否则红。
+- 测试：新增 `tests/test_petcore_ai_startup.py`（451 行 / 15 例）。
+
+**验证**
+- 红→绿：把 `runtime.py` 单独 stash 后 9 例失败（断言都是 `assert 'network' == 'internal'` /
+  「日志为空」），恢复后 15 passed。
+- `pytest tests/test_petcore_ai_mod.py tests/test_petcore_api_chat.py
+  tests/test_petcore_api_chat_stream.py tests/test_petcore_ai_startup.py -q` → 87 passed。
+- 相关族 `net/screen_ask/screen_capture_ask_dialog/example_mods/api` → 157 passed；
+  `architecture/docs` → 13 passed；市场与更新的 6 个测试文件 → 83 passed。
+- 真机探针：`chat_first ok=True 844ms end_reason=done`、`probe ok HTTP 200 219ms`、
+  `chat_after_probe ok=True 1328ms`，三次 `urlopen` 的 `force_direct_after` 都是 False。
+
+**未覆盖 / 风险**
+- **用户机器上的复现没做到**（本机无系统代理，首启就成功）。现在的保证是：失败时日志会多一行
+  `ai call failed: type=… reason=… service=… cause=…`，`cause=URLError/ConnectionRefusedError` 表示
+  「代理/加速器还没就绪」，`cause=-` 且 `reason=internal` 表示服务或 Key 缺失。
+- 若确认是「加速器比桌宠晚起来」，正确的修法是给启动窗口一次有界重试或延后首请求——本次**没有**
+  给 chat 加通用重试（那会掩盖真实故障）。
+
+## L121 — 2026-10-28 — 音乐暂停：立即停唱 + 暂停期间不取词不报错
+
+**主题**：用户报「歌曲暂停后会出现『歌词获取失败』的报错，并且会持续播放唱歌动画一小段时间」。
+
+**根因**
+1. `_silence_limit()` 对除 `absent` 以外的状态一律返回 `music_sing_grace_seconds`（默认 5 秒），
+   于是「明确暂停」也要等满 5 秒才 `_release()`；宽限本来是给**不确定的静音**（切歌抖动、
+   播放器被关掉）用的。
+2. 暂停分支走 `_adopt_track(..., playing=False)`；暂停期间识别结果若换了身份（SMTC 会话掉线 →
+   窗口标题源兜底，`duration/album` 丢失、`key` 变化）就进 `_begin_track()`，把
+   `_lines/_lyric_index/_fetch_key/_fetch_attempts/_lyric_reported` 全清掉，恢复播放后重新联网取词，
+   失败时 `_apply_lyrics` 冒泡「歌词获取失败」，还白吃一次「每曲 ≤3 次」的配额。
+
+**实现**（`examples/petcore-mods/media.music/host/runtime.py`，约 +67/−16）
+- `_silence_limit()`：`paused → 0.0`（下一拍就 `_release()`）；`absent` 逻辑一字未改。
+- 新增 `_track_aliases`：暂停期间见过的「同名降级身份」记为当前曲目的别名，恢复后仍认作同一首；
+  `_adopt_track` 的暂停分支不再 `_begin_track`、不动歌词与取词状态；`_same_song()` 按歌名比较。
+- `_apply_lyrics` 失败：不在播时静默并**退回配额**（不设 60s 冷却、不置 `_lyric_reported`）；
+  在播时原规则不变。
+- 主代理同步设置页文案：`music_sing_grace_seconds` 的 hint 改成「没声音（切歌抖动、播放器被关掉）
+  超过这个时间才停止唱歌动画；暂停会立即停唱，歌与歌之间的空隙不会打断。」
+- 测试：`tests/test_petcore_music_mod.py` +196/−4（1 例改写 + 5 例新增）。
+
+**验证**
+- 红→绿：改前 5 例失败（`released == 0`、暂停后仍冒「歌词获取失败」、「降级身份」被当成换歌），
+  恢复后 8 passed。
+- `pytest tests/test_petcore_music_mod.py tests/test_petcore_music_lyric_quality.py
+  tests/test_petcore_music_runtime_state.py tests/test_petcore_music_sources.py -q` → 108 passed；
+  相关族（含 `test_music_sing_grace.py`/诊断/标题/示例 mod/展示会话）→ 187 passed。
+- 真机：`scripts/music_probe.py --seconds 4` 在本机（网易云**正处于暂停**）判定
+  `暂停 · 系统媒体会话 · cloudmusic.exe ·《开不了口》—周杰伦`；另用真实
+  `sampling.collect` + `recognizer.decide` 喂进运行时，13 项断言改前 6/13、改后 **13/13**。
+- 性能（20 万次 × 5 轮取中位）：`pause_tick_ns` 525.9 → 205.2、`silence_limit_ns` 368.2 → 47.7；
+  每拍本地开销仍是亚微秒级（真实采样 8–177 ms/拍），无新增系统调用/网络/磁盘/线程。
+
+**未覆盖 / 风险**
+- 没有真实「播放中」的采样（本机播放器是暂停状态），「播放 → 暂停」边沿用合成判定 + 真实曲目身份
+  模拟；播放中身份降级（非暂停）仍按换歌处理，是刻意保留的边界。
+
+**未覆盖 / 风险**
+- 没有目视截图（offscreen 无 CJK 字体）；720×500 下 pack 行实际 224px、行宽 466px 不溢出，
+  但把字号抬到 19pt 时约 591px，会走页面既有的横向滚动（不裁切，观感未确认）。
+- 两个 GitHub 按钮当前指向仓库根（`CHARACTER_PACKS_URL = REPO_URL`）；换独立素材页只改一行。

@@ -47,6 +47,8 @@ dist/
 *.spec
 # 隔离输出根（scripts/build_petcore.ps1 -OutputRoot rel-<tag>）：整包安装器产物不入库
 rel-*/
+# 用户试跑用的未签名候选包（build_petcore.ps1 -OutputRoot dist-unsigned-<tag>）
+dist-unsigned-*/
 
 # 本地开发文档（不随仓库发布）
 LOG.md

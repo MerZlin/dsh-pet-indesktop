@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -27,11 +28,20 @@ from ...api.probe import ProbeResult, probe_text
 from ...api.spec import ApiService
 from ...api.store import ApiStore
 from ...net.errors import describe
-from .base import SettingsPage, make_button, make_checkbox
+from ..external_links import DEEPSEEK_API_URL
+from .base import SettingsPage, make_button, make_checkbox, value_field
 
 logger = logging.getLogger("petcore.ui.settings.api")
 
 OWNER = "core.api"
+#: 出厂预填的 DeepSeek 官方配置：与主分支 ``ProviderConfig`` 的默认值同一套，
+#: 让小白只需要填 API Key。
+DEFAULT_NAME = "DeepSeek"
+DEFAULT_BASE_URL = "https://api.deepseek.com"
+DEFAULT_CHAT_PATH = "/v1/chat/completions"
+DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_VISION_MODEL = "deepseek-v4-flash-vision-exp"
+DEFAULT_BALANCE = "deepseek"
 _BALANCE_CHOICES = (("none", "无"), ("deepseek", "DeepSeek"))
 _ERROR_TEXT = {
     "api_endpoint_empty": "Base URL 不能为空",
@@ -194,12 +204,34 @@ class ApiSettingsPage(SettingsPage):
         self._form_row(form, "名称", self.name_edit)
         self._form_row(form, "Base URL", self.base_url_edit, "远程地址只允许 https；本机可用 http://localhost。")
         self._form_row(form, "Chat Path", self.chat_path_edit, "拼在 Base URL 后面，形如 /v1/chat/completions。")
-        self._form_row(form, "模型", self.model_edit, "聊天与探测使用的模型名。")
+        self._form_row(
+            form,
+            "模型",
+            self.model_edit,
+            "聊天与探测使用的模型名；默认 deepseek-v4-flash，如账号不支持可改成 deepseek-chat。",
+        )
         self._form_row(form, "视觉模型", self.vision_edit, "识屏等能力使用；留空表示该服务不支持。")
         self._form_row(form, "校验 SSL", self.verify_ssl_check, "关闭前请确认对端可信；只影响该服务。")
         self._form_row(form, "超时", self.timeout_spin, "单次请求的上限，1–300 秒。")
         self._form_row(form, "余额协议", self.balance_combo, "决定余额查询走哪套接口；未知服务选「无」。")
         self._form_row(form, "API Key", self.key_edit, "保存后再次打开不会回显；留空表示沿用已保存的密钥。")
+
+        self.api_url_field = value_field(DEEPSEEK_API_URL, panel)
+        self.api_url_field.setAccessibleName("DeepSeek 开放平台地址")
+        self.open_api_page_button = make_button("打开 DeepSeek 开放平台", panel)
+        self.open_api_page_button.clicked.connect(self.open_api_platform)
+        api_row = QWidget(panel)
+        api_row_layout = QHBoxLayout(api_row)
+        api_row_layout.setContentsMargins(0, 0, 0, 0)
+        api_row_layout.setSpacing(8)
+        api_row_layout.addWidget(self.api_url_field, 1)
+        api_row_layout.addWidget(self.open_api_page_button)
+        self._form_row(
+            form,
+            "API 申请",
+            api_row,
+            "在浏览器打开申请页；本应用不会替你注册、也不会把 Key 发给我们。",
+        )
         right.addLayout(form)
         right.addWidget(self.balance_service_hint)
 
@@ -286,7 +318,7 @@ class ApiSettingsPage(SettingsPage):
         if row >= 0:
             self._show(services[row])
         else:
-            self._start_draft(silent=True)
+            self._start_draft()
         self._sync_buttons()
         self._refresh_balance_services()
 
@@ -381,16 +413,23 @@ class ApiSettingsPage(SettingsPage):
         self.key_edit.clear()
         self._baseline = self._form_service()
 
-    def _start_draft(self, *, silent: bool = False) -> None:
-        draft = ApiService(service_id=self._next_service_id(), name="", base_url="")
+    def _start_draft(self) -> None:
+        draft = ApiService(
+            service_id=self._next_service_id(),
+            name=DEFAULT_NAME,
+            base_url=DEFAULT_BASE_URL,
+            chat_path=DEFAULT_CHAT_PATH,
+            model=DEFAULT_MODEL,
+            vision_model=DEFAULT_VISION_MODEL,
+            balance_protocol=DEFAULT_BALANCE,
+        )
         self._loaded = None
         self._draft_id = draft.service_id
         self._populate(draft)
         self.services_list.blockSignals(True)
         self.services_list.setCurrentRow(-1)
         self.services_list.blockSignals(False)
-        if not silent:
-            self.status_label.setText("新服务：填好名称与 Base URL 后点「保存服务」。")
+        self.status_label.setText("已预填 DeepSeek 官方配置：只需填写 API Key 后点「保存服务」。")
         self._sync_buttons()
 
     def _next_service_id(self) -> str:
@@ -405,7 +444,7 @@ class ApiSettingsPage(SettingsPage):
             service_id=self._current_id(),
             name=self.name_edit.text(),
             base_url=self.base_url_edit.text(),
-            chat_path=self.chat_path_edit.text() or "/v1/chat/completions",
+            chat_path=self.chat_path_edit.text() or DEFAULT_CHAT_PATH,
             model=self.model_edit.text(),
             vision_model=self.vision_edit.text(),
             verify_ssl=self.verify_ssl_check.isChecked(),
@@ -435,6 +474,10 @@ class ApiSettingsPage(SettingsPage):
 
     def add_service(self, *_args) -> None:
         self._start_draft()
+
+    def open_api_platform(self, *_args) -> None:
+        """用系统默认浏览器打开发放平台申请页；本进程不发任何网络请求。"""
+        QDesktopServices.openUrl(QUrl(DEEPSEEK_API_URL))
 
     def remove_service(self, *_args) -> None:
         service_id = self._selected_id()
@@ -605,6 +648,8 @@ class ApiSettingsPage(SettingsPage):
             "显示余额",
             "左键余额",
             "DeepSeek",
+            "开放平台",
+            "API 申请",
             "api",
             "key",
             "keyring",

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import urllib.error
+
 import pytest
 
 from petcore.net import errors
+from petcore.net import http as net_http
 from petcore.net.websearch import (
     SearchError,
     SearchResult,
@@ -153,3 +156,47 @@ def test_fetch_page_rejects_non_http_and_binary(monkeypatch) -> None:
     )
     with pytest.raises(SearchError):
         fetch_page_text("https://e.test/file.bin")
+
+
+# ---------------------------------------------------------------- 路由污染
+
+
+class _FakeResponse:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+        self.headers = {"Content-Type": "text/html"}
+
+    def read(self, _size: int = -1) -> bytes:
+        return self._body
+
+    def close(self) -> None:
+        return None
+
+
+def test_search_does_not_lock_the_process_to_direct(monkeypatch) -> None:
+    """搜索自己选路由，不得改写进程级「固定直连」结论（否则正式回答不再试代理）。"""
+    net_http.reset_transport()
+    attempts: list[bool] = []
+
+    def fake_opener(use_proxy, context=None):
+        attempts.append(bool(use_proxy))
+
+        class _Opener:
+            def open(self, request, timeout=None, **_kwargs):
+                if use_proxy:
+                    raise urllib.error.URLError("proxy refused")
+                return _FakeResponse(b"<html></html>")
+
+        return _Opener()
+
+    monkeypatch.setattr(net_http, "_opener", fake_opener)
+    try:
+        assert search("q", engine="baidu", timeout=5) == []
+        assert attempts == [True, False]
+        assert net_http.force_direct() is False
+
+        attempts.clear()
+        net_http.urlopen(net_http.build_request("https://example.test/"), timeout=5)
+        assert attempts == [True, False]
+    finally:
+        net_http.reset_transport()

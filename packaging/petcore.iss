@@ -70,6 +70,7 @@ Name: "mod_ocr"; Description: "本地 OCR（tool.ocr，离线提取文字）"; G
 Name: "mod_weather"; Description: "天气（tool.weather，需联网）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 Name: "mod_filereader"; Description: "文件解读（tool.file-reader，需 API）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 Name: "mod_agent"; Description: "Agent 联动（ai.agent，需 DSH 桥接或自写事件）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
+Name: "mod_aibrowser"; Description: "AI 浏览器（tool.ai-browser，只开国模 AI 站点；本安装包无内嵌内核时用 Edge 应用窗口）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 
 [Files]
 Source: "{#MySourceDist}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -96,6 +97,8 @@ Source: "..\examples\petcore-mods\tool.file-reader\*"; DestDir: "{app}\mods\tool
 Source: "trust_marker.txt"; DestDir: "{app}\mods\tool.file-reader"; DestName: ".trusted"; Flags: ignoreversion; Tasks: mod_filereader
 Source: "..\examples\petcore-mods\ai.agent\*"; DestDir: "{app}\mods\ai.agent"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"; Tasks: mod_agent
 Source: "trust_marker.txt"; DestDir: "{app}\mods\ai.agent"; DestName: ".trusted"; Flags: ignoreversion; Tasks: mod_agent
+Source: "..\examples\petcore-mods\tool.ai-browser\*"; DestDir: "{app}\mods\tool.ai-browser"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"; Tasks: mod_aibrowser
+Source: "trust_marker.txt"; DestDir: "{app}\mods\tool.ai-browser"; DestName: ".trusted"; Flags: ignoreversion; Tasks: mod_aibrowser
 
 [Icons]
 Name: "{autoprograms}\dsh-pet core"; Filename: "{app}\dsh-pet-core.exe"

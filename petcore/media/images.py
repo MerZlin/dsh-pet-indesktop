@@ -122,3 +122,47 @@ def logical_size(pixmap: QPixmap) -> tuple[int, int]:
     """pixmap 在逻辑坐标里的显示尺寸。"""
     size = pixmap.deviceIndependentSize()
     return max(1, int(round(size.width()))), max(1, int(round(size.height())))
+
+
+def is_animated(path: Path | str) -> bool:
+    """``path`` 是否是多帧动图；读不出或只有一帧返回 False，不抛异常。
+
+    Qt 的 GIF handler 对**单帧** GIF 也报 ``supportsAnimation() == True``，
+    所以先看 ``imageCount()``：1 = 静态图（含单帧 GIF），>1 = 动图，读不出
+    （-1）才退到 ``supportsAnimation()``。
+    """
+    try:
+        reader = QImageReader(str(path))
+        if not reader.canRead():
+            return False
+        count = int(reader.imageCount())
+        if count > 1:
+            return True
+        if count == 1:
+            return False
+        return bool(reader.supportsAnimation())
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def logical_size_for(path: Path | str, max_side: int) -> tuple[int, int] | None:
+    """``path`` 按 ``max_side`` 逻辑像素等比缩放的显示尺寸；读不出返回 None。
+
+    只读图片头里的原始尺寸，不解码像素（动图用它在建 ``QMovie`` 前定版面）。
+    """
+    try:
+        reader = QImageReader(str(path))
+        if not reader.canRead():
+            return None
+        size = reader.size()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not size.isValid() or size.isEmpty():
+        return None
+    limit = max(1, int(max_side))
+    width, height = size.width(), size.height()
+    if width > limit or height > limit:
+        factor = min(limit / width, limit / height)
+        width = min(limit, max(1, int(round(width * factor))))
+        height = min(limit, max(1, int(round(height * factor))))
+    return width, height

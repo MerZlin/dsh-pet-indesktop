@@ -99,7 +99,14 @@ class SpyPresentation:
         return bool(self.visible_flag)
 
     def show_image(
-        self, path, caption: str = "", *, duration_ms: int = 4000, scale: float = 1.0
+        self,
+        path,
+        caption: str = "",
+        *,
+        duration_ms: int = 4000,
+        scale: float = 1.0,
+        force: bool = False,
+        owner: str = "",
     ) -> bool:
         self.images.append((Path(path), str(caption), int(duration_ms), float(scale)))
         return self.image_ok

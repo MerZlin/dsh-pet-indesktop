@@ -12,8 +12,10 @@ from PySide6.QtCore import QRect
 from PySide6.QtGui import QColor, QImage
 
 from petcore.media.images import (
+    is_animated,
     load_pixmap,
     logical_size,
+    logical_size_for,
     physical_side,
     sanitize_dpr,
     scale_pixmap,
@@ -22,6 +24,26 @@ from petcore.ui.bubble import SpeechBubble
 from petcore.ui.easter_egg import EasterEggPopup, load_scaled_pixmap
 
 from PySide6.QtWidgets import QApplication
+
+# 8x4 双帧 GIF89a（首帧红、次帧蓝，100ms/帧）：两帧才会被判成动图，
+# 字节内联是为了不依赖 Pillow 与外部素材。
+_ANIMATED_GIF = (
+    b'GIF89a\x08\x00\x04\x00\x81\x00\x00\xff\x00\x00\x00\x00\x00\x00'
+    b'\x00\x00\x00\x00\x00!\xff\x0bNETSCAPE2.0\x03'
+    b'\x01\x00\x00\x00!\xf9\x04\x00\n\x00\x00\x00,\x00\x00\x00\x00\x08\x00\x04'
+    b'\x00\x00\x08\x0c\x00\x01\x08\x1cH\xb0\xa0\xc1\x83\x04\x03\x02\x00!\xf9\x04'
+    b'\x01\n\x00\x01\x00,\x00\x00\x00\x00\x08\x00\x04\x00\x81\x00\x00\xff\x00\x00'
+    b'\x00\x00\x00\x00\x00\x00\x00\x08\x0c\x00\x01\x08\x1cH\xb0\xa0\xc1\x83\x04\x03'
+    b'\x02\x00;'
+)
+
+# 1x1 单帧 GIF89a（无 GCE）：Qt 的 GIF handler 对它也报 supportsAnimation=True，
+# 用来说明「能不能动」必须看帧数。
+_STILL_GIF = (
+    b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff'
+    b'\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00'
+    b'\x02\x02\x44\x01\x00\x3b'
+)
 
 
 @pytest.fixture(scope="module")
@@ -110,3 +132,34 @@ def test_bubble_image_decodes_for_the_pet_screen_ratio(app, tmp_path: Path) -> N
         assert bubble.image_label.size().toTuple() == (320 + 2 * 8, 160 + 2 * 8)
     finally:
         bubble.close()
+
+
+def _write_bytes(path: Path, payload: bytes) -> Path:
+    path.write_bytes(payload)
+    return path
+
+
+def test_is_animated_reads_the_frame_count(app, tmp_path: Path) -> None:
+    animated = _write_bytes(tmp_path / "anim.gif", _ANIMATED_GIF)
+    still_gif = _write_bytes(tmp_path / "still.gif", _STILL_GIF)
+    still_png = _write_image(tmp_path / "still.png", 40, 40)
+
+    assert is_animated(animated) is True
+    # 单帧 GIF：Qt 的 GIF handler 也报 supportsAnimation=True，只能靠帧数判。
+    assert is_animated(still_gif) is False
+    assert is_animated(still_png) is False
+    assert is_animated(tmp_path / "missing.gif") is False
+
+
+def test_logical_size_for_scales_aspect_ratio_inside_the_limit(
+    app, tmp_path: Path
+) -> None:
+    wide = _write_image(tmp_path / "wide.png", 1600, 800)
+    small = _write_image(tmp_path / "small.png", 200, 100)
+    animated = _write_bytes(tmp_path / "anim.gif", _ANIMATED_GIF)
+
+    assert logical_size_for(wide, 320) == (320, 160)
+    assert logical_size_for(small, 320) == (200, 100)  # 小图不放大
+    assert logical_size_for(animated, 320) == (8, 4)
+    assert logical_size_for(animated, 6) == (6, 3)
+    assert logical_size_for(tmp_path / "missing.png", 320) is None

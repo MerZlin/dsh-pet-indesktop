@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "kind": "feature",
+  "id": "tool.ai-browser",
+  "name": "AI browser",
+  "name_zh": "AI 浏览器",
+  "version": "1.0.0",
+  "api_version": "1",
+  "core_requires": ">=0.2.0,<1.0.0",
+  "author": "dsh-pet",
+  "execution": "host-only",
+  "entrypoint": "host/__init__.py:create_host",
+  "capabilities": ["network.request", "process.spawn", "settings.read", "settings.write", "speech.present"]
+}

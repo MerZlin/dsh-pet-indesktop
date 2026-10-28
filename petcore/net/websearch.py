@@ -102,6 +102,8 @@ def _open(request, *, timeout: float, verify_ssl: bool, opener=None):
             timeout=max(1.0, float(timeout)),
             context=_context(verify_ssl),
             opener=opener,
+            # 搜索/读页自己选路由：这一次的成功不代表整个进程该固定直连。
+            pollute=False,
         )
     except urllib.error.HTTPError as exc:
         raise SearchError(

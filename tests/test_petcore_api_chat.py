@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from petcore.api.chat import ChatCancelled, ChatTruncated, build_payload, stream_chat
 from petcore.contracts.api import ApiMetadata, ApiRequest, WebSearchOptions
 from petcore.net import errors
+from petcore.net import http as net_http
 from petcore.net import websearch
 
 
@@ -377,3 +379,64 @@ def test_cancel_during_research_skips_the_answer(server, monkeypatch) -> None:
     assert result.cancelled is True
     assert result.text == ""
     assert all(item["body"].get("tools") for item in _Handler.seen)
+
+
+def _direct_open(request, *, timeout, context=None, opener=None, **kwargs):
+    """本机服务端直连：绕过系统代理，让用例只观察它要断言的东西。"""
+    return net_http._opener(False, context).open(request, timeout=timeout, **kwargs)  # noqa: SLF001
+
+
+def test_planner_transport_failure_still_answers(server, monkeypatch) -> None:
+    """检索轮传输失败只降级成状态行：正式回答照常发出并返回正文。"""
+    import petcore.api.chat as chat_mod
+
+    def flaky(request, *, timeout, context=None, opener=None, **kwargs):
+        body = json.loads(request.data.decode("utf-8")) if request.data else {}
+        if body.get("tools"):
+            raise urllib.error.URLError("proxy down")
+        return _direct_open(request, timeout=timeout, context=context, **kwargs)
+
+    monkeypatch.setattr(chat_mod, "urlopen", flaky)
+    statuses: list[str] = []
+    result = stream_chat(
+        _request(server),
+        _dialogue(),
+        web_search=WebSearchOptions(engine="baidu"),
+        on_status=statuses.append,
+        timeout=20,
+    )
+
+    assert result.text == "你好！"
+    assert any("联网检索不可用" in line for line in statuses)
+    assert len(_Handler.seen) == 1
+    assert _Handler.seen[0]["body"].get("tools") is None
+
+
+def test_planner_uses_the_short_budget_and_stops_without_tools(server, monkeypatch) -> None:
+    """planner 判定轮只吃 ≤20s 预算；不需要检索时整轮只有 planner + 回答两个请求。"""
+    import petcore.api.chat as chat_mod
+
+    _Handler.tool_calls = 99  # planner 直接回「无需搜索」，不给 tool_calls
+    planned: list[float] = []
+    real_post = chat_mod._post_json
+
+    def spy(request, payload, *, timeout, opener=None):
+        planned.append(float(timeout))
+        return real_post(request, payload, timeout=timeout, opener=opener)
+
+    monkeypatch.setattr(chat_mod, "_post_json", spy)
+    monkeypatch.setattr(chat_mod, "urlopen", _direct_open)
+
+    statuses: list[str] = []
+    result = stream_chat(
+        _request(server),
+        _dialogue(),
+        web_search=WebSearchOptions(engine="baidu"),
+        on_status=statuses.append,
+        timeout=60,
+    )
+
+    assert result.text == "你好！"
+    assert len(_Handler.seen) == 2
+    assert planned == [20.0]
+    assert any("无需联网" in line for line in statuses)

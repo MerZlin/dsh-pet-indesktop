@@ -5,6 +5,8 @@ import threading
 from contextlib import ExitStack
 from pathlib import Path
 
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -17,6 +19,8 @@ from PySide6.QtWidgets import (
 
 from ...engine.geometry import DEFAULT_SCALE, SCALE_MAX, SCALE_MIN, SCALE_STEPS
 from ...platform import autostart, hotkey_spec, screens
+from ..external_links import CHARACTER_PACKS_URL, QUARK_URL
+from ..rename_dialog import alias_bubble_text, prompt_alias
 from .base import (
     SettingsPage,
     build_embedded_page,
@@ -53,13 +57,25 @@ class GeneralPage(SettingsPage):
 
         card = self.section("桌宠")
         self.character_combo = QComboBox(self)
-        self.character_combo.setMinimumWidth(220)
-        for spec in self.host.characters():
-            self.character_combo.addItem(str(spec.name), str(spec.id))
+        self.character_combo.setMinimumWidth(180)
+        self.rename_character_button = make_button("重命名…", self)
+        self.rename_character_button.clicked.connect(self._rename_character)
+        character_row = QWidget(self)
+        character_layout = QHBoxLayout(character_row)
+        character_layout.setContentsMargins(0, 0, 0, 0)
+        character_layout.setSpacing(8)
+        character_layout.addWidget(self.character_combo)
+        character_layout.addWidget(self.rename_character_button)
+        self._fill_character_combo()
         self._select_character(str(self.config().get("character") or ""))
         self._initial_character = self._current_character()
+        self._initial_aliases = self._aliases()
         self.character_combo.currentIndexChanged.connect(self._on_character_changed)
-        card.add_row("角色", self.character_combo, "选择桌宠当前使用的角色。")
+        card.add_row(
+            "角色",
+            character_row,
+            "选择桌宠当前使用的角色；「重命名…」只改显示名，留空恢复默认。",
+        )
 
         self.autostart_check = make_checkbox(self)
         self.autostart_check.setChecked(self._autostart_initial)
@@ -68,6 +84,24 @@ class GeneralPage(SettingsPage):
             self.autostart_check.setToolTip("仅在 Windows 上可用。")
         hint = "登录 Windows 后自动运行 petcore。" if self._autostart_supported else "仅在 Windows 上可用。"
         card.add_row("开机自动启动", self.autostart_check, hint)
+
+        # 全屏自动隐藏：全局键（一个共享 watcher 作用所有宠），勾选即时写配置并
+        # 立刻作用到宿主；取消/关闭时由 discard_changes() 回滚到打开时的快照。
+        self._fullscreen_hide_supported = sys.platform == "win32"
+        self._initial_auto_hide_fullscreen = bool(
+            self.config().get("auto_hide_fullscreen", True)
+        )
+        self.auto_hide_fullscreen_check = make_checkbox(self)
+        self.auto_hide_fullscreen_check.setChecked(self._initial_auto_hide_fullscreen)
+        if not self._fullscreen_hide_supported:
+            self.auto_hide_fullscreen_check.setEnabled(False)
+            self.auto_hide_fullscreen_check.setToolTip("仅在 Windows 上可用。")
+        self.auto_hide_fullscreen_check.toggled.connect(self._on_auto_hide_changed)
+        card.add_row(
+            "全屏时自动隐藏",
+            self.auto_hide_fullscreen_check,
+            "全屏游戏或视频期间自动隐藏桌宠。",
+        )
 
         data_card = self.section("数据")
         open_button = make_button("打开数据目录", self)
@@ -93,6 +127,20 @@ class GeneralPage(SettingsPage):
             "选择角色目录或 ZIP 后生成并安装 content mod；不会覆盖已有角色。",
         )
         data_card.add_widget(self.import_status)
+        data_card.add_row(
+            "完整角色素材包",
+            self._pack_links_row(
+                (("GitHub 下载", CHARACTER_PACKS_URL), ("夸克网盘", QUARK_URL))
+            ),
+            "在浏览器打开素材包下载页；下载后用上面的「导入角色目录 / 导入角色 ZIP」安装。",
+        )
+        data_card.add_row(
+            "高清完整角色素材包",
+            self._pack_links_row(
+                (("GitHub 下载", CHARACTER_PACKS_URL), ("夸克网盘", QUARK_URL))
+            ),
+            "高清素材体积更大、首次加载更慢；安装方式同上。",
+        )
 
         app_card = self.section("应用")
         quit_button = make_button("退出桌宠", self)
@@ -102,11 +150,91 @@ class GeneralPage(SettingsPage):
     def config(self):
         return self.host.config
 
+    def _pack_links_row(self, pairs) -> QWidget:
+        """素材包的横排外链条：每项一个按钮，点了只交给系统浏览器。"""
+        row = QWidget(self)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        for text, url in pairs:
+            button = make_button(text, self)
+            button.clicked.connect(
+                lambda _checked=False, target=url: QDesktopServices.openUrl(QUrl(target))
+            )
+            layout.addWidget(button)
+        return row
+
     def _select_character(self, character_id: str) -> None:
         if self.character_combo.count() == 0:
             return
         index = self.character_combo.findData(character_id)
         self.character_combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def _fill_character_combo(self, selected: str | None = None) -> None:
+        """按当前别名重建下拉项（文本是「别名 or 目录名」，data 永远是角色 id）。"""
+        if selected is None:
+            selected = self._current_character()
+        self.character_combo.blockSignals(True)
+        try:
+            self.character_combo.clear()
+            for spec in self.host.characters():
+                self.character_combo.addItem(str(spec.name), str(spec.id))
+            self._select_character(selected or str(self.config().get("character") or ""))
+        finally:
+            self.character_combo.blockSignals(False)
+
+    def _aliases(self) -> dict[str, str]:
+        raw = self.config().get("character_aliases")
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    def refresh_characters(self) -> None:
+        """别名被别处（右键菜单）改过：刷下拉文本，并把基线推到「已保存的名字」。
+
+        右键重命名是立即落盘的用户动作，保持 dirty() 为假才对得上磁盘状态。
+        """
+        self._fill_character_combo()
+        self._initial_aliases = self._aliases()
+
+    def _character_default_name(self, character_id: str) -> str:
+        lookup = getattr(self.host, "character_default_name", None)
+        if callable(lookup):
+            return str(lookup(character_id) or character_id)
+        for spec in self.host.characters():
+            if str(spec.id) == character_id:
+                return str(spec.name)
+        return character_id
+
+    def _rename_character(self) -> None:
+        """「重命名…」：与右键同一个输入框，写别名后立即反馈（下拉文本 + 气泡）。
+
+        写法与「开机自启」「全屏自动隐藏」一致：勾/点即写配置，落盘统一等
+        confirm_save()，取消/Esc 由 discard_changes() 回到打开时的快照。
+        """
+        character_id = self._current_character()
+        if not character_id:
+            return
+        default_name = self._character_default_name(character_id)
+        result = prompt_alias(
+            self,
+            default_name=default_name,
+            current=self.config().character_alias(character_id) or default_name,
+        )
+        if not result.accepted:
+            return
+        self.config().set_character_alias(character_id, result.name)
+        self._fill_character_combo(character_id)
+        self._say_alias(result, default_name)
+        self.changed.emit()
+
+    def _say_alias(self, result, default_name: str) -> None:
+        window = getattr(self.host, "window", None)
+        say = getattr(window, "say", None)
+        if not callable(say):
+            return
+        try:
+            say(alias_bubble_text(result, default_name))
+        except Exception:  # noqa: BLE001 - 气泡坏了不许把设置页弄崩
+            pass
 
     def _on_character_changed(self, _index: int) -> None:
         character = self._current_character()
@@ -179,8 +307,31 @@ class GeneralPage(SettingsPage):
         data = self.character_combo.currentData()
         return str(data) if data is not None else None
 
+    def _on_auto_hide_changed(self, checked: bool) -> None:
+        """勾选即时写配置并作用到宿主（与「直播捕获兼容」同一套实时语义）。"""
+        self.config().set("auto_hide_fullscreen", bool(checked))
+        self._apply_auto_hide(bool(checked))
+        self.changed.emit()
+
+    def _apply_auto_hide(self, enabled: bool) -> None:
+        apply = getattr(self.host, "apply_fullscreen_hide", None)
+        if not callable(apply):
+            return
+        try:
+            apply(bool(enabled))
+        except Exception:  # noqa: BLE001 - 开关坏了不许把设置页弄崩
+            pass
+
     def dirty(self) -> bool:
         if self._current_character() != self._initial_character:
+            return True
+        if self._aliases() != self._initial_aliases:
+            return True
+        if (
+            self._fullscreen_hide_supported
+            and self.auto_hide_fullscreen_check.isChecked()
+            != self._initial_auto_hide_fullscreen
+        ):
             return True
         return self._autostart_supported and self.autostart_check.isChecked() != self._autostart_initial
 
@@ -191,6 +342,17 @@ class GeneralPage(SettingsPage):
     def confirm_save(self) -> None:
         if self._draft_character is not None:
             self.config().set("character", self._draft_character)
+        # 别名已经写进配置（点即生效）；这里只把基线推到落盘值，别让同一个名字
+        # 在保存之后还挂着 dirty。
+        self._initial_aliases = self._aliases()
+        if (
+            self._fullscreen_hide_supported
+            and self.auto_hide_fullscreen_check.isChecked()
+            != self._initial_auto_hide_fullscreen
+        ):
+            self.config().set(
+                "auto_hide_fullscreen", self.auto_hide_fullscreen_check.isChecked()
+            )
         if not self._autostart_supported or self._draft_autostart == self._autostart_initial:
             return
         try:
@@ -204,26 +366,45 @@ class GeneralPage(SettingsPage):
         QMessageBox.warning(self, "开机自动启动", "无法写入开机自启设置，请检查系统权限。")
 
     def discard_changes(self) -> None:
-        self.character_combo.blockSignals(True)
-        self._select_character(self._initial_character or "")
-        self.character_combo.blockSignals(False)
+        # 别名与下拉文本一起回到打开设置时的样子（别名是深拷贝的独立快照）。
+        self.config().set("character_aliases", dict(self._initial_aliases))
+        self._fill_character_combo(self._initial_character or "")
         self.autostart_check.setChecked(self._autostart_initial)
+        # 勾选是实时生效的，取消必须把配置与宿主状态一起回滚（同 stream_capture）。
+        self.config().set("auto_hide_fullscreen", self._initial_auto_hide_fullscreen)
+        self.auto_hide_fullscreen_check.blockSignals(True)
+        self.auto_hide_fullscreen_check.setChecked(self._initial_auto_hide_fullscreen)
+        self.auto_hide_fullscreen_check.blockSignals(False)
+        self._apply_auto_hide(self._initial_auto_hide_fullscreen)
 
     def keywords(self) -> list[str]:
         return [
             "常规",
             "角色",
+            "重命名",
+            "改名",
+            "别名",
             "开机",
             "启动",
             "自启",
+            "全屏",
+            "自动隐藏",
+            "游戏",
+            "视频",
             "数据目录",
             "角色资源包",
+            "素材包",
+            "下载",
+            "高清",
+            "网盘",
+            "github",
             "ZIP",
             "退出",
             "general",
             "character",
             "autostart",
             "startup",
+            "fullscreen",
             "quit",
         ]
 

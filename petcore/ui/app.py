@@ -4,6 +4,7 @@ import inspect
 import logging
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QLockFile, QRect, QTimer, QUrl
@@ -18,6 +19,7 @@ from ..account import pricing
 from ..account.service import AccountService
 from ..config import Config
 from ..content.collect import collect_characters as _collect
+from ..contracts.host import AnimationState
 from ..log import setup_logging
 from ..net.errors import describe as describe_net_error
 from ..platform import hotkey_spec
@@ -27,6 +29,7 @@ from ..platform.worker import WorkerHost
 from ..update import UpdateResult, UpdateService, describe_state
 from .. import __version__
 from ..mods.feature import CORE_FEATURE_IDS, FeatureManager
+from . import presentation_gate
 from .market_jobs import MarketJobRegistry
 from .menu import install_core_menu
 from .menu_layout import (
@@ -120,9 +123,12 @@ class _PresentationAdapter:
         return _PresentationAdapter(self._host, window)
 
     def say(self, text: str, *, duration_ms: int = 4000, force: bool = False,
-            subtitle: str = "") -> bool:
+            subtitle: str = "", owner: str = "") -> bool:
         quiet = getattr(self._host, "quiet", None)
         if not force and quiet is not None and quiet.quiet_active():
+            return False
+        if not force and not presentation_gate.allows(owner):
+            # 别人正占着气泡（歌词这类连续展示）：不弹、不报错，调用方按「没显示」处理。
             return False
         window = self._window()
         settings = getattr(self._host, "settings_dialog", None)
@@ -135,9 +141,12 @@ class _PresentationAdapter:
             island.add_message(text)
         return shown
 
-    def say_sequence(self, items, *, force: bool = False, on_show=None) -> bool:
+    def say_sequence(self, items, *, force: bool = False, on_show=None,
+                     owner: str = "") -> bool:
         quiet = getattr(self._host, "quiet", None)
         if not force and quiet is not None and quiet.quiet_active():
+            return False
+        if not force and not presentation_gate.allows(owner):
             return False
         window = self._window()
         settings = getattr(self._host, "settings_dialog", None)
@@ -170,10 +179,45 @@ class _PresentationAdapter:
         if not callable(runner):
             first = lines[0]
             return self.say(
-                first[0], duration_ms=first[2], force=force, subtitle=first[1]
+                first[0], duration_ms=first[2], force=force, subtitle=first[1],
+                owner=owner,
             )
         shown = runner(lines, on_show=notify) is not False
         return shown
+
+    # -- 展示会话闸门（歌词这类连续展示占着气泡时，别人的自动气泡让路） ------
+
+    def begin_scene(self, owner: str) -> bool:
+        return presentation_gate.begin_scene(owner)
+
+    def end_scene(self, owner: str) -> None:
+        presentation_gate.end_scene(owner)
+
+    def refresh_scene(self, owner: str) -> bool:
+        return presentation_gate.refresh_scene(owner)
+
+    def animation_state(self):
+        """当前动画名 + 循环标志 + 接管态；读不到（窗口没有动画状态）返回 None。"""
+        window = self._window()
+        if window is None or not hasattr(window, "_loop_active"):
+            return None
+        try:
+            current = getattr(getattr(window, "state", None), "current", None)
+            motion = getattr(window, "motion", None)
+            effects = getattr(window, "effects", None)
+            locked = bool(
+                getattr(window, "probe_active", False)
+                or getattr(effects, "throw_egg_active", False)
+                or getattr(window, "dragging", False)
+                or getattr(motion, "thrown", False)
+            )
+            return AnimationState(
+                name=str(getattr(current, "name", "") or ""),
+                loop=bool(getattr(window, "_loop_active", False)),
+                locked=locked,
+            )
+        except Exception:  # noqa: BLE001 - 极老/替身窗口读不到就当未知
+            return None
 
     def play_animation(self, name: str, *, loop: bool = False) -> bool:
         window = self._window()
@@ -184,8 +228,18 @@ class _PresentationAdapter:
         return bool(window is not None and window.release_loop())
 
     def show_image(
-        self, path, caption: str = "", *, duration_ms: int = 4000, scale: float = 1.0
+        self,
+        path,
+        caption: str = "",
+        *,
+        duration_ms: int = 4000,
+        scale: float = 1.0,
+        force: bool = False,
+        owner: str = "",
     ) -> bool:
+        if not force and not presentation_gate.allows(owner):
+            # 与 say() 同一条闸门：别人占着气泡时，图片气泡也要让路。
+            return False
         window = self._window()
         return bool(
             window is not None
@@ -286,6 +340,7 @@ class CoreHost:
         self.tray: TrayIcon | None = None
         self.island = None
         self.island_field = None
+        self.fullscreen_hide = None
         self.probe_hub = None
         self.settings_dialog = None
         self.hotkeys: GlobalHotkeyService | None = None
@@ -699,14 +754,72 @@ class CoreHost:
         self.load_result = result
         self.diagnostics = _mod_diagnostics(result)
 
+    def _display_spec(self, spec):
+        """角色显示名统一走这里：有别名用别名，没有就是目录显示名。
+
+        ``CharacterSpec`` 是 frozen 的，别名只能换一个新的对象出去；目录层那份
+        ``self._characters`` 保持原样，别名的撤销/切换才不需要重新扫盘。
+        """
+        alias = self.config.character_alias(spec.id)
+        if not alias or alias == spec.name:
+            return spec
+        try:
+            return replace(spec, name=alias)
+        except TypeError:  # 非 dataclass 的替身（测试注入）就原样返回
+            return spec
+
     def characters(self) -> list:
-        return list(self._characters)
+        return [self._display_spec(spec) for spec in self._characters]
 
     def character_for(self, character_id: str):
         for character in self._characters:
             if character.id == character_id:
-                return character
-        return self._characters[0]
+                return self._display_spec(character)
+        return self._display_spec(self._characters[0])
+
+    # ------------------------------------------------------------ 角色别名
+    def character_alias(self, character_id: str) -> str:
+        return self.config.character_alias(character_id)
+
+    def set_character_alias(
+        self, character_id: str, name: str, *, persist: bool = True
+    ) -> None:
+        """写角色别名（菜单命令这类显式用户动作立即落盘）。"""
+        self.config.set_character_alias(character_id, name)
+        if not persist:
+            return
+        try:
+            self.config.save()
+        except OSError:
+            # 落盘失败不该让内存里的名字失效：气泡已经报了新名字。
+            logger.warning("failed to persist character alias", exc_info=True)
+
+    def character_default_name(self, character_id: str) -> str:
+        """目录里的原始显示名（别名撤掉后回落到它）。"""
+        for spec in self._characters:
+            if spec.id == character_id:
+                return str(spec.name or spec.id)
+        return str(character_id or "")
+
+    def character_display_name(self, character_id: str) -> str:
+        return self.character_alias(character_id) or self.character_default_name(
+            character_id
+        )
+
+    def refresh_character_names(self) -> None:
+        """别名变化后刷新正在显示的消费点（菜单每次弹出重建，不用管这里）。"""
+        dialog = getattr(self, "settings_dialog", None)
+        if dialog is None or getattr(dialog, "_disposed", False):
+            return
+        page_for = getattr(dialog, "page_for_key", None)
+        page = page_for("general") if callable(page_for) else None
+        refresh = getattr(page, "refresh_characters", None)
+        if not callable(refresh):
+            return
+        try:
+            refresh()
+        except RuntimeError:
+            logger.debug("settings page is already gone", exc_info=True)
 
     def build_menu(self, parent=None):
         if isinstance(parent, PetWindow):
@@ -812,6 +925,47 @@ class CoreHost:
             dialog.setStyleSheet(stylesheet(is_dark(), size))
         except RuntimeError:
             logger.debug("settings dialog is already gone", exc_info=True)
+
+    # ------------------------------------------------------------ 全屏自动隐藏
+
+    def start_fullscreen_hide(self) -> None:
+        """创建进程内唯一的全屏监视器并按配置门启停（多宠共用一个）。
+
+        只在这里 new，重复调用只做一次「按当前配置重放」——``attach_window`` 在
+        重载扩展时会被再次调用，重复建影子实例等于每只宠一个探测表。
+        """
+        if self.fullscreen_hide is None:
+            from .fullscreen_hide import FullscreenHideController
+
+            self.fullscreen_hide = FullscreenHideController(
+                self._windows, parent=self.app
+            )
+        self.apply_fullscreen_hide()
+
+    def apply_fullscreen_hide(self, enabled: bool | None = None) -> None:
+        """把「开关 + 当前配置」作用到监视器（设置页实时预览与取消回滚共用）。"""
+        controller = getattr(self, "fullscreen_hide", None)
+        if controller is None:
+            return
+        if enabled is None:
+            enabled = bool(self.config.get("auto_hide_fullscreen", True))
+        controller.set_enabled(bool(enabled))
+
+    def set_auto_hide_fullscreen(self, enabled: bool, *, persist: bool = True) -> None:
+        """全屏自动隐藏开关（菜单/设置/命令共用入口）。"""
+        enabled = bool(enabled)
+        self.config.set("auto_hide_fullscreen", enabled)
+        if persist:
+            try:
+                self.config.save()
+            except Exception:  # noqa: BLE001 - 落盘失败不该让开关失效
+                logger.debug("auto hide config save failed", exc_info=True)
+        self.apply_fullscreen_hide(enabled)
+
+    def stop_fullscreen_hide(self) -> None:
+        controller = getattr(self, "fullscreen_hide", None)
+        if controller is not None:
+            controller.stop()
 
     # ------------------------------------------------------------ 灵动岛
 
@@ -1338,6 +1492,7 @@ class CoreHost:
         self._closing = True
         self.cancel_update()
         self.close_dialogs()
+        self.stop_fullscreen_hide()
         try:
             cancel_community_jobs(0.5)
         except Exception:  # noqa: BLE001 - 退出路径不能被刷新线程拖住
@@ -1433,6 +1588,8 @@ def run(config: Config, *, root: Path, mod_dirs, instance: str | None = None) ->
     host.reload_menu()
     host.tray = _install_tray(host)
     host.install_hotkeys()
+    # 全屏自动隐藏：单实例监视器，1 Hz 探测；配置门关闭时不建定时器。
+    host.start_fullscreen_hide()
     if str(config.get("frameseq") or "auto") != "off":
         from ..media.provision import start_background_provision
 
@@ -1445,6 +1602,7 @@ def run(config: Config, *, root: Path, mod_dirs, instance: str | None = None) ->
     def finish() -> None:
         host._closing = True
         host.cancel_update()
+        host.stop_fullscreen_hide()
         if host.hotkeys is not None:
             host.hotkeys.uninstall()
         host.close_dialogs()

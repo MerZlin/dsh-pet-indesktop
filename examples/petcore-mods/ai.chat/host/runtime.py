@@ -31,6 +31,25 @@ from .prompts import (
     translate_messages,
 )
 
+logger = logging.getLogger(__name__)
+
+#: 与 core 的稳定分类同名（mod 不许 import core 的网络层，只能照抄字符串）。
+#: 没有 ``reason`` 的异常一律归到这里——**不是** ``network``：把 ``KeyError`` 说成
+#: 「网络不可达」会让用户去重启路由，而且日志里什么都不留。
+REASON_INTERNAL = "internal"
+_REASON_TEXT = {REASON_INTERNAL: "内部错误"}
+NO_SERVICE_HINT = "还没有可用的 API 服务，请先在「设置 → API 与账户」里填写"
+
+
+class AiChatFailure(RuntimeError):
+    """带稳定 ``reason`` 的失败：core 侧的调用方（截图问答/动作回调）只收到一条异常。"""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        self.reason = str(reason or REASON_INTERNAL)
+        self.detail = str(detail or "")[:200]
+        text = _REASON_TEXT.get(self.reason, self.reason)
+        super().__init__(f"{text}：{self.detail}" if self.detail else text)
+
 
 class AiChatRuntime:
     def __init__(self, context):
@@ -89,6 +108,47 @@ class AiChatRuntime:
         if configured and any(item.service_id == configured for item in services):
             return configured
         return services[0].service_id
+
+    # ------------------------------------------------------------ 失败分类
+    def _failure_reason(self, exc: BaseException, service_id: str = "") -> str:
+        """异常 → 稳定 reason，并**在这里**记一条失败日志。
+
+        只认异常自己带的 ``reason``；没有就归 ``internal``。以前这里写的是
+        ``or "network"``，于是 ``KeyError``（服务 ID 对不上）、``ValueError``、
+        ``ssl``/``json`` 解析失败全被显示成「网络不可达」，且日志里一个字都没有。
+        只记类型与分类，不记异常文本（可能带 endpoint/密钥片段）；``cause`` 是
+        core 包装时留下的底层异常类型（``URLError``/``SSLError``/``ECONNREFUSED``
+        这一层），下一次真出问题就靠它定位。
+        """
+        reason = str(getattr(exc, "reason", "") or "") or REASON_INTERNAL
+        self._log_failure(exc, reason, service_id)
+        return reason
+
+    @staticmethod
+    def _log_failure(exc: BaseException, reason: str, service_id: str) -> None:
+        """一条失败只记一行：``_require_service`` 已记过的异常不再重复记。"""
+        if getattr(exc, "_ai_failure_logged", False):
+            return
+        try:
+            exc._ai_failure_logged = True
+        except Exception:  # noqa: BLE001 - 少数异常不允许写属性，退化成照常记
+            pass
+        cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+        logger.warning(
+            "ai call failed: type=%s reason=%s service=%s cause=%s",
+            type(exc).__name__,
+            reason,
+            service_id or "-",
+            type(cause).__name__ if cause is not None else "-",
+        )
+
+    def _require_service(self, service_id: str) -> None:
+        """发请求前先把「没有服务」说清楚（内部错误），别让它变成一次链路失败。"""
+        if service_id:
+            return
+        failure = AiChatFailure(REASON_INTERNAL, NO_SERVICE_HINT)
+        self._log_failure(failure, REASON_INTERNAL, service_id)
+        raise failure
 
     def _character_name(self) -> str:
         host = getattr(self.context, "host", None)
@@ -344,23 +404,30 @@ class AiChatRuntime:
         """截图提问窗口的回调（在 core 的后台线程里执行，同步返回整段答复）。"""
         api = self._api()
         service_id = self._service_id()
-        if api is None or not service_id:
-            raise RuntimeError("还没有可用的 API 服务，请先在「设置 → API 与账户」里填写")
-        image_url = (
-            "data:image/png;base64,"
-            + base64.b64encode(self._vision_bytes(image_png)).decode("ascii")
-        )
-        messages = ask_messages(
-            self._prompt(), history, question, image_url, limit=MAX_HISTORY
-        )
-        result = api.stream_chat(
-            service_id,
-            messages,
-            model=str(self._config_value("ai_model", "") or ""),
-            temperature=self._temperature(),
-            thinking=self._thinking(),
-            reasoning_effort=self._reasoning_effort(),
-        )
+        try:
+            if api is None:
+                raise AiChatFailure(REASON_INTERNAL, NO_SERVICE_HINT)
+            self._require_service(service_id)
+            image_url = (
+                "data:image/png;base64,"
+                + base64.b64encode(self._vision_bytes(image_png)).decode("ascii")
+            )
+            messages = ask_messages(
+                self._prompt(), history, question, image_url, limit=MAX_HISTORY
+            )
+            result = api.stream_chat(
+                service_id,
+                messages,
+                model=str(self._config_value("ai_model", "") or ""),
+                temperature=self._temperature(),
+                thinking=self._thinking(),
+                reasoning_effort=self._reasoning_effort(),
+            )
+        except AiChatFailure:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 分类后交给 core 显示
+            reason = self._failure_reason(exc, service_id)
+            raise AiChatFailure(reason, str(exc)[:200]) from exc
         if getattr(result, "cancelled", False):
             return ""
         return str(getattr(result, "text", "") or "").strip()
@@ -372,24 +439,31 @@ class AiChatRuntime:
             return ""
         api = self._api()
         service_id = self._service_id()
-        if api is None or not service_id:
-            raise RuntimeError("还没有可用的 API 服务，请先在「设置 → API 与账户」里填写")
-        image_url = (
-            "data:image/png;base64,"
-            + base64.b64encode(self._vision_bytes(png)).decode("ascii")
-        )
-        if action == "ocr":
-            messages = ocr_messages(self._prompt(), image_url)
-        else:
-            messages = translate_messages(self._prompt(), source_text, image_url)
-        result = api.stream_chat(
-            service_id,
-            messages,
-            model=str(self._config_value("ai_model", "") or ""),
-            temperature=self._temperature(),
-            thinking=self._thinking(),
-            reasoning_effort=self._reasoning_effort(),
-        )
+        try:
+            if api is None:
+                raise AiChatFailure(REASON_INTERNAL, NO_SERVICE_HINT)
+            self._require_service(service_id)
+            image_url = (
+                "data:image/png;base64,"
+                + base64.b64encode(self._vision_bytes(png)).decode("ascii")
+            )
+            if action == "ocr":
+                messages = ocr_messages(self._prompt(), image_url)
+            else:
+                messages = translate_messages(self._prompt(), source_text, image_url)
+            result = api.stream_chat(
+                service_id,
+                messages,
+                model=str(self._config_value("ai_model", "") or ""),
+                temperature=self._temperature(),
+                thinking=self._thinking(),
+                reasoning_effort=self._reasoning_effort(),
+            )
+        except AiChatFailure:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 分类后交给 core 显示
+            reason = self._failure_reason(exc, service_id)
+            raise AiChatFailure(reason, str(exc)[:200]) from exc
         if getattr(result, "cancelled", False):
             return ""
         return str(getattr(result, "text", "") or "").strip()
@@ -443,6 +517,7 @@ class AiChatRuntime:
                     lambda: quick.status(OWNER, line, pet_slot=slot))
 
             try:
+                self._require_service(service_id)
                 result = api.stream_chat(
                     service_id,
                     messages,
@@ -457,12 +532,19 @@ class AiChatRuntime:
                     cancel=cancel,
                 )
             except Exception as exc:  # noqa: BLE001
-                reason = str(getattr(exc, "reason", "") or "network")
-                detail = str(exc)
+                reason = self._failure_reason(exc, service_id)
+                detail = str(exc)[:200]
 
                 def failed():
                     if cancel.is_set():
                         quick.done(OWNER, "".join(partial), pet_slot=slot)
+                    elif partial:
+                        # 已经吐出的正文比错误卡重要：收尾成半条回答，别把它抹掉。
+                        final = (
+                            "".join(partial)
+                            + f"\n\n（{detail}：这次回答没有正常结束，已保留前面的内容。）"
+                        )
+                        quick.done(OWNER, final, pet_slot=slot)
                     else:
                         quick.error(OWNER, reason, detail, pet_slot=slot)
 
@@ -505,6 +587,7 @@ class AiChatRuntime:
                     lambda: chat.status(OWNER, line, pet_slot=slot))
 
             try:
+                self._require_service(service_id)
                 result = api.stream_chat(
                     service_id,
                     messages,
@@ -519,12 +602,19 @@ class AiChatRuntime:
                     cancel=cancel,
                 )
             except Exception as exc:  # noqa: BLE001
-                reason = str(getattr(exc, "reason", "") or "network")
-                detail = str(exc)
+                reason = self._failure_reason(exc, service_id)
+                detail = str(exc)[:200]
 
                 def failed():
                     if cancel.is_set():
                         chat.done(OWNER, "".join(partial), pet_slot=slot)
+                    elif partial:
+                        # 已经吐出的正文比错误卡重要：收尾成半条回答，别把它抹掉。
+                        final = (
+                            "".join(partial)
+                            + f"\n\n（{detail}：这次回答没有正常结束，已保留前面的内容。）"
+                        )
+                        chat.done(OWNER, final, pet_slot=slot)
                     else:
                         chat.error(OWNER, reason, detail, pet_slot=slot)
                         self._say(f"AI 请求失败：{detail}")
@@ -560,6 +650,7 @@ class AiChatRuntime:
 
         def run() -> None:
             try:
+                self._require_service(service_id)
                 payload = messages() if callable(messages) else messages
                 result = api.stream_chat(
                     service_id,
@@ -571,7 +662,7 @@ class AiChatRuntime:
                     cancel=cancel,
                 )
             except Exception as exc:  # noqa: BLE001
-                reason = str(getattr(exc, "reason", "") or exc)
+                reason = self._failure_reason(exc, service_id)
                 publish(lambda: fail(reason))
                 return
             text = str(getattr(result, "text", "") or "").strip()
@@ -669,7 +760,8 @@ class AiChatRuntime:
         self._look_busy.discard(slot)
         message = "看不清啊…"
         if reason and reason != "empty_reply":
-            message += str(reason)[:60]
+            text = str(reason)[:60]
+            message += _REASON_TEXT.get(text, text)
         self._say(message, duration_ms=5000)
 
     # ---------------------------------------------------------------- 生命周期

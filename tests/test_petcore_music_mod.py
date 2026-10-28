@@ -19,13 +19,22 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-from petcore.contracts.host import HostPorts
+from petcore.contracts.host import AnimationState, HostPorts
 from petcore.contracts.http import HttpError, HttpResponse
 from petcore.mods import feature as feature_mod
 from petcore.mods.manifest import load_manifest
+from petcore.ui import presentation_gate
 
 MOD_DIR = Path(__file__).resolve().parents[1] / "examples" / "petcore-mods" / "media.music"
 HOST_PKG = "petcore_music_test_host"
+
+
+@pytest.fixture(autouse=True)
+def _clean_presentation_gate():
+    """进程级闸门是全局态：每个用例前后都清空，免得把别的测试的气泡挡掉。"""
+    presentation_gate.reset()
+    yield
+    presentation_gate.reset()
 
 
 def _host_package():
@@ -140,13 +149,14 @@ def _playback(
     position: float | None = 0.0,
     playing: bool = True,
     app_id: str = "cloudmusic.exe",
+    duration: float = 180.0,
 ):
     return now_playing.Playback(
         title=title,
         artist=artist,
         app_id=app_id,
         position=position,
-        duration=180.0,
+        duration=duration,
         playing=playing,
     )
 
@@ -442,19 +452,20 @@ def test_silence_beyond_grace_releases_loop():
     assert harness.presentation.animations == [(runtime_mod.SING_ANIM, True)]
 
 
-def test_pause_keeps_lines_and_releases_after_grace():
+def test_pause_releases_the_loop_on_the_next_tick():
+    """明确暂停**立刻**停唱：宽限只用于 absent（用户按了暂停就是不想听了）。"""
     harness = _Harness(
         {"music_lyric_enabled": False, "music_sing_grace_seconds": 2},
         playback=_playback(),
     )
     harness.poll()
+    assert harness.presentation.animations == [(runtime_mod.SING_ANIM, True)]
+
     harness.sample = _playback(playing=False)
     harness.now += 1
     harness.poll()
-    assert harness.presentation.released == 0
-    harness.now += 2
-    harness.poll()
     assert harness.presentation.released == 1
+    assert harness.runtime.singing is False
 
 
 def test_instrumental_track_does_not_sing():
@@ -519,7 +530,7 @@ def test_lyric_bubble_has_lead_and_throttle():
     assert harness.presentation.said == ["第一句"]
 
     harness.now += 1.0
-    harness.sample = _playback(position=3.0)
+    harness.sample = _playback(position=20.0)
     harness.poll()
     assert harness.presentation.said == ["第一句"]
 
@@ -867,3 +878,548 @@ def test_old_lyrics_cannot_reappear_after_stop_and_restart():
     harness.runtime._track_key = harness.sample.key()
     pending[0]()
     assert harness.runtime._lines == ()
+# ---------------------------------------------------------------- 唱到一半被打断
+#
+# 三个用户报的现象各有一组用例：
+#
+# 1. **唱歌动作被打断后不再回来**：核心 ``_play_spec()`` 是循环的唯一清除点（点击、
+#    探头、击飞、拖拽都会清掉），mod 以前只认自己的 ``_leases``，于是"以为还在唱"。
+#    现在每拍用 ``animation_state()`` 复核，丢了就补，并且有 2^n 退避、接管态不抢。
+# 2. **歌词期间自言自语打断**：歌词持有展示会话（``begin_scene``），别人的自动气泡
+#    返回 False。
+# 3. **单曲循环第二遍没有歌词**：曲目身份不变（``Playback.key``），进度回到开头要按
+#    新一轮重放**已缓存**的歌词；不上报进度的播放器用估算曲长 + 暂停→播放边沿判定。
+
+
+class _LoopPresentation(_Presentation):
+    """带动画状态的替身：核心清掉循环/探头接管都能被如实模拟。"""
+
+    def __init__(self, start: bool = True):
+        super().__init__(start=start)
+        self.name = ""
+        self.loop = False
+        self.locked = False
+
+    def play_animation(self, name, *, loop=False):
+        ok = super().play_animation(name, loop=loop)
+        if ok:
+            self.name, self.loop = name, loop
+        return ok
+
+    def release_loop(self):
+        self.loop = False
+        return super().release_loop()
+
+    def animation_state(self):
+        if self.locked:
+            return AnimationState(name=self.name, loop=False, locked=True)
+        return AnimationState(name=self.name, loop=self.loop)
+
+    def external_clear(self, name: str = "点头") -> None:
+        """模拟核心改播别的素材：``_play_spec()`` 清掉循环标志。"""
+        self.name, self.loop = name, False
+
+
+def test_singing_resumes_after_core_clears_the_loop():
+    presentation = _LoopPresentation()
+    harness = _Harness(
+        {"music_lyric_enabled": False}, presentation=presentation, playback=_playback()
+    )
+    harness.poll()
+    assert presentation.animations == [(runtime_mod.SING_ANIM, True)]
+    assert presentation.loop is True
+
+    # 用户点了桌宠：核心改播点击动作，循环标志被清掉，mod 的 _leases 还留着。
+    presentation.external_clear("点击")
+    harness.now += 1
+    harness.poll()
+
+    assert presentation.animations == [(runtime_mod.SING_ANIM, True)] * 2
+    assert presentation.loop is True
+    assert harness.runtime.singing is True
+    # 循环标志本来就不在我们手里了：补播前不许再发一次 release_loop()
+    # （那会误伤别人持着的循环）。
+    assert presentation.released == 0
+
+
+def test_lost_loop_retries_with_backoff_and_never_gives_up():
+    presentation = _LoopPresentation()
+    harness = _Harness(
+        {"music_lyric_enabled": False}, presentation=presentation, playback=_playback()
+    )
+    harness.poll()
+    first = len(presentation.animations)
+
+    # 每一拍都被别人接管：必须恢复，但不许每拍都发请求。
+    for _ in range(20):
+        presentation.external_clear()
+        harness.now += 1
+        harness.poll()
+    recovered = len(presentation.animations) - first
+    assert 2 <= recovered <= 8, recovered
+
+    # 不再被清掉之后稳住，一拍请求都不再发。
+    for _ in range(60):
+        harness.now += 1
+        harness.poll()
+        if harness.runtime.singing:
+            break
+    assert harness.runtime.singing is True
+    assert presentation.loop is True
+    settled = len(presentation.animations)
+    for _ in range(5):
+        harness.now += 1
+        harness.poll()
+    assert len(presentation.animations) == settled
+    assert harness.runtime.singing is True
+
+
+def test_locked_states_are_not_stolen():
+    presentation = _LoopPresentation()
+    harness = _Harness(
+        {"music_lyric_enabled": False}, presentation=presentation, playback=_playback()
+    )
+    harness.poll()
+    assert len(presentation.animations) == 1
+
+    # 探头/击飞/拖拽接管：核心会拒绝或立刻清掉，mod 不许抢。
+    presentation.locked = True
+    for _ in range(5):
+        presentation.external_clear("待机")
+        harness.now += 1
+        harness.poll()
+    assert len(presentation.animations) == 1
+
+    presentation.locked = False
+    harness.now += 1
+    harness.poll()
+    assert presentation.animations[-1] == (runtime_mod.SING_ANIM, True)
+
+
+def test_track_change_rearms_a_backed_off_loop():
+    presentation = _LoopPresentation()
+    harness = _Harness(
+        {"music_lyric_enabled": False}, presentation=presentation, playback=_playback()
+    )
+    harness.poll()
+    for _ in range(8):
+        presentation.external_clear()
+        harness.now += 1
+        harness.poll()
+    before = len(presentation.animations)
+
+    harness.sample = _playback(title="普通朋友")
+    harness.now += 1
+    presentation.external_clear()
+    harness.poll()
+    assert len(presentation.animations) == before + 1
+    assert presentation.loop is True
+
+
+# ---------------------------------------------------------------- 单曲循环
+
+
+POSITION_LYRIC = "[00:00.00]第一句\n[00:15.00]第二句"
+CLOCK_LYRIC = "[00:00.00]第一句\n[00:03.00]第二句"
+
+
+def _lyric_handler(text):
+    def handler(request):
+        if "cloudsearch" in request.url:
+            return (200, _json({"result": {"songs": [{"id": 42, "ar": [{"name": "陶喆"}]}]}}), ())
+        if "/api/song/lyric" in request.url:
+            return (200, _json({"lrc": {"lyric": text}}), ())
+        return HttpError("protocol", status=404)
+
+    return handler
+
+
+def test_single_track_loop_replays_lyrics_from_reported_position():
+    port = FakeHttpPort(_lyric_handler(POSITION_LYRIC))
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        http=port,
+        playback=_playback(position=0.0),
+    )
+    harness.poll()
+    assert harness.presentation.said == ["第一句"]
+    requests = len(port.requests)
+
+    harness.now += 2.0
+    harness.sample = _playback(position=20.0)
+    harness.poll()
+    assert harness.presentation.said == ["第一句", "第二句"]
+
+    # 播到尾部（0.9 × 180s）：没有新的一句。
+    harness.now += 2.0
+    harness.sample = _playback(position=162.0)
+    harness.poll()
+    assert harness.presentation.said == ["第一句", "第二句"]
+
+    # 单曲循环第二遍：进度回到 0.05 × 180s = 9s，用缓存歌词重新逐行显示。
+    harness.now += 2.0
+    harness.sample = _playback(position=9.0)
+    harness.poll()
+    assert harness.presentation.said == ["第一句", "第二句", "第一句"]
+    assert harness.runtime._lyric_index == 0
+    # 不许重新联网取词。
+    assert len(port.requests) == requests
+
+    harness.now += 2.0
+    harness.sample = _playback(position=20.0)
+    harness.poll()
+    assert harness.presentation.said[-1] == "第二句"
+
+
+def test_single_track_loop_replays_lyrics_without_reported_position():
+    """网易云/酷狗不上报进度：本地时钟越过估算曲长就按新一轮处理。"""
+    port = FakeHttpPort(_lyric_handler(CLOCK_LYRIC))
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        http=port,
+        playback=_playback(position=None, duration=0.0),
+    )
+    harness.poll()
+    assert harness.presentation.said == ["第一句"]
+    requests = len(port.requests)
+
+    harness.now += 3.0
+    harness.poll()
+    assert harness.presentation.said == ["第一句", "第二句"]
+
+    # 估算曲长 = 末句 3s + 6s 尾巴 = 9s：越过它就是新一圈。
+    harness.now += 7.5
+    harness.poll()
+    assert harness.presentation.said == ["第一句", "第二句", "第一句"]
+    assert len(port.requests) == requests
+
+    harness.now += 3.0
+    harness.poll()
+    assert harness.presentation.said[-1] == "第二句"
+
+
+def test_pause_play_edge_starts_a_new_round_when_position_is_unknown():
+    port = FakeHttpPort(_lyric_handler(CLOCK_LYRIC))
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        http=port,
+        playback=_playback(position=None, duration=0.0),
+    )
+    harness.poll()
+    harness.now += 3.0
+    harness.poll()
+    assert harness.presentation.said == ["第一句", "第二句"]
+
+    # 尾部暂停（本地时钟停在 7s，已过"估算曲长 - 容差"），再播放就是新一圈。
+    harness.now += 4.0
+    harness.poll()
+    harness.now += 1.0
+    harness.sample = _playback(position=None, playing=False, duration=0.0)
+    harness.poll()
+    harness.now += 30.0
+    harness.sample = _playback(position=None, duration=0.0)
+    harness.poll()
+    assert harness.presentation.said[-1] == "第一句"
+    assert harness.runtime._lyric_index == 0
+
+
+# ---------------------------------------------------------------- 暂停
+#
+# 用户报的两个现象同源：播放器**明确暂停**时运行时还在等 ``music_sing_grace_seconds``
+# （唱歌动画多演 5 秒），并且把暂停期间的身份降级（SMTC 会话掉线 → 窗口标题兜底，
+# 艺人/专辑/时长都丢了）当成换歌 → ``_begin_track`` 重建歌词状态 → 恢复播放时重新
+# 联网取词 → 取不到就冒「歌词获取失败」。
+#
+# 现在：暂停下一拍就停唱；暂停里不动曲目/歌词/取词配额；取词失败只在**播放中**冒泡。
+
+
+def _failing_fetch(calls: list[str]):
+    """取词替身：每次都失败（模拟三个源都没有这首）。"""
+
+    def fetch(_http, title, _artist, **_kwargs):
+        calls.append(title)
+        raise lyrics_mod.LyricsError("歌词获取失败：网易云：没有找到匹配的歌词")
+
+    return fetch
+
+
+def _paused(harness, **overrides) -> None:
+    """推进一拍并且换成暂停的采样（默认保持曲目身份不变）。"""
+    harness.sample = _playback(playing=False, **overrides)
+    harness.now += 1
+    harness.poll()
+
+
+def test_paused_singing_stops_and_lyrics_are_kept():
+    port = FakeHttpPort(_lyric_handler(POSITION_LYRIC))
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": True, "music_sing_grace_seconds": 30},
+        http=port,
+        playback=_playback(position=0.0),
+    )
+    harness.poll()  # 第一拍：取词 + 等纯音乐探测
+    harness.now += 1
+    harness.poll()  # 第二拍：唱起来
+    assert harness.presentation.animations == [(runtime_mod.SING_ANIM, True)]
+    assert harness.presentation.said == ["第一句"]
+    requests = len(port.requests)
+    lines, index = harness.runtime._lines, harness.runtime._lyric_index
+
+    # 宽限设成 30 秒也不许再唱（旧实现要等满宽限才解除）。
+    _paused(harness, position=1.0)
+    assert harness.presentation.released == 1
+    assert harness.runtime.singing is False
+    assert harness.runtime._lines == lines
+    assert harness.runtime._lyric_index == index
+    assert len(port.requests) == requests
+    assert not [text for text in harness.presentation.said if "歌词获取失败" in text]
+
+    # 继续暂停：不重复释放、不取词、不再唱。
+    for _ in range(3):
+        harness.now += 1
+        harness.poll()
+    assert harness.presentation.released == 1
+    assert harness.presentation.animations == [(runtime_mod.SING_ANIM, True)]
+    assert len(port.requests) == requests
+
+
+def test_paused_identity_degradation_keeps_the_track_and_its_lyrics():
+    """暂停期间 SMTC 掉线（只剩窗口标题、没有时长）不是换歌。"""
+    port = FakeHttpPort(_lyric_handler(POSITION_LYRIC))
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": True, "music_sing_grace_seconds": 30},
+        http=port,
+        playback=_playback(position=0.0),
+    )
+    harness.poll()
+    harness.now += 1
+    harness.poll()
+    key = harness.runtime._track_key
+    assert key == ("蝴蝶", "陶喆")
+    requests = len(port.requests)
+    lines, index = harness.runtime._lines, harness.runtime._lyric_index
+
+    # 暂停：艺人丢了、duration 也没了（窗口标题源给的曲目就是这个形状）。
+    degraded = {"artist": "", "duration": 0.0, "position": None}
+    _paused(harness, **degraded)
+    for _ in range(2):
+        harness.now += 1
+        harness.poll()
+
+    assert harness.runtime._track_key == key
+    assert harness.runtime._lines == lines
+    assert harness.runtime._lyric_index == index
+    assert len(port.requests) == requests
+
+    # 恢复播放，身份仍是降级的那一版：不重建、不取词、不跳句、不冒错。
+    # 多跑几拍——降级身份是**一直**这样的，第二拍才算真正守住（别名不能只用一次）。
+    harness.sample = _playback(**degraded)
+    for _ in range(3):
+        harness.now += 1
+        harness.poll()
+        assert harness.runtime._track_key == key
+        assert harness.runtime._lines == lines
+        assert len(port.requests) == requests
+
+    assert harness.runtime._lyric_index == index
+    assert harness.runtime.singing is True
+    assert not [text for text in harness.presentation.said if "歌词获取失败" in text]
+
+
+def test_real_track_change_while_paused_is_adopted_on_resume():
+    """暂停里真的换了歌：暂停中不重建，恢复播放时才接管（并正常取词）。"""
+    port = FakeHttpPort(_lyric_handler(POSITION_LYRIC))
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        http=port,
+        playback=_playback(position=0.0),
+    )
+    harness.poll()
+    requests = len(port.requests)
+
+    harness.sample = _playback(title="普通朋友", playing=False)
+    harness.now += 1
+    harness.poll()
+    assert harness.runtime._track_key == ("蝴蝶", "陶喆")
+    assert len(port.requests) == requests
+
+    harness.sample = _playback(title="普通朋友")
+    harness.now += 1
+    harness.poll()
+    assert harness.runtime._track_key == ("普通朋友", "陶喆")
+    assert len(port.requests) > requests
+
+
+def test_absent_still_waits_for_the_grace():
+    """absent（切歌抖动 / 播放器被关掉）不许跟暂停一样立刻停：宽限 + 确认拍照旧。"""
+    harness = _Harness(
+        {"music_lyric_enabled": False, "music_sing_grace_seconds": 6},
+        playback=_playback(),
+    )
+    harness.poll()
+    assert harness.presentation.animations == [(runtime_mod.SING_ANIM, True)]
+
+    harness.sample = None
+    harness.now += 1
+    harness.poll()
+    assert harness.presentation.released == 0
+    harness.now += 3
+    harness.poll()
+    assert harness.presentation.released == 0
+    harness.now += 3
+    harness.poll()
+    assert harness.presentation.released == 1
+
+
+def test_lyric_failure_while_paused_is_silent_and_does_not_use_the_quota():
+    port = FakeHttpPort(_lyric_handler(POSITION_LYRIC))
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        http=port,
+        playback=_playback(),
+    )
+    calls: list[str] = []
+    harness.runtime.fetch_lyrics = _failing_fetch(calls)
+    pending: list = []
+    harness.runtime.background = pending.append  # 取词停在"在飞"
+
+    harness.poll()
+    assert harness.runtime._fetch_attempts == 1
+    assert calls == []  # 取词还在飞（work 还没跑）
+
+    # 暂停之后失败结果才回来：静默，并且把配额退回去（暂停不是"这首取不到词"）。
+    _paused(harness)
+    pending[0]()
+    assert calls == ["蝴蝶"]
+    assert not [text for text in harness.presentation.said if "歌词获取失败" in text]
+    assert harness.runtime._fetch_attempts == 0
+    assert harness.runtime._lyric_retry_at is None
+
+    # 恢复播放：照常再试一次；这一回在播，失败要冒泡，而且只冒一次。
+    harness.runtime.background = lambda work: work()
+    harness.sample = _playback(position=0.0)
+    harness.now += 1
+    harness.poll()
+    assert harness.runtime._fetch_attempts == 1
+    assert len([text for text in harness.presentation.said if "歌词获取失败" in text]) == 1
+
+    # 冷却与上限照旧：冷却期内不重试，最多 LYRIC_MAX_ATTEMPTS 次。
+    harness.now += 1
+    harness.poll()
+    assert harness.runtime._fetch_attempts == 1
+    for _ in range(5):
+        harness.now += runtime_mod.LYRIC_RETRY_SECONDS
+        harness.poll()
+    assert harness.runtime._fetch_attempts == runtime_mod.LYRIC_MAX_ATTEMPTS
+    assert len([text for text in harness.presentation.said if "歌词获取失败" in text]) == 1
+
+
+# ---------------------------------------------------------------- 展示会话
+
+
+class _ScenePresentation(_LoopPresentation):
+    """带展示会话闸门的替身：闸门语义与 Core 的 ``_PresentationAdapter`` 同款。"""
+
+    def __init__(self, start: bool = True):
+        super().__init__(start=start)
+        self.scene = ""
+        self.scene_calls: list[tuple[str, str]] = []
+        self.owners: list[str] = []
+
+    def begin_scene(self, owner):
+        self.scene_calls.append(("begin", owner))
+        self.scene = owner
+        return True
+
+    def end_scene(self, owner):
+        self.scene_calls.append(("end", owner))
+        if self.scene == owner:
+            self.scene = ""
+
+    def refresh_scene(self, owner):
+        return self.scene == owner
+
+    def say(self, text, *, duration_ms=4000, force=False, subtitle="", owner=""):
+        if self.scene and not force and owner != self.scene:
+            return False
+        self.owners.append(owner)
+        return super().say(text, duration_ms=duration_ms, force=force)
+
+
+def test_lyrics_hold_the_scene_and_foreign_bubbles_do_not_interrupt():
+    presentation = _ScenePresentation()
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        presentation=presentation,
+        http=FakeHttpPort(_lyric_handler(POSITION_LYRIC)),
+        playback=_playback(position=0.0),
+    )
+    harness.poll()
+    assert presentation.said == ["第一句"]
+    assert presentation.scene == runtime_mod.SCENE_OWNER == "media.music"
+    assert presentation.owners[-1] == "media.music"
+
+    # 歌词期间别人的自动气泡被拒，且歌词还在。
+    assert presentation.say("自言自语一句") is False
+    assert presentation.said == ["第一句"]
+
+    harness.now += 2.0
+    harness.sample = _playback(position=20.0)
+    harness.poll()
+    assert presentation.said == ["第一句", "第二句"]
+    # 会话只申请一次（不每拍重入）。
+    assert presentation.scene_calls.count(("begin", "media.music")) == 1
+
+    harness.runtime.stop()
+    assert presentation.scene == ""
+    assert ("end", "media.music") in presentation.scene_calls
+
+
+def test_scene_is_released_when_lyrics_stop_being_shown():
+    presentation = _ScenePresentation()
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        presentation=presentation,
+        http=FakeHttpPort(_lyric_handler(POSITION_LYRIC)),
+        playback=_playback(position=0.0),
+    )
+    harness.poll()
+    assert presentation.scene == "media.music"
+
+    # 关掉歌词显示：下一拍就要放开气泡（不能把自言自语永久锁死）。
+    harness.ports.config.set("music_lyric_enabled", False)
+    harness.now += 1
+    harness.poll()
+    assert presentation.scene == ""
+    assert ("end", "media.music") in presentation.scene_calls
+
+
+def test_scene_stays_held_while_a_rearm_is_pending():
+    """唱歌的补播空档里不发第二次 begin：会话要一路连贯，别两拍一抖。"""
+    presentation = _ScenePresentation()
+    harness = _Harness(
+        {"music_lyric_enabled": False, "music_sing_enabled": True},
+        presentation=presentation,
+        playback=_playback(),
+    )
+    harness.poll()
+    assert presentation.scene == "media.music"
+    assert presentation.loop is True
+
+    # 循环被清掉、补播暂时失败（素材一时读不到）：会话不许放掉。
+    presentation.start = False
+    presentation.external_clear()
+    harness.now += 1
+    harness.poll()
+    assert presentation.loop is False
+    assert presentation.scene == "media.music"
+    assert presentation.scene_calls.count(("begin", "media.music")) == 1
+
+    # 素材回来：退避到期就重新唱，还是同一个会话。
+    presentation.start = True
+    for _ in range(5):
+        harness.now += 1
+        harness.poll()
+    assert presentation.loop is True
+    assert presentation.scene_calls.count(("begin", "media.music")) == 1
+    assert ("end", "media.music") not in presentation.scene_calls

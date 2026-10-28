@@ -18,6 +18,7 @@ IDS = (
     "tool.ocr",
     "tool.weather",
     "tool.file-reader",
+    "tool.ai-browser",
 )
 
 

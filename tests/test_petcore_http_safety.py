@@ -186,3 +186,51 @@ def test_complete_response_is_not_marked_truncated() -> None:
 
     _status, _headers, body = fetch_url("https://a.example/x", timeout=1.0, opener=factory)
     assert body.truncated is False
+
+
+#: 只有「同一台 API 主机」的调用点可以改写进程级「固定直连」结论
+#: （它们的成败代表这台 API 能不能走代理）；其它域一律 `pollute=False`。
+_ROUTE_OWNERS = frozenset(
+    {
+        "petcore/api/chat.py",
+        "petcore/api/probe.py",
+        "petcore/account/service.py",
+    }
+)
+
+
+def test_only_api_hosts_may_pin_the_process_route() -> None:
+    """`urlopen(...)` 的每个调用点要么是 API 主机，要么显式 `pollute=False`。
+
+    背景：一次第三方 CDN/搜索请求的「代理失败→直连成功」若固化成进程结论，之后
+    所有 API 请求都不再尝试代理——用户看到的是「AI 对话网络不可达」，而真正的原因
+    早就不在这条链路上。加新调用点时这条守卫会逼你选一个路由语义。
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "petcore"
+    offenders: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(root.parent).as_posix()
+        if relative == "petcore/net/http.py":  # 定义处
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = getattr(func, "id", None) or getattr(func, "attr", None)
+            if name != "urlopen":
+                continue
+            pollute = next(
+                (kw.value for kw in node.keywords if kw.arg == "pollute"), None
+            )
+            none_pollute = isinstance(pollute, ast.Constant) and pollute.value is False
+            if relative in _ROUTE_OWNERS or none_pollute:
+                continue
+            offenders.append(f"{relative}:{node.lineno}")
+    assert not offenders, (
+        "这些 urlopen 调用会改写进程级『固定直连』结论，请传 pollute=False："
+        + ", ".join(offenders)
+    )

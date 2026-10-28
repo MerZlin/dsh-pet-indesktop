@@ -70,6 +70,7 @@ class ClickTalkRuntime:
                             caption,
                             duration_ms=3200,
                             scale=talk_images.image_scale(config) / 100.0,
+                            force=True,
                         )
                     )
                 text = caption

@@ -68,7 +68,7 @@ def fetch_index(
         headers["If-None-Match"] = etag
     request = urllib.request.Request(str(url), headers=headers)
     try:
-        response = http.urlopen(request, timeout=timeout, opener=opener)
+        response = http.urlopen(request, timeout=timeout, opener=opener, pollute=False)
     except urllib.error.HTTPError as exc:
         if int(getattr(exc, "code", 0) or 0) == 304:
             return IndexFetch(body=b"", not_modified=True)
@@ -410,7 +410,9 @@ def download_with_outcome(
             headers["Range"] = f"bytes={existing}-"
         request = urllib.request.Request(current_url, headers=headers)
         try:
-            response = http.urlopen(request, timeout=timeout, opener=safe_opener)
+            response = http.urlopen(
+                request, timeout=timeout, opener=safe_opener, pollute=False
+            )
         except _RedirectBlocked as exc:
             _close_quietly(exc)  # 3xx 响应体已关闭；这里只清掉异常持有的引用
             if policy is None:

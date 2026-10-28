@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from petcore.config import Config
 from petcore.contracts.content import CharacterSpec
+from petcore.ui.animated_image import AnimatedImage
 from petcore.ui.bubble import (
     BUBBLE_TEXT_COLUMN,
     BUBBLE_TEXT_COLUMN_MAX,
@@ -21,6 +22,17 @@ from petcore.ui.bubble import (
     column_for_text,
 )
 from petcore.ui.pet_window import PetWindow
+
+# 8x4 双帧 GIF89a（首帧红、次帧蓝，100ms/帧），字节内联以避免外部素材。
+_ANIMATED_GIF = (
+    b'GIF89a\x08\x00\x04\x00\x81\x00\x00\xff\x00\x00\x00\x00\x00\x00'
+    b'\x00\x00\x00\x00\x00!\xff\x0bNETSCAPE2.0\x03'
+    b'\x01\x00\x00\x00!\xf9\x04\x00\n\x00\x00\x00,\x00\x00\x00\x00\x08\x00\x04'
+    b'\x00\x00\x08\x0c\x00\x01\x08\x1cH\xb0\xa0\xc1\x83\x04\x03\x02\x00!\xf9\x04'
+    b'\x01\n\x00\x01\x00,\x00\x00\x00\x00\x08\x00\x04\x00\x81\x00\x00\xff\x00\x00'
+    b'\x00\x00\x00\x00\x00\x00\x00\x08\x0c\x00\x01\x08\x1cH\xb0\xa0\xc1\x83\x04\x03'
+    b'\x02\x00;'
+)
 
 
 class FakeHost:
@@ -408,3 +420,76 @@ def test_long_subtitle_wraps_inside_the_text_column(app) -> None:
         )
     finally:
         bubble.close()
+
+
+def _write_gif(path: Path) -> Path:
+    path.write_bytes(_ANIMATED_GIF)
+    return path
+
+
+def test_show_image_plays_a_gif(app, window, tmp_path: Path) -> None:
+    gif = _write_gif(tmp_path / "anim.gif")
+    bubble = window.bubble
+    anchor = window.bubble_anchor_rect()
+
+    assert bubble.show_image(gif, anchor, caption="动图") is True
+    animated = bubble.animated_image
+    assert isinstance(animated, AnimatedImage)
+    assert animated.movie_path == str(gif)
+    assert animated.is_running is True
+    assert animated.isVisible() is True
+    assert bubble.is_showing_image() is True
+    assert bubble.caption_label.text() == "动图"
+    # 白色圆角底板仍是 image_label（保留 8px 内边距），动图控件贴在它里面。
+    assert bubble.image_label.isVisible() is True
+    assert bubble.image_label.pixmap().isNull()
+    assert bubble.image_label.size().toTuple() == (8 + 2 * 8, 4 + 2 * 8)
+    assert (animated.x(), animated.y()) == (8, 8)
+
+    bubble.show_text("回到文字", anchor)
+    assert animated.is_running is False
+    assert animated.isVisible() is False
+
+
+def test_static_image_hides_the_previous_animation(app, window, tmp_path: Path) -> None:
+    gif = _write_gif(tmp_path / "anim.gif")
+    png = _write_image(tmp_path / "egg.png", width=400, height=200)
+    bubble = window.bubble
+    anchor = window.bubble_anchor_rect()
+
+    assert bubble.show_image(gif, anchor) is True
+    animated = bubble.animated_image
+    assert bubble.show_image(png, anchor) is True
+
+    assert animated.is_running is False
+    assert animated.isVisible() is False
+    assert bubble.image_label.pixmap().size().toTuple() == (320, 160)
+
+
+def test_showing_a_second_gif_reuses_the_animated_widget(app, window, tmp_path: Path) -> None:
+    first = _write_gif(tmp_path / "a.gif")
+    second = _write_gif(tmp_path / "b.gif")
+    bubble = window.bubble
+    anchor = window.bubble_anchor_rect()
+
+    assert bubble.show_image(first, anchor) is True
+    animated = bubble.animated_image
+    assert bubble.show_image(second, anchor) is True
+
+    assert bubble.animated_image is animated
+    assert animated.movie_path == str(second)
+    assert animated.is_running is True
+
+
+def test_hiding_the_bubble_stops_the_gif(app, window, tmp_path: Path) -> None:
+    gif = _write_gif(tmp_path / "anim.gif")
+    bubble = window.bubble
+    anchor = window.bubble_anchor_rect()
+
+    assert bubble.show_image(gif, anchor) is True
+    animated = bubble.animated_image
+    assert animated.is_running is True
+
+    bubble.hide()
+
+    assert animated.is_running is False

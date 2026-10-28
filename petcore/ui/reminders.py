@@ -29,7 +29,9 @@ class ReminderDelivery:
             if self._timer is None:
                 self._timer = self.scheduler.call_every(1000, self.flush)
             return 'queued'
-        if target.say(message, duration_ms=8000):
+        # 提醒是用户自己设的，必须压过歌词等展示会话（force=True）；
+        # 气泡拿不到才退到系统通知。
+        if target.say(message, duration_ms=8000, force=True):
             return 'bubble'
         epoch = (self._owner_epochs.get(owner, 0), self._slot_epochs.get(slot, 0))
         def clicked():

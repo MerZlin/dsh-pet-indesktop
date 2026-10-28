@@ -1,11 +1,16 @@
 """联网失败的稳定分类。
 
 上层（设置页、气泡、mod 端口）只认这几个 reason 字符串，不解析异常文本：
-``auth`` / ``rate_limit`` / ``network`` / ``timeout`` / ``tls`` / ``protocol``。
+``auth`` / ``rate_limit`` / ``network`` / ``timeout`` / ``tls`` / ``protocol`` /
+``internal``。
 服务器响应体一律不读、不回显——它可能原样回显请求里的密钥。
 
 ``tls`` 与 ``network`` 必须分开：证书校验失败（企业 MITM 代理、时钟偏差、自签证书）
 说明链路是通的，报「网络不可达」只会让用户去重启路由。
+
+``internal`` 也不是链路问题：**一次请求根本没发出去**（没有可用服务、服务 ID 对不上、
+本地 payload 组装失败等）。它存在的唯一理由是「不许把内部错误谎报成网络不可达」——
+那会把用户赶去重启路由，而且日志里什么都不留。
 """
 
 from __future__ import annotations
@@ -22,6 +27,8 @@ NETWORK = "network"
 TIMEOUT = "timeout"
 TLS = "tls"
 PROTOCOL = "protocol"
+#: 请求没发出去/本地状态不自洽（没有服务、服务 ID 对不上），与链路无关。
+INTERNAL = "internal"
 
 REASON_TEXT = {
     AUTH: "密钥无效或没有权限",
@@ -30,6 +37,7 @@ REASON_TEXT = {
     TIMEOUT: "连接超时",
     TLS: "证书校验失败",
     PROTOCOL: "服务端返回了无法识别的响应",
+    INTERNAL: "内部错误（不是网络问题，详情见日志）",
 }
 
 

@@ -64,9 +64,10 @@ from .easter_egg import DEFAULT_EASTER_EGG_TITLE, EasterEggController
 from .edge_probe import EdgeProbeController
 from .effects import EffectController
 from .feeding import FeedingController
-from .menu import show_context_menu
+from .menu import menu_open, show_context_menu
 from .motion import MotionController
 from .renderer import frame_pixmap
+from .rename_dialog import alias_bubble_text, prompt_alias
 from .slingshot import SlingshotController
 
 logger = logging.getLogger("petcore.ui.window")
@@ -119,8 +120,9 @@ class PetWindow(QWidget):
         self.sound = SoundPlayer(float(config.get("volume") or 0.8))
         self._click_sound_pair = ClickSoundPair(self.sound.play)
         self._click_sound_token: int | None = None
-        # 从属窗口（owned window）：气泡的层级永远跟着桌宠走——桌宠置顶它才置顶，
-        # 桌宠退到其它窗口后面它也退，`raise_()` 不会再越过别的应用或右键菜单。
+        # 从属窗口（owned window）：气泡的层级跟着桌宠走——桌宠置顶它才置顶。但
+        # `show()/raise_()` 会把整条 owner 链一起抬到普通窗口层最上面，所以「非置顶时
+        # 不抢前台」与「菜单会话期间不压菜单」都由 `SpeechBubble._present()` 收口。
         self.bubble = SpeechBubble(self)
         self.bubble.clicked.connect(self._on_bubble_clicked)
         self.bubble.set_text_scale(self._text_scale_factor())
@@ -344,6 +346,48 @@ class PetWindow(QWidget):
                 self._play_idle()
                 self.update()
                 return
+
+    def rename_character(self) -> None:
+        """右键「切换角色 → 重命名当前角色…」：写别名（空 = 恢复默认）并冒泡确认。
+
+        别名是**全局**偏好（同一角色 id 在所有宠上同名），所以优先经 host 写主
+        配置并立即落盘；host 没提供这套接口时才退回自己的 config。取消输入
+        （含 Esc/关窗）什么都不改。
+        """
+        character_id = self.character_id
+        if not character_id:
+            return
+        host = getattr(self, "host", None)
+        read = getattr(host, "character_alias", None)
+        alias = (
+            str(read(character_id) or "")
+            if callable(read)
+            else self.config.character_alias(character_id)
+        )
+        lookup = getattr(host, "character_default_name", None)
+        default_name = (
+            str(lookup(character_id) or character_id)
+            if callable(lookup)
+            else character_id
+        )
+        result = prompt_alias(
+            self, default_name=default_name, current=alias or default_name
+        )
+        if not result.accepted:
+            return
+        write = getattr(host, "set_character_alias", None)
+        if callable(write):
+            write(character_id, result.name)
+        else:
+            self.config.set_character_alias(character_id, result.name)
+            try:
+                self.config.save()
+            except OSError:
+                logger.warning("failed to persist character alias", exc_info=True)
+        refresh = getattr(host, "refresh_character_names", None)
+        if callable(refresh):
+            refresh()
+        self.say(alias_bubble_text(result, default_name), 5000)
 
     def _apply_flags(self, *, initial: bool = False) -> None:
         if self.stream_capture_mode:
@@ -931,7 +975,9 @@ class PetWindow(QWidget):
             return
         self.show()
         self._edge_probe.resume()
-        self.raise_()
+        # 右键菜单开着的时候不许把桌宠抬到菜单上面（菜单会话期间层级归菜单）。
+        if not menu_open():
+            self.raise_()
         if self._action_kind is not None and self._clip is not None:
             self._clip.start()
         else:

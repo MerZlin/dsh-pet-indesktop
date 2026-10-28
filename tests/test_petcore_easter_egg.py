@@ -12,8 +12,20 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from petcore.config import Config
 from petcore.contracts.content import CharacterSpec
+from petcore.ui.animated_image import AnimatedImage
 from petcore.ui.easter_egg import EasterEggController, EasterEggPopup
 from petcore.ui.pet_window import PetWindow
+
+# 8x4 双帧 GIF89a（首帧红、次帧蓝，100ms/帧），字节内联以避免外部素材。
+_ANIMATED_GIF = (
+    b'GIF89a\x08\x00\x04\x00\x81\x00\x00\xff\x00\x00\x00\x00\x00\x00'
+    b'\x00\x00\x00\x00\x00!\xff\x0bNETSCAPE2.0\x03'
+    b'\x01\x00\x00\x00!\xf9\x04\x00\n\x00\x00\x00,\x00\x00\x00\x00\x08\x00\x04'
+    b'\x00\x00\x08\x0c\x00\x01\x08\x1cH\xb0\xa0\xc1\x83\x04\x03\x02\x00!\xf9\x04'
+    b'\x01\n\x00\x01\x00,\x00\x00\x00\x00\x08\x00\x04\x00\x81\x00\x00\xff\x00\x00'
+    b'\x00\x00\x00\x00\x00\x00\x00\x08\x0c\x00\x01\x08\x1cH\xb0\xa0\xc1\x83\x04\x03'
+    b'\x02\x00;'
+)
 
 
 @pytest.fixture(scope="module")
@@ -37,6 +49,11 @@ def _write_image(path: Path, width: int = 200, height: int = 120) -> Path:
     image = QImage(width, height, QImage.Format.Format_ARGB32)
     image.fill(QColor("#30a0ff"))
     assert image.save(str(path))
+    return path
+
+
+def _write_gif(path: Path) -> Path:
+    path.write_bytes(_ANIMATED_GIF)
     return path
 
 
@@ -319,3 +336,68 @@ def test_popup_follows_the_host_topmost_flag(app, window, tmp_path: Path) -> Non
     popup = controller.live_popups()[0]
     assert popup.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
     controller.close_all()
+
+
+def test_animated_popup_keeps_the_logical_size_on_hidpi(app, tmp_path: Path) -> None:
+    gif = _write_gif(tmp_path / "anim.gif")
+    popup = EasterEggPopup(gif, "动图", dpr=2.0)
+    try:
+        animated = popup.animated_image
+        assert isinstance(animated, AnimatedImage)
+        assert popup.device_pixel_ratio == pytest.approx(2.0)
+        assert animated.device_pixel_ratio() == pytest.approx(2.0)
+        # 动图与静态图同一套逻辑尺寸口径（QLabel 位置留给静态图）。
+        assert popup.image_label.size().toTuple() == (8, 4)
+        assert animated.size().toTuple() == (8, 4)
+        assert animated.movie().scaledSize().toTuple() == (16, 8)
+    finally:
+        popup.close()
+
+
+def test_window_mode_shows_a_gif_as_an_animated_image(
+    app, pet_window, tmp_path: Path
+) -> None:
+    folder = tmp_path / "eggs"
+    folder.mkdir()
+    gif = _write_gif(folder / "anim.gif")
+    pet_window.config.set("easter_egg_image_dir", str(folder))
+    pet_window.config.data["easter_egg_display"] = "window"
+
+    assert pet_window.show_easter_egg() is True
+    popup = pet_window.easter.live_popups()[0]
+    animated = popup.animated_image
+    assert isinstance(animated, AnimatedImage)
+    assert animated.movie_path == str(gif)
+    assert animated.is_running is True
+    assert animated.isVisible() is True
+    # 静态图的那条 QLabel 让位：没有 pixmap 也不占版面。
+    assert popup.image_label.isVisible() is False
+    assert popup.image_label.pixmap().isNull()
+    assert popup.image_label.size().toTuple() == (8, 4)
+    # 窗口总尺寸仍用同一套公式，只是图片尺寸来自动图的逻辑尺寸（8x4），
+    # 标题/hint 的最小尺寸会把它撑大，所以只断言不比图片小。
+    assert popup.width() >= 8 + 24
+    assert popup.height() >= 4 + 18 + 8 + 10 + 12
+
+    popup.close()
+    assert animated.is_running is False
+    assert animated.movie() is None
+
+
+def test_default_bubble_mode_plays_a_gif(app, pet_window, tmp_path: Path) -> None:
+    folder = tmp_path / "eggs"
+    folder.mkdir()
+    gif = _write_gif(folder / "anim.gif")
+    pet_window.config.set("easter_egg_image_dir", str(folder))
+    assert pet_window.config.get("easter_egg_display") in (None, "bubble")
+
+    assert pet_window.show_easter_egg() is True
+    bubble = pet_window.bubble
+    assert bubble.is_showing_image() is True
+    animated = bubble.animated_image
+    assert isinstance(animated, AnimatedImage)
+    assert animated.movie_path == str(gif)
+    assert animated.is_running is True
+
+    bubble.hide()
+    assert animated.is_running is False

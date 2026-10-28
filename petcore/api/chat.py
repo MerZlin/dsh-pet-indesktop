@@ -95,6 +95,10 @@ class ChatResult:
     ``incomplete``/``end_reason`` 是**显式**的完整性信号：没有收到 ``[DONE]``、
     没有 ``finish_reason``、或响应体为空时，``end_reason`` 不是 ``done``，
     调用方必须提示用户，而不是把半条回答当成完整答复落盘（审计 AUD-15）。
+
+    ``end_reason`` 取值：``done``（收到 ``[DONE]``/``finish_reason``）、``eof``
+    （流提前结束）、``empty``（没有正文也没有思维链）、``cancelled``（用户停止）、
+    ``interrupted``（已有正文后传输中断；``text`` 是保留的半条回答）。
     """
 
     text: str
@@ -397,7 +401,7 @@ def research(
         }
         payload.update(thinking_payload(request, "auto", "", force_disable=True))
         try:
-            data = _post_json(request, payload, timeout=timeout, opener=opener)
+            data = _post_json(request, payload, timeout=net_timeout, opener=opener)
         except Exception as exc:  # noqa: BLE001 - 检索不可用不影响回答
             if _cancelled(cancel):
                 return ""
@@ -483,7 +487,10 @@ def stream_chat(
     """POST ``chat_path`` 并把 SSE 增量逐段回调；返回完整文本。
 
     ``cancel`` 只要有 ``is_set()`` 即可（``threading.Event``）；每收到一行检查一次。
-    失败统一抛 :class:`petcore.net.errors.NetworkError` 的子类，界面只认 ``reason``。
+    失败统一抛 :class:`petcore.net.errors.NetworkError` 的子类，界面只认 ``reason``；
+    例外是**已经收到正文之后**的传输中断：那时不抛错，而是返回
+    ``end_reason="interrupted"`` 的半条结果（``text`` 是已收到的内容），
+    一个字都没有才抛错。
     联网开启时先跑 :func:`research`（资料并入 system），再走正式回答。
     """
     conversation = [dict(item) if isinstance(item, Mapping) else item for item in messages]
@@ -568,6 +575,7 @@ def stream_chat(
     watcher = _start_cancel_watcher(response, cancel, stop_watch)
     stream_deadline = time.monotonic() + max(1.0, float(timeout))
     _set_read_timeout(response, SOCKET_POLL_SECONDS)
+    interrupted: Exception | None = None
     try:
         event_lines: list[str] = []
         try:
@@ -606,6 +614,9 @@ def stream_chat(
         except Exception as exc:  # noqa: BLE001 - 读流中断也归入稳定分类
             if _cancelled(cancel):
                 cancelled = True
+            elif parts:
+                # 已经吐出的正文不能因为断流被抹掉：先记下，关掉响应后返回半条。
+                interrupted = exc
             else:
                 reason = errors.classify_exception(exc)
                 if reason is None:
@@ -619,6 +630,17 @@ def stream_chat(
             response.close()
         except Exception:
             pass
+
+    if interrupted is not None:
+        _status(on_status, f"回答被中断（{interrupted}），已保留前面的内容")
+        return ChatResult(
+            text="".join(parts),
+            chunks=chunks,
+            finish_reason=finish_reason,
+            reasoning="".join(reasoning_parts),
+            incomplete=True,
+            end_reason="interrupted",
+        )
 
     if not saw_sse and plain_lines:
         try:

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QPlainTextEdit
 
 from ... import __version__
 from ...update import UpdateResult, describe_state
+from ..external_links import REPO_URL
 from .base import (
     SettingsPage,
     build_embedded_page,
@@ -17,8 +18,6 @@ from .base import (
     value_field,
 )
 from .page_about_thanks import ThanksPanel
-
-REPO_URL = "https://github.com/MerZlin/dsh-pet-indesktop"
 
 #: 内嵌进「关于与诊断」的 Core 特性页，按这个顺序排（order 只决定注册序）。
 ABOUT_HOST_PAGES = ("tool.links", "tool.network-info", "tool.memory-trim")

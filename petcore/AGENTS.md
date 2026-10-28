@@ -159,13 +159,36 @@
   （owned window），层级才会跟着宿主走；右键菜单一律走 `ui.menu.show_context_menu`
   （扩展通过 `host.show_context_menu`），不要各自 `menu.exec()`——那会让菜单落回普通层，
   被置顶的气泡压住。
+- **非置顶不许抢前台**：`always_on_top` 为假时，气泡的显示/换页/旗标重建**不得**把气泡或
+  桌宠抬到别的应用之上，也不得激活桌宠窗口——**裸 `show()` 也会抬高整条 owner 链**（真机
+  `GW_HWNDPREV` 实测），所以显示必须走 `SpeechBubble._present()`：置顶/直播才 `raise_()`，
+  非置顶则先把宿主塞回原来的上邻居再贴宿主下方。离屏/非 Windows 下 `user32` 不可用时走
+  「不 raise」分支。
+- **菜单会话高于一切宠物窗口**：菜单弹出期间（`menu.menu_session()`，`show_context_menu`
+  已包住整段 `exec`）桌宠与气泡的 `raise_()` 必须被抑制，菜单不能被气泡压住；会话结束后
+  自动恢复。菜单自己的 `WindowStaysOnTopHint` 仍只跟桌宠的置顶开关走，不许为了修层级把
+  菜单永久置顶。（托盘原生菜单由 Shell 弹出、不在会话内，属已知边界。）
+- **展示会话（presentation gate）**：`PresentationPort.begin_scene(owner)` /
+  `end_scene` / `refresh_scene` 是「谁在占用气泡」的唯一判据；会话期间其它 owner 的
+  `say()/say_sequence()/show_image()` 一律返回 False 且**不动现有气泡**，`force=True` 仍可显示。核心只认
+  owner 字符串，不认识「歌词」这类业务词；持有者必须每拍 `refresh_scene` 续期（45s 无续期
+  自动释放，防 mod 崩溃后永久静音）。歌词持有 `media.music`；点击台词（含配图）、命令反馈、
+  定时提醒/报时走 `force=True`；自语气泡（含配图）拿到 False 时**连朗读一起跳过**
+  （看不见的话不该听得见）。
 - **动画循环**：`play_animation(name, loop=True)` 只给「持续动作」（唱歌/报时）；
   `_play_spec()` 是循环的唯一清除点，`release_loop()` 只解除标志。探头、击飞、拖拽
   接管时 `_on_finished()` 必须先解除循环，不许让循环绕过「探头只播 idle/转向」的闸门。
+  **持有循环的调用方要自己复核**：用 `PresentationPort.animation_state()` 每拍检查循环是否
+  还在手上，被清掉就按退避重新请求（丢租约时不许再发 `release_loop()`，会误伤别人的循环）。
 - **歌词**：直连优先，最多切一次代理（同一 deadline，仅传输失败或 500/502/504，
   带 `Retry-After` 不切）；**不重复换路**；取词失败的重试由运行时按 60 秒冷却控制
   （每曲 ≤3 次，首次失败说清原因），不是网络层重发；不落盘音频、不记录 URL/代理/密钥；
   歌词气泡同一行只冒一次且间隔 ≥2s；无播放器时命令必须给明确原因。
+- **暂停语义**：播放器明确 `paused` → **下一拍就 `release_loop()`**（`_silence_limit` 对 paused
+  返回 0）；`music_sing_grace_seconds` 只给 `absent`（切歌抖动/播放器关掉，且至少
+  `ABSENT_CONFIRM_TICKS` 拍）。暂停期间**不取词、不重置歌词与行号、不冒「歌词获取失败」**，
+  也不消耗「每曲 ≤3 次」的配额；暂停时识别结果换了身份（SMTC 掉线 → 窗口标题兜底）按同一首处理
+  （记别名），不许当换歌重建曲目。
 - **朝向口径**：角色素材原生朝左，`facing == "right"` 才水平镜像（同主分支）。
   `PetState.facing` 默认 `left`；反了就是「位移方向和面朝向相反」。
 - **碰边反馈**：抛掷/弹射按「离地→接触」的接触沿触发 `_on_motion_bounce()`，每次
@@ -325,6 +348,16 @@
 - **隐藏态不冒泡**：`PetWindow.say()` / `show_image()` 必须先判 `isVisible()`；
   `set_visible(False)` 必须 `bubble.hide()`。第三方 feature 通过 presentation 端口
   说话时同样受这条闸门约束，不要自己直接操作气泡。
+- **全屏自动隐藏**：`auto_hide_fullscreen`（全局键，默认 **True**，同主分支）由
+  `platform/fullscreen.py`（零 Qt 探测：整屏几何 + 无标题栏/置顶，`QUNS` 只认 3/4，
+  非 Windows 报「不支持」而不是假装命中）与 `ui/fullscreen_hide.py`（进程内唯一 1Hz
+  `QTimer`）负责。命中只隐藏**当时可见**的宠并记账，离开只恢复它们；全屏期间用户手动
+  显示/隐藏的宠以用户为准（记 override，不再抢回）；开关关闭或平台不支持时**不建定时器**。
+- **角色别名**：`character_aliases`（全局键，`{角色id: 名字}`，≤24 字符，空名=默认）是
+  显示名的唯一来源；`CoreHost.characters()/character_for()/available_characters()` 一律经
+  `_display_spec()` 出「别名 or 目录名」，**不要把别名写回目录层 `_characters`**。两个入口
+  （切换角色子菜单末尾「重命名当前角色…」、常规 → 角色行「重命名…」）共用
+  `ui/rename_dialog.py`；菜单入口立即落盘，设置页入口跟随该页的 dirty/取消快照语义。
 - **托盘菜单独立**：托盘右键菜单由 `CoreHost.build_tray_menu()` 构建，必须含
   「显示/隐藏桌宠」（隐藏后能只靠鼠标唤回）、设置、数据目录、重载、逐宠控制与退出；
   不要再用完整右键菜单代替托盘菜单。托盘左键也切换显示。
@@ -563,6 +596,15 @@
 - **SSE 必须给完整性信号**：`ChatResult.incomplete` / `end_reason`（`done|eof|empty|cancelled`）；
   没有 `[DONE]`、没有 `finish_reason`、或响应体为空时，调用方必须提示，不许当完整回答落盘。
   HTTP 200 + `data: {"error":…}` 要按状态码分类抛错，不许吞成空回答。
+- **错误分类不许说谎**：调用方只认 `NetworkError.reason`（`auth/rate_limit/network/timeout/tls/
+  protocol/internal`）。异常没有 `.reason` 时**必须是** `internal`，不许退回 `network`——那会让
+  「服务没选/Key 没配/JSON 坏了」显示成「网络不可达」，用户去找路由器。`ai.chat` 的四条失败路径
+  （主聊天/快速气泡/看看屏幕/截图问答）统一走 `_failure_reason()` 并记一条
+  `ai call failed: type=… reason=… service=… cause=…`（只打类型名，不打 Key/URL/响应体）。
+- **只有 API 主机可以改写进程级路由**：`urlopen(..., pollute=False)` 之外的调用点只允许
+  `api/chat.py`、`api/probe.py`、`account/service.py`（同一台 API 主机的成败才算「这台 API 能不能
+  走代理」）。搜索/读页/市场索引与下载/更新检查/歌词/天气一律 `pollute=False` 或走 `fetch_url`；
+  `tests/test_petcore_http_safety.py::test_only_api_hosts_may_pin_the_process_route` 会红。
 - **换路由要重建请求**：`ProxyHandler`/重定向会**就地**改写 `Request`；`urlopen` 每次尝试
   必须 `clone_request()`。换路条件除传输失败与 `retry_statuses` 外，还要求响应**不带**
   `Retry-After`。

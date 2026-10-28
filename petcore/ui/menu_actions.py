@@ -304,6 +304,11 @@ def core_items(window) -> dict[str, MenuItem]:
             action.triggered.connect(
                 lambda _checked=False, cid=character.id: window.set_character(cid)
             )
+        # 重命名挂在「切换角色」里面，不新增菜单项 id：菜单模板与菜单/设置
+        # 一一对应的账（coverage.py）都不用动。
+        menu.addSeparator()
+        rename = menu.addAction("重命名当前角色…")
+        rename.triggered.connect(lambda _checked=False: window.rename_character())
 
     def populate_scale(menu: QMenu) -> None:
         group = QActionGroup(menu)

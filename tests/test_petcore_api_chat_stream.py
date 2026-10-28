@@ -219,3 +219,43 @@ def test_cancel_interrupts_a_stalled_stream(server_factory) -> None:
     assert result.cancelled is True
     assert result.end_reason == "cancelled"
     assert elapsed < 3.0, f"取消耗时 {elapsed:.2f}s，说明阻塞读没被打断"
+
+
+def _truncated_chunked(body: bytes) -> bytes:
+    """声明比实际更长的分块：读端在块中途撞到 EOF（真实网关断流就是这样）。"""
+    head = (
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/event-stream\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode()
+    return head + f"{len(body) + 64:X}\r\n".encode() + body
+
+
+def test_transport_failure_after_a_delta_keeps_what_was_received(server_factory) -> None:
+    """已经吐出的正文不能因为断流被抹掉：返回半条 + interrupted，而不是抛错。"""
+    body = b'data: {"choices":[{"delta":{"content":"\xe5\x8d\x8a\xe6\x9d\xa1"}}]}\n\n'
+    server = server_factory(_truncated_chunked(body))
+    statuses: list[str] = []
+    result = stream_chat(
+        _request(server.port),
+        [{"role": "user", "content": "hi"}],
+        on_status=statuses.append,
+        timeout=5.0,
+    )
+    assert result.text == "半条"
+    assert result.incomplete is True
+    assert result.end_reason == "interrupted"
+    assert result.cancelled is False
+    assert any("已保留前面的内容" in line for line in statuses)
+
+
+def test_transport_failure_before_any_delta_still_raises(server_factory) -> None:
+    """一个字都没收到时不能假装成功：仍然抛带分类的 NetworkError。"""
+    server = server_factory(_truncated_chunked(b""))
+    with pytest.raises(errors.NetworkError):
+        stream_chat(
+            _request(server.port),
+            [{"role": "user", "content": "hi"}],
+            timeout=5.0,
+        )

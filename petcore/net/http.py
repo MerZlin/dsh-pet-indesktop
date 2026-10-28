@@ -228,11 +228,14 @@ def urlopen(
     timeout: float,
     context=None,
     opener: OpenerFactory | None = None,
+    pollute: bool = True,
     **kwargs,
 ):
     """同 :func:`urllib.request.urlopen`，但代理连不上时自动改直连重试一次。
 
     ``opener`` 是测试接缝：给定时用它构造 opener，且不固化进程级结论。
+    ``pollute=False`` 给「自己决定路由」的调用方（搜索/读页）：这类请求的成功
+    不代表整个进程可以固定直连，**不得**改写进程级「固定直连」结论。
     ``HTTPError`` 原样抛出；两种方式都失败时抛最后一次的传输异常。
 
     **每次尝试都重建请求对象**：``ProxyHandler`` 会把 ``req.host`` 改成代理地址、
@@ -251,7 +254,7 @@ def urlopen(
         except Exception as exc:  # noqa: BLE001 - 传输失败：换下一种方式再试
             last_exc = exc
             continue
-        if opener is None and not use_proxy and not _force_direct:
+        if opener is None and pollute and not use_proxy and not _force_direct:
             _force_direct = True
             logger.info(
                 "网络请求改走直连：系统代理不可用（%s）", type(last_exc).__name__

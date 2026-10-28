@@ -105,7 +105,8 @@ class UpdateService:
                     close()
                 raise ValueError("update redirect is not an allowed HTTPS host")
             return response
-        response = urlopen(request, timeout=15)
+        # 更新检查是第三方 CDN 的一次性取数：它的成败不代表整个进程该固定直连。
+        response = urlopen(request, timeout=15, pollute=False)
         final_url = str(getattr(response, "geturl", lambda: url)() or url)
         if not self._allowed_url(final_url):
             close = getattr(response, "close", None)

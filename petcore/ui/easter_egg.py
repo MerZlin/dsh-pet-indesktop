@@ -7,7 +7,14 @@ from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from .. import paths
-from ..media.images import load_pixmap, logical_size, sanitize_dpr, screen_dpr
+from ..media.images import (
+    is_animated,
+    load_pixmap,
+    logical_size,
+    sanitize_dpr,
+    screen_dpr,
+)
+from .animated_image import AnimatedImage
 from .placement import place_beside_pet
 
 SUPPORTED_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"})
@@ -112,10 +119,18 @@ class EasterEggPopup(QWidget):
         self.image_scale = max(0.5, min(3.0, float(image_scale)))
         ratio = sanitize_dpr(dpr if dpr is not None else screen_dpr())
         self.device_pixel_ratio = ratio
-        pixmap = load_scaled_pixmap(
-            self.image_path, clamp_popup_side(self.image_scale), ratio
-        )
-        width, height = logical_size(pixmap)
+        max_side = clamp_popup_side(self.image_scale)
+        self.animated_image: AnimatedImage | None = None
+        pixmap = None
+        if is_animated(self.image_path):
+            # 动图：逻辑尺寸只读图片头，帧由 AnimatedImage 按 DPR 出。
+            self.animated_image = AnimatedImage(
+                self.image_path, max_side, self, dpr=ratio
+            )
+            width, height = self.animated_image.logical_size()
+        else:
+            pixmap = load_scaled_pixmap(self.image_path, max_side, ratio)
+            width, height = logical_size(pixmap)
 
         self.setWindowTitle(str(title or ""))
         layout = QVBoxLayout(self)
@@ -126,9 +141,15 @@ class EasterEggPopup(QWidget):
         self.image_label.setObjectName("easterEggImage")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setFixedSize(width, height)
-        self.image_label.setPixmap(pixmap)
         self.image_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        if pixmap is not None:
+            self.image_label.setPixmap(pixmap)
+        else:
+            # 动图占位：同一布局位置，静态图的 label 让位（隐藏的项不占版面）。
+            self.image_label.hide()
         layout.addWidget(self.image_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        if self.animated_image is not None:
+            layout.addWidget(self.animated_image, 0, Qt.AlignmentFlag.AlignHCenter)
 
         title_text = str(title or "").strip()
         self.title_label = QLabel(title_text, self)
@@ -172,6 +193,12 @@ class EasterEggPopup(QWidget):
     def mousePressEvent(self, event) -> None:
         self.close()
         event.accept()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        # 弹窗是 WA_DeleteOnClose：销毁前停播并断开 QMovie，别让动图继续解码。
+        if self.animated_image is not None:
+            self.animated_image.close()
+        super().closeEvent(event)
 
 
 class EasterEggController(QObject):

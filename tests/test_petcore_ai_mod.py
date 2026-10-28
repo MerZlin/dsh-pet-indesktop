@@ -1104,3 +1104,59 @@ def test_failed_scheduler_never_executes_ui_callback_on_worker(tmp_path):
     worker.join(10)
     assert not worker.is_alive()
     assert called == []
+
+
+# ------------------------------------------------------------------ 半条回答
+
+
+@pytest.mark.parametrize("quick", [False, True])
+def test_partial_answer_survives_a_transport_failure(tmp_path, quick) -> None:
+    """已经有正文时断流：交给 done 收尾（带「已保留前面的内容」），不再弹错误卡。"""
+    from petcore.net import errors as net_errors
+
+    context = _context(tmp_path)
+    instance = _create_host(context).runtime_factory(context)
+
+    def stream(*_args, **kwargs):
+        kwargs["on_delta"]("半条回答")
+        raise net_errors.NetworkError(reason=net_errors.NETWORK)
+
+    context.ports.api.stream_chat = stream
+    start = instance._start_quick if quick else instance._start
+    port = context.ports.quick_chat if quick else context.ports.chat
+    try:
+        start(0, [])
+        assert port.done_event.wait(5), "失败回调没有结束"
+    finally:
+        instance.stop()
+
+    assert not [call for call in port.calls if call[0] == "error"]
+    done = [call for call in port.calls if call[0] == "done"]
+    assert done, "半条回答必须交给 done 收尾"
+    assert "半条回答" in done[-1][1]
+    assert "已保留前面的内容" in done[-1][1]
+    assert context.ports.presentation.said == []
+
+
+@pytest.mark.parametrize("quick", [False, True])
+def test_transport_failure_without_content_still_reports_an_error(tmp_path, quick) -> None:
+    from petcore.net import errors as net_errors
+
+    context = _context(tmp_path)
+    instance = _create_host(context).runtime_factory(context)
+
+    def stream(*_args, **_kwargs):
+        raise net_errors.NetworkError(reason=net_errors.NETWORK)
+
+    context.ports.api.stream_chat = stream
+    start = instance._start_quick if quick else instance._start
+    port = context.ports.quick_chat if quick else context.ports.chat
+    try:
+        start(0, [])
+        assert port.done_event.wait(5), "失败回调没有结束"
+    finally:
+        instance.stop()
+
+    errors_seen = [call for call in port.calls if call[0] == "error"]
+    assert errors_seen and errors_seen[0][1] == net_errors.NETWORK
+    assert not [call for call in port.calls if call[0] == "done"]

@@ -136,7 +136,9 @@ class SelfTalkRuntime:
             if not shown:
                 text = value if kind == "text" else self._rng.choice(texts)
                 shown = presentation.say(text, duration_ms=duration_ms) is not False
-            if shown or self._presentation_visible(presentation):
+            if shown:
+                # 气泡没显示出来（例如歌词持有展示会话）就不要朗读：
+                # 听得见却看不见的那句话会让人以为桌宠出错了。
                 self._speak_text(config, slot, text)
             logger.info(
                 "self-talk kind=%s dir=%s images=%d shown=%s",

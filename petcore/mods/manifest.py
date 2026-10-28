@@ -25,6 +25,10 @@ KNOWN_FIELDS = frozenset(
         "kind",
         "name",
         "name_zh",
+        # 简介：市场索引用 `summary_zh`，第三方清单也常写着一个；两者都收，
+        # 缺了也不影响加载（只用于展示）。
+        "summary",
+        "summary_zh",
         "version",
         "api_version",
         "core_requires",

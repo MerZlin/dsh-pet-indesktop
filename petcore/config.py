@@ -19,6 +19,9 @@ logger = logging.getLogger("petcore.config")
 
 SCHEMA_VERSION = 1
 
+#: 角色自定义显示名上限（按**字符**数，不是字节）：中文名字与界面下拉的宽度都按这个口径。
+ALIAS_MAX_CHARS = 24
+
 MIGRATION_STATUSES = frozenset({
     "not_needed",
     "migrated",
@@ -54,6 +57,12 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "allow_feature_mods",
         "market_index_url",
         "click_through",
+        # 全屏自动隐藏是**进程级**事实（一个共享 watcher、一次探测隐藏所有宠），
+        # 所以必须是全局键：子宠设置页勾掉它就该对所有宠生效。
+        "auto_hide_fullscreen",
+        # 角色别名是**用户级偏好**（同一角色 id 在所有宠上就该同名），子宠设置页
+        # 写的必须是同一份，否则「主宠改了子宠还是旧名」。
+        "character_aliases",
         # 余额峰谷提示：服务商计价是进程级事实（一只宠改了两只都该变），
         # 与「点击显示余额」（按宠保存）区分开。
         "balance_tier_labels_mode",
@@ -206,6 +215,10 @@ DEFAULTS: dict[str, Any] = {
     "bubble_text_scale": 100,
     "menu_animation_icons": True,
     "stream_capture_mode": False,
+    # 全屏游戏/视频期间自动隐藏所有桌宠（仅 Windows 有探测；默认开，同主分支）。
+    "auto_hide_fullscreen": True,
+    # 角色自定义显示名 {角色id: 自定义名}，空名 = 恢复默认（目录显示名）。
+    "character_aliases": {},
     "easter_egg_enabled": True,
     "easter_egg_title": "鲸鱼娘彩蛋",
     "easter_egg_hint": "点击任意处关闭",
@@ -780,6 +793,39 @@ def _clock_times(value: Any) -> list[str]:
     return sorted(set(items))
 
 
+def _alias_text(value: Any) -> str:
+    """单个角色别名清洗：去首尾空白、拒绝换行/控制字符、截断到 24 个字符。
+
+    返回空串表示「没有可用别名」（= 恢复默认）。这里按**字符**截断，不按字节：
+    Qt 控件本来就是按字符排版，按字节切会把中文名字切成半个字。
+    """
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if not text:
+        return ""
+    if any(ord(char) < 32 or ord(char) == 127 for char in text):
+        return ""
+    return text[:ALIAS_MAX_CHARS]
+
+
+def _character_aliases(value: Any) -> dict[str, str]:
+    """清洗 ``{角色id: 自定义名}``（总是返回新 dict，不与 DEFAULTS 共享可变对象）。"""
+    if not isinstance(value, dict):
+        return {}
+    cleaned: dict[str, str] = {}
+    for raw_id, raw_name in value.items():
+        if not isinstance(raw_id, str):
+            continue
+        character_id = raw_id.strip()
+        if not character_id:
+            continue
+        name = _alias_text(raw_name)
+        if name:
+            cleaned[character_id] = name
+    return cleaned
+
+
 def _click_sound_pack(value: Any) -> dict[str, str]:
     """清洗点击音效包（总是返回新 dict，不与 DEFAULTS 共享可变对象）。"""
     if not isinstance(value, dict):
@@ -1098,6 +1144,12 @@ class Config:
         )
         normalized["stream_capture_mode"] = _bool(
             normalized.get("stream_capture_mode"), False
+        )
+        normalized["auto_hide_fullscreen"] = _bool(
+            normalized.get("auto_hide_fullscreen"), True
+        )
+        normalized["character_aliases"] = _character_aliases(
+            normalized.get("character_aliases")
         )
         normalized["easter_egg_enabled"] = _bool(normalized.get("easter_egg_enabled"), True)
         title = normalized.get("easter_egg_title")
@@ -1598,6 +1650,32 @@ class Config:
     def restore(self, snapshot: dict[str, Any]) -> None:
         self.data = self._normalize(dict(snapshot))
 
+    # ------------------------------------------------------------ 角色别名
+    def character_alias(self, character_id: str) -> str:
+        """角色自定义显示名；未设置返回空串（调用方回落到目录显示名）。"""
+        aliases = self.data.get("character_aliases")
+        if not isinstance(aliases, dict):
+            return ""
+        return str(aliases.get(str(character_id or "").strip()) or "")
+
+    def set_character_alias(self, character_id: str, name: str) -> None:
+        """写角色别名（strip + 截断到 24 个字符）；空名 = 恢复默认（删掉该键）。
+
+        只改内存，落盘由调用方决定（菜单命令立即 ``save()``，设置页统一等
+        确认保存）。坏输入不抛异常：清洗后为空就当「恢复默认」。
+        """
+        character_id = str(character_id or "").strip()
+        if not character_id:
+            return
+        raw = self.data.get("character_aliases")
+        aliases = dict(raw) if isinstance(raw, dict) else {}
+        cleaned = _alias_text(name if isinstance(name, str) else str(name or ""))
+        if cleaned:
+            aliases[character_id] = cleaned
+        else:
+            aliases.pop(character_id, None)
+        self.set("character_aliases", aliases)
+
     def save(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(self.data, ensure_ascii=False, indent=2)
@@ -1668,6 +1746,12 @@ class ScopedConfig:
 
     def set(self, key: str, value: Any) -> None:
         self._config(str(key)).set(str(key), value)
+
+    def character_alias(self, character_id: str) -> str:
+        return self._config("character_aliases").character_alias(character_id)
+
+    def set_character_alias(self, character_id: str, name: str) -> None:
+        self._config("character_aliases").set_character_alias(character_id, name)
 
     def snapshot(self) -> dict[str, Any]:
         return self.data

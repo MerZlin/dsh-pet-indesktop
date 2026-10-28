@@ -1,12 +1,24 @@
 from __future__ import annotations
 
+import ctypes
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QFontMetrics, QGuiApplication, QPixmap
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from ..media.images import load_pixmap, logical_size, scale_pixmap, screen_dpr
+from ..media.images import (
+    is_animated,
+    load_pixmap,
+    logical_size,
+    logical_size_for,
+    sanitize_dpr,
+    scale_pixmap,
+    screen_dpr,
+)
+from .animated_image import AnimatedImage
+from .menu import active_menu, menu_open
 
 #: 气泡内图片的等比缩放上限（宽与高都不超过它）。
 MAX_IMAGE_SIDE = 320
@@ -42,6 +54,109 @@ _CAPTION_RADIUS = 10
 
 def _px(value: float) -> int:
     return max(1, int(round(value)))
+
+
+# ---------------------------------------------------------------- z 序原语
+#: 只在真实 Windows 桌面上才动 Win32 z 序（offscreen 测试与其它平台一律跳过）。
+_SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
+_SWP_NOACTIVATE = 0x0010
+_SWP_NOOWNERZORDER = 0x0200
+_GW_HWNDPREV = 3
+
+_user32_lib = None
+_user32_ready = False
+
+
+def _user32():
+    """真实 Windows 平台上的 ``user32``；offscreen 或其它平台返回 ``None``。
+
+    offscreen 平台的 ``winId()`` 不是真 HWND，往上调 Win32 只会白跑一趟。
+    """
+    global _user32_lib, _user32_ready
+    if _user32_ready:
+        return _user32_lib
+    if sys.platform != "win32":
+        _user32_ready = True
+        return None
+    app = QGuiApplication.instance()
+    if app is None or app.platformName() != "windows":
+        return None  # 还没有真实 QApplication：先不下结论
+    try:
+        lib = ctypes.WinDLL("user32", use_last_error=True)
+        lib.GetWindow.restype = ctypes.c_void_p
+        lib.GetWindow.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        lib.SetWindowPos.restype = ctypes.c_int
+        lib.SetWindowPos.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint,
+        ]
+    except (AttributeError, OSError):
+        _user32_lib = None
+    else:
+        _user32_lib = lib
+    _user32_ready = True
+    return _user32_lib
+
+
+def _hwnd(widget: QWidget | None) -> int | None:
+    """顶层窗口句柄（控件没有窗口 / 底层对象已销毁时返回 ``None``）。"""
+    if widget is None:
+        return None
+    try:
+        return int(widget.winId())
+    except RuntimeError:
+        return None
+
+
+def _window_above(hwnd: int | None) -> int | None:
+    """``hwnd`` 正上方紧邻的那个窗口；它已经是该层最上面时返回 ``None``。"""
+    user32 = _user32()
+    if user32 is None or hwnd is None:
+        return None
+    return int(user32.GetWindow(ctypes.c_void_p(hwnd), _GW_HWNDPREV) or 0) or None
+
+
+def _place_after(hwnd: int | None, above: int | None) -> bool:
+    """把 ``hwnd`` 插到 ``above`` 正下方（``above`` 为空 = 该层最上面）。
+
+    ``QWidget.stackUnder()`` 对顶层窗口是空操作（本机实测 z 序一点没动），只有
+    Win32 的 ``SetWindowPos`` 真的改得动；``SWP_NOACTIVATE`` 保证不抢前台，
+    ``SWP_NOOWNERZORDER`` 保证不会顺手把 owner 链重新抬一遍。
+    """
+    user32 = _user32()
+    if user32 is None or hwnd is None:
+        return False
+    ok = user32.SetWindowPos(
+        ctypes.c_void_p(hwnd),
+        ctypes.c_void_p(above) if above else None,
+        0,
+        0,
+        0,
+        0,
+        _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
+    )
+    return bool(ok)
+
+
+def _is_above(hwnd: int | None, other: int | None, limit: int = 256) -> bool:
+    """``hwnd`` 是否压在 ``other`` 之上（从 ``other`` 往 z 序前方找 ``hwnd``）。"""
+    user32 = _user32()
+    if user32 is None or not hwnd or not other:
+        return False
+    current = other
+    for _ in range(limit):
+        current = int(user32.GetWindow(ctypes.c_void_p(current), _GW_HWNDPREV) or 0)
+        if not current:
+            return False
+        if current == hwnd:
+            return True
+    return False
 
 
 def _panel_margins(scale: float) -> tuple[int, int, int, int]:
@@ -272,6 +387,10 @@ class SpeechBubble(QWidget):
         self.image_label.setStyleSheet(_IMAGE_QSS)
         self.image_label.hide()
 
+        #: 动图控件（懒建，挂在 image_label 里）。静态图走 image_label 的
+        #: pixmap，动图走 QMovie；两者互斥，切换时要停播并隐藏。
+        self._animated_image: AnimatedImage | None = None
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(BUBBLE_GAP)
@@ -290,6 +409,11 @@ class SpeechBubble(QWidget):
 
     def is_showing_image(self) -> bool:
         return self._content_kind == "image" and self.isVisible()
+
+    @property
+    def animated_image(self) -> AnimatedImage | None:
+        """当前挂着的动图控件（没显示过动图时为 None）。"""
+        return self._animated_image
 
     def anchor(self) -> QRect | None:
         return QRect(self._anchor) if self._anchor is not None else None
@@ -343,14 +467,65 @@ class SpeechBubble(QWidget):
         return flags
 
     def _apply_window_flags(self) -> None:
-        """重建旗标（setWindowFlags 会隐窗，可见时要原地恢复并抬到最前）。"""
+        """重建旗标（setWindowFlags 会隐窗，可见时要原地恢复并摆回自己的层）。"""
         was_visible = self.isVisible()
         self.setWindowFlags(self._window_flags())
         if was_visible:
             if self._anchor is not None:
                 self._place(self._anchor)
+            self._present()
+
+    # ---------------------------------------------------------------- 层级
+    def _raises_by_design(self) -> bool:
+        """这一层要不要主动抬到最前：宿主置顶或直播模式（两者都是置顶窗口）。"""
+        return self._host_on_top or self._stream_mode
+
+    def _present(self) -> None:
+        """显示气泡，并按层级规则摆正 z 序。
+
+        气泡是桌宠的**从属窗口**：``show()`` 会把整条 owner 链（气泡 + 桌宠）一起
+        顶到普通窗口层的最上面，所以「去掉 ``raise_()``」并不够——本机实测只
+        ``show()`` 一样会把桌宠抬到别的应用窗口之上。规则按优先级来：
+
+        * 菜单会话期间：只要气泡或桌宠压在菜单上，就一起沉到菜单下方（菜单最高）；
+        * 宿主置顶 / 直播模式：与旧行为一致，``raise_()`` 抬到最前；
+        * 宿主不置顶：``show()`` 之后把桌宠塞回它原来的位置，气泡贴着桌宠下方，
+          不抢别的应用窗口的前台。
+        """
+        menu = active_menu() if menu_open() else None
+        if menu is not None:
+            self.show()
+            self._settle_below_menu(menu)
+            return
+        if self._raises_by_design():
             self.show()
             self.raise_()
+            return
+        anchor = _window_above(_hwnd(self.parentWidget()))
+        self.show()
+        self._settle_below_host(anchor)
+
+    def _settle_below_host(self, anchor: int | None) -> None:
+        """把桌宠塞回 ``anchor`` 下方，气泡贴着桌宠（``anchor`` 为空 = 该层最上面）。"""
+        host = _hwnd(self.parentWidget())
+        own = _hwnd(self)
+        if host is None or own is None:
+            return
+        _place_after(host, anchor)
+        _place_after(own, host)
+
+    def _settle_below_menu(self, menu: QWidget) -> None:
+        """菜单会话期间把压在菜单上的桌宠/气泡沉到菜单下方；本来就在下面则不动。"""
+        menu_hwnd = _hwnd(menu)
+        host = _hwnd(self.parentWidget())
+        own = _hwnd(self)
+        if menu_hwnd is None or own is None:
+            return
+        if not _is_above(own, menu_hwnd) and not _is_above(host, menu_hwnd):
+            return
+        if host is not None and _is_above(host, menu_hwnd):
+            _place_after(host, menu_hwnd)
+        _place_after(own, host if host is not None else menu_hwnd)
 
     def set_host_on_top(self, on: bool) -> None:
         """跟随宿主「窗口置顶」开关（同主分支 ``set_host_on_top``）。"""
@@ -388,6 +563,7 @@ class SpeechBubble(QWidget):
         self.caption_label.clear()
         self.image_label.hide()
         self.image_label.clear()
+        self._stop_animated()
         self.text_panel.show()
         self._full_text = text
         self._subtitle = str(subtitle or "").strip()
@@ -396,8 +572,7 @@ class SpeechBubble(QWidget):
         self._anchor = QRect(anchor)
         self._render_text()
         self._place(anchor)
-        self.show()
-        self.raise_()
+        self._present()
         # 窗口显示后布局才最终生效：再量一次并重排，避免“永远慢一句”。
         self.adjustSize()
         self._place(anchor)
@@ -550,9 +725,21 @@ class SpeechBubble(QWidget):
     ) -> bool:
         scale = clamp_image_scale(image_scale)
         max_side = max(1, int(round(MAX_IMAGE_SIDE * scale)))
-        pixmap = _scaled_pixmap(image, max_side, dpr)
-        if pixmap is None:
-            return False
+        ratio = sanitize_dpr(screen_dpr(self) if dpr is None else dpr)
+        # 只有路径入参才可能是动图；QPixmap 重载保持纯静态的旧语义。
+        animated_path: Path | None = None
+        pixmap = None
+        if not isinstance(image, QPixmap) and is_animated(image):
+            size = logical_size_for(image, max_side)
+            if size is None:
+                return False
+            animated_path = Path(image)
+            width, height = size
+        else:
+            pixmap = _scaled_pixmap(image, max_side, dpr)
+            if pixmap is None:
+                return False
+            width, height = logical_size(pixmap)
         self._content_kind = "image"
         self._full_text = ""
         self._subtitle = ""
@@ -571,23 +758,52 @@ class SpeechBubble(QWidget):
             if caption_height <= 0:
                 caption_height = self.caption_label.sizeHint().height()
             self.caption_label.setFixedHeight(max(1, caption_height))
-        width, height = logical_size(pixmap)
         self.image_label.setFixedSize(
             width + 2 * _IMAGE_PAD, height + 2 * _IMAGE_PAD
         )
-        self.image_label.setPixmap(pixmap)
+        if animated_path is not None:
+            # 白色圆角底板仍是 image_label，动图作为它的子控件贴在 8px 内边距里。
+            self.image_label.clear()
+            animated = self._ensure_animated(animated_path, max_side, ratio)
+            animated.move(_IMAGE_PAD, _IMAGE_PAD)
+            animated.show()
+            animated.start()
+        else:
+            self._stop_animated()
+            self.image_label.setPixmap(pixmap)
         self.image_label.show()
         layout = self.layout()
         if layout is not None:
             layout.activate()
         self.adjustSize()
         self._place(anchor)
-        self.show()
-        self.raise_()
+        self._present()
         self.adjustSize()
         self._place(anchor)
         self._timer.start(max(800, int(duration_ms)))
         return True
+
+    def _ensure_animated(
+        self, path: Path, max_side: int, dpr: float
+    ) -> AnimatedImage:
+        """动图控件懒建并按需换图/换上限（同一 `image_label` 里复用）。"""
+        widget = self._animated_image
+        if widget is None:
+            widget = AnimatedImage(path, max_side, self.image_label, dpr=dpr)
+            self._animated_image = widget
+            return widget
+        widget.stop()
+        widget.set_max_side(max_side)
+        widget.set_path(path)
+        return widget
+
+    def _stop_animated(self) -> None:
+        """停播并隐藏动图：切文字/切静态图/气泡收起都要走这里。"""
+        widget = self._animated_image
+        if widget is None:
+            return
+        widget.stop()
+        widget.hide()
 
     # ---------------------------------------------------------------- 跟随
     def reposition(self, anchor: QRect) -> None:
@@ -619,6 +835,8 @@ class SpeechBubble(QWidget):
         自己的标志判断「原本是否可见」——否则每条都会发，或者一条都不发。
         """
         was_visible = self._was_shown
+        # 收起后动图必须停播，否则定时器收起的气泡底下还在解码 GIF。
+        self._stop_animated()
         super().hideEvent(event)
         self._was_shown = False
         if was_visible:

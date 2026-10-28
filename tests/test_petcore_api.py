@@ -12,9 +12,11 @@ import urllib.error
 from pathlib import Path
 
 import pytest
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QLineEdit
 
 import petcore.api.probe as probe_module
+import petcore.ui.external_links as external_links
 import petcore.ui.settings.page_api as page_api
 from petcore.api.credentials import KeyringCredentials
 from petcore.api.probe import ProbeResult, probe_text
@@ -527,6 +529,85 @@ def test_invalid_api_form_keeps_the_settings_dialog_open(
     assert warnings
     assert page.store.services() == ()
     dialog.close()
+
+
+def test_settings_page_prefills_deepseek_defaults(
+    app, tmp_path: Path, monkeypatch
+) -> None:
+    """出厂预填：空 store 打开页面就是 DeepSeek 官方配置，只需填 Key。"""
+    monkeypatch.setitem(sys.modules, "keyring", None)
+    page = ApiSettingsPage(FakeHost(tmp_path))
+    try:
+        assert page.store.services() == ()
+        assert page.name_edit.text() == "DeepSeek"
+        assert page.base_url_edit.text() == "https://api.deepseek.com"
+        assert page.chat_path_edit.text() == "/v1/chat/completions"
+        assert page.model_edit.text() == "deepseek-v4-flash"
+        assert page.vision_edit.text() == "deepseek-v4-flash-vision-exp"
+        assert page.balance_combo.currentData() == "deepseek"
+        assert page.dirty() is False
+        assert "预填" in page.status_label.text()
+        assert page.api_url_field.text() == external_links.DEEPSEEK_API_URL
+        assert page.open_api_page_button.text() == "打开 DeepSeek 开放平台"
+    finally:
+        page.dispose()
+        page.deleteLater()
+
+
+def test_settings_page_saves_with_only_an_api_key(
+    app, tmp_path: Path, monkeypatch
+) -> None:
+    """小白只填 Key 就能存：规格走默认值，Key 只进钥匙串。"""
+    monkeypatch.setitem(sys.modules, "keyring", None)
+    backend = _FakeBackend()
+    host = FakeHost(tmp_path)
+    host.api_credentials = KeyringCredentials(service="dsh-pet-core", backend=backend)
+    page = ApiSettingsPage(host)
+    try:
+        assert page.dirty() is False
+        page.key_edit.setText("sk-only-key")
+        assert page.dirty() is True
+        assert page.save_service() is True
+
+        services = page.store.services()
+        assert len(services) == 1
+        saved = services[0]
+        assert saved.name == "DeepSeek"
+        assert saved.base_url == "https://api.deepseek.com"
+        assert saved.chat_path == "/v1/chat/completions"
+        assert saved.model == "deepseek-v4-flash"
+        assert saved.balance_protocol == "deepseek"
+
+        text = (tmp_path / "api.json").read_text(encoding="utf-8")
+        assert "api_key" not in text
+        assert "sk-only-key" not in text
+        assert not (tmp_path / "config.json").exists()
+
+        assert page.credentials.available() is True
+        assert page.credentials.get("core.api", saved.service_id) == "sk-only-key"
+        assert backend.values[("dsh-pet-core", f"core.api:{saved.service_id}")] == "sk-only-key"
+        assert page.dirty() is False
+    finally:
+        page.dispose()
+        page.deleteLater()
+
+
+def test_open_api_platform_button_uses_the_default_browser(
+    app, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setitem(sys.modules, "keyring", None)
+    opened: list[str] = []
+    monkeypatch.setattr(
+        QDesktopServices, "openUrl", lambda url: opened.append(url.toString()) or True
+    )
+    page = ApiSettingsPage(FakeHost(tmp_path))
+    try:
+        page.open_api_page_button.click()
+        app.processEvents()
+        assert opened == [external_links.DEEPSEEK_API_URL]
+    finally:
+        page.dispose()
+        page.deleteLater()
 
 
 def test_api_menu_item_opens_the_api_settings_page() -> None:

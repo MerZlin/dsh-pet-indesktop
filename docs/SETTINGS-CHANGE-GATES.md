@@ -83,6 +83,46 @@ recovery
 
 ## 变更记录
 
+### 2026-10-28 — 全屏自动隐藏 + 角色重命名（第二批）
+
+用户需求原文：「在常规设置中补充一下主分支的『全屏自动隐藏』功能」「主分支可以修改动画
+角色的名称，在本分支也加上」。
+
+| 项 | 内容 |
+|---|---|
+| setting_id / 键 | 新增全局布尔 `auto_hide_fullscreen`（默认 **True**，同主分支 `pet/config.py:1138`）；新增全局字典 `character_aliases`（`{角色id: 显示名}`，值 ≤24 字符，空名=恢复默认） |
+| 归属 | `auto_hide_fullscreen` → 「常规 → 桌宠」卡片，「开机自动启动」之后；`character_aliases` → 「常规 → 桌宠 → 角色」行的「重命名…」按钮 + 右键「切换角色」子菜单末尾的「重命名当前角色…」 |
+| 为什么准入 | 两个都是**只有用户知道**的偏好：是否愿意在某些应用全屏时让桌宠消失、以及角色叫什么。应用无法推断，默认值（开/目录名）在未配置时仍可用 |
+| 明确不加键 | 全屏判定参数（容差、QUNS 白名单、排除进程表）是**可由应用稳定推断的实现参数**，不设开关；重命名没有「别名列表/长度」之外的配置，24 字符上限是代码常量 `ALIAS_MAX_CHARS` |
+| 作用域 | 两者都是**全局**（`GLOBAL_CONFIG_KEYS`）：进程只有一个全屏 watcher、一个角色目录，子宠设置页写的必须是同一份；`config-pet-N.json` 里不出现 |
+| migration / recovery | 旧配置无键 → `_normalize` 补默认（`True` / `{}`）；坏数据（非 dict、值非字符串、含换行/控制字符、超长）逐项丢弃，不影响其它键；`SCHEMA_VERSION` 未变 |
+| 语义与实时性 | 全屏开关勾掉即停表并立即恢复被自动隐藏的宠；重命名在菜单入口**立即落盘**（显式用户动作），在设置页入口跟随该页 `dirty()/confirm_save()/discard_changes()` 快照语义（取消恢复打开时的名字） |
+| 版式与可达性 | 新增「全屏时自动隐藏」一行（纵向可达，720×500 下与「保存」按钮不冲突）；「角色」行由单下拉变成 `QComboBox + 重命名…` 横排（沿用 `import_row` 写法，无固定宽度）；非 Windows 上全屏行置灰并写清原因 |
+| 搜索 | `page_search_texts` 自动收录新行/按钮文案；`keywords()` 补「全屏/自动隐藏/游戏/视频/fullscreen」「重命名/改名/别名」；「外观」「DIAGNOSTICS」「生成子宠」的「恰好命中 1 页」断言复跑仍绿 |
+| 测试 | `tests/test_petcore_fullscreen_hide.py`（22 例：几何/状态机/配置/设置行/真 CoreHost 接线）、`tests/test_petcore_character_alias.py`（25 例：配置/显示/菜单/设置页）、`tests/test_petcore_settings.py`、`tests/test_petcore_settings_coverage.py` |
+| 未验证 | 独占全屏 D3D 游戏、钉住的 UWP/永在最前的窗口、真双屏未逐一实测（几何用两块屏矩形做单测）；改名后灵动岛胶囊上的角色名仍是建岛时取的（与切角色同一条既有边界，未在本次修） |
+
+### 2026-10-28 — API 页出厂预填 DeepSeek + 常规页两个素材包外链
+
+用户需求原文：「API 部分，学习主分支，我们在供应商和模型之类的地方的初始值先初始设为
+deepseek 官网的内容，减少小白自己填写的步骤，小白只需要填 api 就行，可以在下面放一个
+deepseek api 官网，并加一个跳转默认浏览器的按钮……在『角色资源包』下方添加两个模块，
+每个模块有两个直接跳转对应链接的按钮，两个模块分别是『完整角色素材包』和『高清完整角色
+素材包』」。
+
+| 项 | 内容 |
+|---|---|
+| setting_id / 键 | **没有新增任何持久化键**。API 页的改动只发生在「新建服务草稿」的初值（名称 / Base URL / Chat Path / 模型 / 视觉模型 / 余额协议）；两个素材包行只是外链按钮 |
+| 归属 | 「API 与账户」右侧表单（新增「API 申请」行）；「常规 → 数据」卡片（`角色资源包` 之后追加两行） |
+| 为什么准入 | 两条都是**命令**（打开浏览器、预填一次初值），不是偏好；按本门禁准入规则第 3 条不该新增配置键，也不该引入保存/取消语义。出厂默认值让「未保存任何服务」的首次体验只需要填 Key |
+| 明确不加键 | 素材包 URL 是代码常量（`petcore/ui/external_links.py`），用户不可改、不落盘；API 预填值同样不进 `config.json`/`api.json`，用户改了才随「保存服务」写 `api.json` |
+| 凭据边界 | 新增的外链按钮只 `QDesktopServices.openUrl`，本进程不发任何网络请求；API Key 仍只进钥匙串（owner `core.api`），`api.json` 里不出现 Key（新增测试断言） |
+| migration / recovery | 无迁移：老用户已保存的服务按原样回显（`_populate` 走存储值）；`dirty()` 仍以「控件值 vs `_baseline`」判定，预填不会让页面一打开就是脏的；点「取消」没有新键可回滚 |
+| 版式与可达性 | 新增行没有 `setFixedWidth`，按钮按文本自适应；720×500 下「保存服务」仍可达（`tests/test_petcore_settings.py:903-925` 复跑通过），窄窗沿用页面既有的横向滚动分支 |
+| 搜索 | 两个素材包行的标题 / 按钮 / 提示文案自动进 `page_search_texts`；`GeneralPage.keywords()` 补 `素材包/下载/高清/网盘/github`，`ApiSettingsPage.keywords()` 补 `开放平台/API 申请`；「外观」「DIAGNOSTICS」「生成子宠」的「恰好命中 1 页」断言复跑仍绿 |
+| 测试 | `tests/test_petcore_api.py`（预填默认值、只填 Key 能保存且 api.json 无 Key、开放平台按钮）、`tests/test_petcore_settings_assets_links.py`（两行位置/按钮/URL/搜索/无草稿差异）、`tests/test_petcore_settings.py`、`tests/test_petcore_settings_coverage.py`、`tests/test_petcore_pages_smoke.py` |
+| 未验证 | 本机无真实 API Key，`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 对用户账号是否有效未实测（模型行 hint 已写「如不支持可改成 deepseek-chat」的退路）；两个模块的 GitHub 按钮当前指向仓库根，换成独立素材页只改 `external_links.CHARACTER_PACKS_URL` |
+
 ### 2026-10-27 — 新增「语音」域 + 本地模型 provider + 关于页「致谢」分页/签名
 
 用户需求原文：「把自言自语、报时等的语音生成全部加上，另外提供本地部署音频生成模型的接口
