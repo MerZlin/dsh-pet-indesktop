@@ -252,3 +252,48 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 \
   只有勾选才会把 `{app}\mods\media.music` 覆盖成本次修复后的代码；主程序 exe 的修复
   （帧表节拍）与 mod 无关，装完即生效。
 - 未在本机运行安装包（会覆盖正在使用的 `E:\dsh-pet-core` 安装并弹出 UAC）。
+
+## 九、免安装（绿色）版
+
+产物：`rel-anim-music-2026-10-29b/dsh-pet-core-portable-2026-10-29.zip`
+（解压后是一个自包含目录，不注册快捷方式、不写安装目录、不碰注册表）。
+
+**组装口径**（可复现，2026-10-29）
+
+1. `cp -r dsh-pet-core dsh-pet-core-portable`（同一份 PyInstaller onedir 产物）。
+2. 把 11 个随包扩展按安装器同一口径放进 `<portable>/mods/<id>`（排除 `__pycache__`/`*.pyc`），
+   每个目录再放一份 `.trusted`（内容 = `packaging/trust_marker.txt`）：
+   `ai.agent ai.chat fun.divination fun.festival media.music reminder.todo
+   tool.ai-browser tool.file-reader tool.ocr tool.weather voice.chime`。
+   依据：`paths.install_mods_dir()` 在冻结包里就是「exe 旁边的 `mods/`」，绿色版靠它加载
+   随包扩展；不带 `.trusted` 会被当成"本地导入"而受 `allow_feature_mods` 限制。
+3. 新增 `README-免安装版.txt` 与 `start-portable.cmd`
+   （`start "" "%~dp0dsh-pet-core.exe" --portable`）。
+4. 冒烟（`Start-Process -Wait`，GUI 子系统进程）：
+
+   | 入口 | 退出码 | strict | data_root | 扩展 |
+   |---|---|---|---|---|
+   | `dsh-pet-core.exe --check --strict`（默认数据根） | 1 | 1 条 **diagnostic**：`duplicate mod id 'tool.ai-browser'`（本机 `%APPDATA%\dsh-pet-core\mods` 里有一份用户导入的同名包，被随包受信版本覆盖） | `%APPDATA%\dsh-pet-core` | 13（含 2 个用户安装包） |
+   | `dsh-pet-core.exe --portable --check --strict`（绿色数据根） | **0** | **0** | `<portable>\data` | 11（含 `media.music`） |
+
+   重复 mod 只是诊断（普通启动不阻断），绿色入口 `start-portable.cmd` 完全没有它。
+5. 清掉冒烟产生的 `data/` 与 check 报告，再用 Python `zipfile`（deflate level 6）打包，
+   顶层目录 `dsh-pet-core-portable/`。
+6. **对 zip 本身做了解压复验**：解压到临时目录后跑 `--portable --check --strict` →
+   exit=0、`strict.problems=[]`、`data_root=<解压目录>\data`、11 个扩展全部加载。
+
+| 产物 | 字节 | SHA-256 |
+|---|---|---|
+| `dsh-pet-core-portable-2026-10-29.zip` | 366,319,385 | `7C2CF57C2FCEAE5A01C6C019948E70C88D99CB4C2BFE5A55B5640A0A48AE026C` |
+
+（zip 比安装包大：Inno 用 lzma2，zip 用 deflate。）
+
+**使用口径**
+
+- 双击 `dsh-pet-core.exe`：沿用 `%APPDATA%\dsh-pet-core`（装过旧版的用户设置/Key 直接可用）。
+- 双击 `start-portable.cmd`：完全绿色，数据落在 `<portable>\data`，换机器整目录拷走。
+- 同一个数据目录只允许一个实例：绿色版与已安装版不要同时运行（`petcore.lock`）。
+- 卸载 = 删目录；没有服务、计划任务、注册表项（开机自启需用户在设置里自行开启）。
+
+**未验证**：没有真实双击运行免安装版（会占用桌面并和已安装版争数据锁），只做了同一 exe
+的 `--check --strict` 冒烟 + zip 解压复验；音视频/托盘等交互与已安装版共用同一份产物。
