@@ -53,11 +53,18 @@ class SpeechRequest:
 
 @dataclass(frozen=True, slots=True)
 class SpeechResult:
+    """一次合成产物；``volume`` 是**实际采用**的音量（请求留空时取配置值）。
+
+    播放层必须用这个值，不能回读 ``SpeechRequest.volume``：请求里的 ``None``
+    表示「沿用配置」，把它直接交给 ``float()`` 会失败，整句语音静默丢失。
+    """
+
     path: Path
     provider: str
     voice: str
     cached: bool = False
     text: str = ""
+    volume: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)

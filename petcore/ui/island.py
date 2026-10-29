@@ -401,8 +401,35 @@ class DynamicIsland(QWidget):
         if self._expanded:
             self._rebuild_card()
 
+    def set_probe_sampling(self, metric_id: str) -> None:
+        """把一个 GPU/FPS 段退回「采样中」的定宽占位（停采但保留行宽）。
+
+        停采**不缩行**：盒样本与单位跟真实读数同一套（见 ``segments.PROBE_BOX_TEXT``），
+        所以「停 → 起」不会翻转折叠计划，也不会把上一拍的旧读数留在胶囊上。
+        真正的「未接入探针」（``unsupported`` / 段被移除）走 :meth:`clear_probe_snapshot`。
+        """
+        if metric_id not in (isl.GPU, isl.FPS):
+            raise ValueError("only GPU/FPS snapshots are accepted")
+        self._probe_unavailable.pop(metric_id, None)
+        self._probe_segments[metric_id] = isl.SegmentSnapshot(
+            metric_id,
+            label=CARD_NAMES.get(metric_id, metric_id),
+            text=isl.UNKNOWN_TEXT,
+            max_text=isl.PROBE_BOX_TEXT[metric_id],
+            state=isl.STATE_SAMPLING,
+            detail={"unit": isl.PROBE_UNITS[metric_id]},
+        )
+        self._rebuild_row()
+        self._update_size()
+        if self._expanded:
+            self._rebuild_card()
+
     def clear_probe_snapshot(self, metric_id: str | None = None) -> None:
-        """清除一个或全部可选探针快照并回到「未接入探针」的明确状态。"""
+        """清除一个或全部可选探针快照并回到「未接入探针」的明确状态。
+
+        只给**关停/停用**用（宿主退出、岛关闭）；正常隐藏/折叠/停采走
+        :meth:`set_probe_sampling` 保留行宽，勿用本方法制造宽度跳变。
+        """
         if metric_id is None:
             self._probe_segments.clear()
             self._probe_unavailable.clear()
@@ -658,14 +685,20 @@ class DynamicIsland(QWidget):
         self.net_monitor.stop()
         self.sys_monitor.stop()
         self.disk_monitor.stop()
+        # 收口必须当场通知宿主：GPU/FPS 的启停归宿主，只在心跳里补一次等于白采一秒
+        # （ETW 会话/PDH query 都在别人手上）。隐藏后 `visible` 为假，回调收到空集。
+        self._sync_sampling()
 
     def set_visible(self, visible: bool) -> None:
-        if visible and not self.isVisible():
-            self.show()
-            self.start()
-        elif not visible and self.isVisible():
+        if visible:
+            if not self.isVisible():
+                self.show()
+                self.start()
+            return
+        if self.isVisible():
             self.hide()
-            self.stop()
+        # 已经隐藏也要收口（hide() 不一定会再触发 hideEvent）：停采是幂等的。
+        self.stop()
 
     def refresh_from_config(self) -> None:
         """设置改完调用：重读配置、重排段、按需重进采样。"""
@@ -741,6 +774,10 @@ class DynamicIsland(QWidget):
         """注册 GPU/FPS 启停回调：参数是当前仍需要采样的段 id 集合。"""
         self._probe_sync_callback = callback
         self._probe_wanted = None
+        # 接上宿主 = 探针段从此按「定宽占位 ↔ 读数」呈现：行必须按新口径重建一次，
+        # 否则接线前算出的行里根本没有这两段，要等下一次心跳才补上。
+        self._rebuild_row()
+        self._update_size()
         self._sync_sampling()
 
     # ------------------------------------------------------------ 字体与配色
@@ -894,9 +931,32 @@ class DynamicIsland(QWidget):
             elif metric_id in (isl.GPU, isl.FPS):
                 snapshot = self._probe_segments.get(metric_id)
                 if snapshot is None:
-                    # 主分支口径：不支持就不占位，原因只在卡片里说一行。
+                    if metric_id in self._probe_unavailable:
+                        # 整机没有这个能力（unsupported）：不占位，原因只在卡片里说一行。
+                        continue
+                    if not callable(self._probe_sync_callback):
+                        # 宿主没接探针（旧装配 / 接线失败）：按「未接入」不占位，卡片说原因。
+                        continue
+                    # 段已启用但**还没有**第一份快照（或刚停采）：照样占一行定宽
+                    # 占位。行宽必须与有读数时逐像素相同，否则「快照到 → 变宽 →
+                    # 折进 +N → 停采 → 变窄 → 复原」会变成 1Hz 的折叠振荡。
+                    row.append(
+                        layout._InfoSeg(
+                            kind=layout.KIND_METRIC,
+                            seg_id=metric_id,
+                            label=CARD_NAMES.get(metric_id, metric_id),
+                            text=isl.UNKNOWN_TEXT,
+                            box_text=isl.PROBE_BOX_TEXT[metric_id],
+                            state=isl.STATE_SAMPLING,
+                            unit=isl.PROBE_UNITS[metric_id],
+                            detail={},
+                        )
+                    )
                     continue
                 state = snapshot.state if snapshot.state in isl.STATES else isl.STATE_UNKNOWN
+                if state == isl.STATE_UNSUPPORTED:
+                    # 主分支口径：不支持就不占位，原因只在卡片里说一行。
+                    continue
                 detail = dict(snapshot.detail)
                 if state != isl.STATE_OK:
                     detail.setdefault("error_reason", "GPU/FPS 探针暂不可用")
@@ -906,14 +966,16 @@ class DynamicIsland(QWidget):
                         seg_id=metric_id,
                         label=snapshot.label or CARD_NAMES.get(metric_id, metric_id),
                         text=snapshot.text if state == isl.STATE_OK else "--",
-                        box_text=snapshot.max_text or ("100" if metric_id == isl.GPU else "9999"),
+                        box_text=snapshot.max_text or isl.PROBE_BOX_TEXT[metric_id],
                         state=state,
-                        unit=str(detail.get("unit") or ""),
+                        # 单位盒宽也是行宽的一部分：探针段永远留出该段的单位盒，
+                        # 快照忘了声明单位时也不许比占位窄（两者必须同宽）。
+                        unit=str(detail.get("unit") or isl.PROBE_UNITS[metric_id]),
                         detail=detail,
                         severity=str(detail.get("severity") or ""),
                     )
                 )
-            # 未知 id 不占位；GPU/FPS 未接入探针时也不占位（见卡片原因行）。
+            # 未知 id 不占位。
         return tuple(row)
 
     def _lead_trail(self, name_text: str) -> tuple[float, float]:

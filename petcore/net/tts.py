@@ -22,6 +22,7 @@ import importlib.util
 import json
 import logging
 import os
+import threading
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -42,6 +43,11 @@ from .errors import (
 from .http import fetch_url
 
 logger = logging.getLogger("petcore.net.tts")
+
+#: `edge_tts` 的首次 import 必须串行：它会在模块级建 SSL 上下文，多个播报线程同时
+#: 首次 import 时在 Windows 上偶发原生 access violation（2026-10-29 全量套件三次两崩，
+#: 栈全在 importlib + ssl.create_default_context）。串行只发生在第一次，之后是普通 import。
+_EDGE_IMPORT_LOCK = threading.Lock()
 
 EDGE_TIMEOUT_S = 60.0
 DOUBAO_TIMEOUT_S = 60.0
@@ -331,7 +337,8 @@ def edge_synthesize(
 ) -> None:
     """微软在线音色合成到 ``out_path``（mp3）。"""
     try:
-        import edge_tts
+        with _EDGE_IMPORT_LOCK:
+            import edge_tts
     except Exception as exc:  # noqa: BLE001 - 缺依赖统一转成 unavailable
         raise NetworkError("edge-tts 不可导入", reason="unavailable") from exc
 

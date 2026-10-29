@@ -37,7 +37,16 @@ logger = logging.getLogger(__name__)
 #: 没有 ``reason`` 的异常一律归到这里——**不是** ``network``：把 ``KeyError`` 说成
 #: 「网络不可达」会让用户去重启路由，而且日志里什么都不留。
 REASON_INTERNAL = "internal"
-_REASON_TEXT = {REASON_INTERNAL: "内部错误"}
+#: 与 ``petcore/net/errors.py`` 的 ``REASON_TEXT`` 同口径：屏幕上不许出现英文 reason。
+_REASON_TEXT = {
+    "auth": "密钥无效或没有权限",
+    "rate_limit": "请求过于频繁，稍后再试",
+    "network": "网络不可达",
+    "timeout": "连接超时",
+    "tls": "证书校验失败",
+    "protocol": "服务端返回了无法识别的响应",
+    REASON_INTERNAL: "内部错误",
+}
 NO_SERVICE_HINT = "还没有可用的 API 服务，请先在「设置 → API 与账户」里填写"
 
 
@@ -48,7 +57,12 @@ class AiChatFailure(RuntimeError):
         self.reason = str(reason or REASON_INTERNAL)
         self.detail = str(detail or "")[:200]
         text = _REASON_TEXT.get(self.reason, self.reason)
-        super().__init__(f"{text}：{self.detail}" if self.detail else text)
+        # core 的异常消息本身就是同一句中文（``NetworkError(NETWORK)`` →
+        # "网络不可达"）：再拼一遍就成了「网络不可达：网络不可达」。
+        if self.detail and self.detail != text:
+            super().__init__(f"{text}：{self.detail}")
+        else:
+            super().__init__(text)
 
 
 class AiChatRuntime:

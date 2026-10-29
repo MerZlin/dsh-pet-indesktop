@@ -84,8 +84,50 @@ class InteractionPage(SettingsPage):
             click_card.add_row(
                 "点击 Q 弹",
                 self._checks["click_squash_enabled"],
-                "点击桌宠时先压扁再恢复（220ms）；连续点击可打断。",
+                "点击/碰撞/撞岛时先压扁再恢复；关闭后不再触发 Q 弹。",
             )
+            self.squash_bounces = QSpinBox(self)
+            self.squash_bounces.setRange(1, 5)
+            self.squash_bounces.setSuffix(" 次")
+            self.squash_bounces.setValue(
+                int(self.config().get("click_squash_bounces") or 1)
+            )
+            self.squash_bounces.valueChanged.connect(self._on_changed)
+            click_card.add_row(
+                "弹跳次数",
+                self.squash_bounces,
+                "一次触发里连续压/鼓的次数；1 次就是原来的单次 Q 弹。",
+            )
+            self.squash_strength = QSpinBox(self)
+            self.squash_strength.setRange(30, 200)
+            self.squash_strength.setSingleStep(10)
+            self.squash_strength.setSuffix("%")
+            self.squash_strength.setValue(
+                int(self.config().get("click_squash_strength") or 100)
+            )
+            self.squash_strength.valueChanged.connect(self._on_changed)
+            click_card.add_row(
+                "弹性强度",
+                self.squash_strength,
+                "压扁/鼓出的幅度；100% 为默认观感。",
+            )
+            self.squash_ms = QSpinBox(self)
+            self.squash_ms.setRange(80, 1000)
+            self.squash_ms.setSingleStep(20)
+            self.squash_ms.setSuffix(" ms")
+            self.squash_ms.setValue(
+                int(float(self.config().get("click_squash_ms") or 220))
+            )
+            self.squash_ms.valueChanged.connect(self._on_changed)
+            click_card.add_row(
+                "持续时间",
+                self.squash_ms,
+                "整段 Q 弹的时长；越长越软，越短越脆。",
+            )
+            self._checks["click_squash_enabled"].toggled.connect(
+                self._sync_squash_rows
+            )
+            self._sync_squash_rows()
             click_card.add_row(
                 "点击音效",
                 self._checks["click_sound"],
@@ -752,6 +794,11 @@ class InteractionPage(SettingsPage):
         enabled = self._checks["golden_spin_on_click"].isChecked()
         self._spin_direct_row.setVisible(enabled)
 
+    def _sync_squash_rows(self, *_args) -> None:
+        enabled = self._checks["click_squash_enabled"].isChecked()
+        for widget in (self.squash_bounces, self.squash_strength, self.squash_ms):
+            widget.setEnabled(enabled)
+
     def _on_balance_tier_changed(self, *_args) -> None:
         self._sync_tier_custom_rows()
         self._on_changed()
@@ -865,6 +912,9 @@ class InteractionPage(SettingsPage):
         values = {key: bool(config.get(key)) for key in self._CHECK_KEYS}
         values["throw_strength"] = str(config.get("throw_strength") or "standard")
         values["playback_speed"] = float(config.get("playback_speed") or 1.0)
+        values["click_squash_bounces"] = int(config.get("click_squash_bounces") or 1)
+        values["click_squash_strength"] = int(config.get("click_squash_strength") or 100)
+        values["click_squash_ms"] = int(float(config.get("click_squash_ms") or 220))
         values["animation_gap_seconds"] = int(float(config.get("animation_gap_seconds") or 0.0))
         values["head_pat_enabled"] = bool(config.get("head_pat_enabled", True))
         values["head_pat_animation_mode"] = str(
@@ -910,6 +960,9 @@ class InteractionPage(SettingsPage):
         values = {key: bool(box.isChecked()) for key, box in self._checks.items()}
         values["throw_strength"] = str(self.throw_strength.currentData() or "standard")
         values["playback_speed"] = float(self.playback_speed.value())
+        values["click_squash_bounces"] = int(self.squash_bounces.value())
+        values["click_squash_strength"] = int(self.squash_strength.value())
+        values["click_squash_ms"] = int(self.squash_ms.value())
         values["animation_gap_seconds"] = int(self.animation_gap.value())
         values["head_pat_enabled"] = bool(self.head_pat_enabled.isChecked())
         values["head_pat_animation_mode"] = str(
@@ -1002,6 +1055,15 @@ class InteractionPage(SettingsPage):
         self.playback_speed.blockSignals(True)
         self.playback_speed.setValue(self._initial["playback_speed"])
         self.playback_speed.blockSignals(False)
+        for widget, key in (
+            (self.squash_bounces, "click_squash_bounces"),
+            (self.squash_strength, "click_squash_strength"),
+            (self.squash_ms, "click_squash_ms"),
+        ):
+            widget.blockSignals(True)
+            widget.setValue(int(self._initial[key]))
+            widget.blockSignals(False)
+        self._sync_squash_rows()
         self.animation_gap.blockSignals(True)
         self.animation_gap.setValue(self._initial["animation_gap_seconds"])
         self.animation_gap.blockSignals(False)
@@ -1078,6 +1140,9 @@ class InteractionPage(SettingsPage):
             "物理",
             "点击",
             "Q弹",
+            "弹跳次数",
+            "弹性强度",
+            "持续时间",
             "音效",
             "点击音效",
             "音效音源",

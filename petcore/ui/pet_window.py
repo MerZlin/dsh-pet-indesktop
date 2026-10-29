@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtWidgets import QWidget
+from PySide6.QtGui import QCursor
+from PySide6.QtWidgets import QApplication, QWidget
 
 from .. import paths
 from ..config import Config
@@ -48,6 +50,12 @@ from ..engine.motion import (
     stride_for,
 )
 from ..engine.pet_state import PetState
+from ..engine.pointer import (
+    POINTER_DRAG_HOLD_MS,
+    POINTER_MENU_HOLD_MS,
+    PointerAction,
+    PointerArbiter,
+)
 from ..media.click_sound import ClickSoundPair, choose_click_sound, resolve_click_sound_candidates
 from ..media.images import screen_dpr
 from ..media.library import ClipLibrary
@@ -58,6 +66,7 @@ from ..platform.win import (
     apply_click_through,
     apply_stream_window,
     apply_tool_window,
+    forward_left_click,
 )
 from .bubble import SpeechBubble
 from .easter_egg import DEFAULT_EASTER_EGG_TITLE, EasterEggController
@@ -167,6 +176,23 @@ class PetWindow(QWidget):
         self._move_timer.setInterval(16)
         self._move_timer.timeout.connect(self._tick_move)
         self._input_controller: PerPixelInputController | None = None
+        # 穿透模式（click_through=True）的鼠标状态机与两个长按计时。
+        self._pointer = PointerArbiter()
+        self._left_press_active = False
+        self._left_drag_armed = False
+        self._right_press_active = False
+        self._right_menu_shown = False
+        self._right_menu_armed = False
+        self._through_hold_until = 0.0
+        self._paused_for_session = False
+        self._left_hold_timer = QTimer(self)
+        self._left_hold_timer.setSingleShot(True)
+        self._left_hold_timer.setInterval(POINTER_DRAG_HOLD_MS)
+        self._left_hold_timer.timeout.connect(self._on_left_hold)
+        self._right_hold_timer = QTimer(self)
+        self._right_hold_timer.setSingleShot(True)
+        self._right_hold_timer.setInterval(POINTER_MENU_HOLD_MS)
+        self._right_hold_timer.timeout.connect(self._on_right_hold)
         self._layout = None
         self._apply_flags(initial=True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -268,10 +294,10 @@ class PetWindow(QWidget):
             QTimer.singleShot(800, lambda spec=click_spec: self.library.warm_first_frame(spec))
         QTimer.singleShot(200, self._warm_interaction_assets)
         self._head_pat_tracker.reset()
+        if os.name == "nt":
+            self._input_controller = PerPixelInputController(self, self.is_transparent_at)
         if self.click_through:
             self._apply_click_through()
-        else:
-            self._input_controller = PerPixelInputController(self, self.is_transparent_at)
         if bool(self.config.get("edge_probe_enabled")):
             QTimer.singleShot(800, self._edge_probe.maybe_enter)
 
@@ -331,6 +357,7 @@ class PetWindow(QWidget):
         self._head_pat_tracker.reset()
         self._head_pat_last_name = None
         self._head_pat_no_spec_logged = False
+        self._cancel_pointer_holds()
 
     def set_character(self, character_id: str, *, persist: bool = True) -> None:
         self._edge_probe.cancel("character", restore=True)
@@ -427,6 +454,10 @@ class PetWindow(QWidget):
         self._play_spec(spec, "idle")
 
     def _play_spec(self, spec: AnimationSpec, kind: str) -> None:
+        if self._paused_for_session and kind != "idle":
+            # 锁屏期间外部事件（DSH/点击台词）不许把动画重新拉起；
+            # 待机由 resume/set_visible 在解锁后重新收敛。
+            return
         self._loop_active = False
         if self._effects_lock_active() and not self._spec_allowed_while_locked(spec):
             # 主分支 _effects_filter_switch：探头/彩蛋接管期间只允许待机与转向，
@@ -442,8 +473,13 @@ class PetWindow(QWidget):
             return
         self._cancel_move_plan()
         if self._clip is clip and self.state.current is spec and kind == self._action_kind:
-            # 同一 clip 续圈：WebMClip 圈末驻留等 re-arm，硬停会换代并丢末帧。
-            clip.start()
+            # 同一 clip 续圈：WebMClip 圈末驻留等 re-arm，硬停会换代并丢末帧；
+            # 帧序列在跑时则不要重开（会把 10s 的段拉回第 0 帧）。
+            rearm = getattr(clip, "rearm_same", None)
+            if callable(rearm):
+                rearm()
+            else:
+                clip.start()
             return
         self._stop_clip()
         self._clip = clip
@@ -486,13 +522,8 @@ class PetWindow(QWidget):
         image = self._clip.current_image()
         self._image = image
         if image is not None:
-            self._pixmap = frame_pixmap(
-                image,
-                self.width(),
-                self.height(),
-                mirrored=self._mirrored(),
-                dpr=screen_dpr(self),
-            )
+            # 只做 QImage→QPixmap；缩放/镜像在 paintEvent 按当前目标矩形做。
+            self._pixmap = frame_pixmap(image)
         self._advance_move_from_frame()
         self.update()
 
@@ -923,15 +954,19 @@ class PetWindow(QWidget):
         self.set_click_through(not self.click_through)
 
     def _apply_click_through(self) -> None:
-        if self.click_through:
+        self._cancel_pointer_holds()
+        if self.click_through and os.name != "nt":
+            # 非 Windows 没有 SendInput 转发能力：保持旧的整窗穿透语义。
             if self._input_controller is not None:
                 self._input_controller.stop()
                 self._input_controller = None
             apply_click_through(self, True)
-        else:
-            apply_click_through(self, False)
-            if self._input_controller is None:
-                self._input_controller = PerPixelInputController(self, self.is_transparent_at)
+            return
+        # Windows：穿透模式也不再整窗挂 WS_EX_TRANSPARENT，否则右键会被一起放走。
+        # 逐像素轮询保留，只由「透明像素」决定是否穿透。
+        apply_click_through(self, False)
+        if os.name == "nt" and self._input_controller is None:
+            self._input_controller = PerPixelInputController(self, self.is_transparent_at)
 
     def set_always_on_top(self, value: bool, *, persist: bool = True) -> None:
         self.always_on_top = bool(value)
@@ -966,6 +1001,9 @@ class PetWindow(QWidget):
             return
         if not visible:
             self._head_pat_tracker.reset()
+            self._cancel_pointer_holds()
+            if self._input_controller is not None:
+                self._input_controller.stop()
             self._edge_probe.pause()
             self._stop_clip()
             self._cancel_say_sequence()
@@ -974,15 +1012,44 @@ class PetWindow(QWidget):
             self._sync_host_pet_visibility()
             return
         self.show()
-        self._edge_probe.resume()
+        if self._input_controller is not None and not self._paused_for_session:
+            self._input_controller.resume()
+        if not self._paused_for_session:
+            self._edge_probe.resume()
         # 右键菜单开着的时候不许把桌宠抬到菜单上面（菜单会话期间层级归菜单）。
         if not menu_open():
             self.raise_()
+        if self._paused_for_session:
+            return
         if self._action_kind is not None and self._clip is not None:
             self._clip.start()
         else:
             self._play_idle()
         self._sync_host_pet_visibility()
+
+    def pause_animation(self) -> None:
+        """锁屏/睡眠：停播放节拍与位移动画（保留当前帧），解锁后原地续播。"""
+        self._paused_for_session = True
+        self._cancel_pointer_holds()
+        self._move_timer.stop()
+        if self._input_controller is not None:
+            self._input_controller.stop()
+        self._edge_probe.pause()
+        if self._clip is not None:
+            self._clip.pause()
+
+    def resume_animation(self) -> None:
+        """锁屏/睡眠结束：续播当前帧，不回到第 0 帧。"""
+        self._paused_for_session = False
+        if not self.isVisible():
+            return
+        if self._clip is not None:
+            self._clip.resume()
+        if self._input_controller is not None:
+            self._input_controller.resume()
+        self._edge_probe.resume()
+        if self._move_plan is not None and not self._move_timer.isActive():
+            self._move_timer.start()
 
     def _sync_host_pet_visibility(self) -> None:
         """显隐是四条路（快捷键/托盘全部/托盘逐宠/右键隐藏）共用的收口点。
@@ -1047,24 +1114,47 @@ class PetWindow(QWidget):
             return True
         return image.pixelColor(ix, iy).alpha() < 8
 
+    def _frame_target_rect(self) -> QRect:
+        """角色帧的绘制矩形：Q 弹用 squash rect，否则按原比例适配并左上对齐。
+
+        旧实现先 ``scaled(..., KeepAspectRatio)`` 再画到 (0,0)：宽高比与画布一致
+        时就是整窗；不一致时保持比例、左上留白。这里用目标矩形复现同一语义，
+        但不再每帧分配中间 pixmap。
+        """
+        if self.effects.squash_active:
+            x, y, width, height = self.effects.squash_rect()
+            return QRect(x, y, width, height)
+        width, height = self.width(), self.height()
+        pixmap = self._pixmap
+        if pixmap is None or pixmap.width() <= 0 or pixmap.height() <= 0:
+            return QRect(0, 0, width, height)
+        scale = min(width / pixmap.width(), height / pixmap.height())
+        target_width = max(1, int(round(pixmap.width() * scale)))
+        target_height = max(1, int(round(pixmap.height() * scale)))
+        return QRect(0, 0, target_width, target_height)
+
     def paintEvent(self, _event) -> None:
         if self._pixmap is None:
             return
         from PySide6.QtGui import QPainter
 
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         angle = self._probe_angle + self.effects.effect_angle()
         if abs(angle) >= 1e-6:
             center = QPointF(self.width() / 2.0, self.height() / 2.0)
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
             painter.translate(center)
             painter.rotate(angle)
             painter.translate(-center)
-        if self.effects.squash_active:
-            x, y, width, height = self.effects.squash_rect()
-            painter.drawPixmap(QRect(x, y, width, height), self._pixmap)
-        else:
-            painter.drawPixmap(0, 0, self._pixmap)
+        # 镜像只作用于角色帧（旧实现是在 pixmap 上翻，现在改成绘制变换）；
+        # 弹弓轨迹等叠加层保持旧语义：随旋转、不随镜像。
+        target = self._frame_target_rect()
+        painter.save()
+        if self._mirrored():
+            painter.translate(2 * target.x() + target.width(), 0)
+            painter.scale(-1, 1)
+        painter.drawPixmap(target, self._pixmap)
+        painter.restore()
         self.slingshot.paint(painter)
         painter.end()
 
@@ -1136,6 +1226,12 @@ class PetWindow(QWidget):
     def mousePressEvent(self, event) -> None:
         self._head_pat_tracker.reset()
         self._last_cursor_local = event.position()
+        if self.click_through:
+            self._pass_through_press(event)
+            return
+        self._classic_press(event)
+
+    def _classic_press(self, event) -> None:
         if event.button() == Qt.MouseButton.RightButton:
             self._click_sound_pair.cancel(self._click_sound_token)
             self._click_sound_token = None
@@ -1159,6 +1255,38 @@ class PetWindow(QWidget):
                 else None
             )
 
+    def _pass_through_press(self, event) -> None:
+        """穿透模式：左键等长按拖动，右键单击/长按菜单（只放走左键）。"""
+        if event.button() == Qt.MouseButton.RightButton:
+            self._click_sound_pair.cancel(self._click_sound_token)
+            self._click_sound_token = None
+            if self.slingshot.aiming:
+                return
+            action = self._pointer.right_press(dragging=self.dragging)
+            if action is PointerAction.SLINGSHOT:
+                if self.slingshot.maybe_enter(event.position(), event.position()):
+                    self._suppress_context_menu = True
+                    event.accept()
+                return
+            if action is PointerAction.PENDING:
+                self._right_press_active = True
+                self._right_menu_shown = False
+                self._right_hold_timer.start()
+                event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._suppress_context_menu = False
+            self._press_global = event.globalPosition().toPoint()
+            self._press_pos = self.pos()
+            self.dragging = False
+            self._left_press_active = True
+            self._left_drag_armed = False
+            self._click_sound_pair.cancel(self._click_sound_token)
+            self._click_sound_token = None
+            self._pointer.left_press()
+            self._left_hold_timer.start()
+            event.accept()
+
     def mouseMoveEvent(self, event) -> None:
         self._last_cursor_local = event.position()
         if self.slingshot.aiming:
@@ -1166,6 +1294,19 @@ class PetWindow(QWidget):
             self.slingshot.update(event.position())
             return
         self._maybe_head_pat(event.position())
+        if self.click_through:
+            if (
+                self._left_press_active
+                and self._left_drag_armed
+                and self._press_global is not None
+                and self._press_pos is not None
+            ):
+                delta = event.globalPosition().toPoint() - self._press_global
+                x, y = self._clamp_position(
+                    self._press_pos.x() + delta.x(), self._press_pos.y() + delta.y()
+                )
+                self.motion.drag_to(x, y)
+            return
         if self._press_global is None or self._press_pos is None:
             return
         delta = event.globalPosition().toPoint() - self._press_global
@@ -1193,28 +1334,116 @@ class PetWindow(QWidget):
         )
         self.motion.drag_to(x, y)
 
+    def _on_left_hold(self) -> None:
+        """穿透模式的左键长按：越过阈值才开始拖动。"""
+        if not self.click_through or not self._left_press_active:
+            return
+        if not (QApplication.mouseButtons() & Qt.MouseButton.LeftButton):
+            self._cancel_left_press()
+            return
+        if bool(self.config.get("lock_position")):
+            return
+        if bool(self.config.get("shift_drag")) and not (
+            QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
+        ):
+            return
+        if self._pointer.left_hold() is not PointerAction.DRAG:
+            return
+        self._left_drag_armed = True
+        self._head_pat_tracker.reset()
+        self.dragging = True
+        self.state.dragging = True
+        self._probe_drag_throw = self._edge_probe.on_drag_started()
+        self._cancel_animation_gap()
+        self._cancel_move_plan()
+        self.motion.begin_drag(self.x(), self.y())
+        spec = self.catalog.find_for(GraphType.RAISED_STATIC, AnimatType.SINGLE)
+        if spec is not None:
+            self._play_spec(spec, "drag")
+
+    def _on_right_hold(self) -> None:
+        """穿透模式的右键长按：弹出右键菜单，松手不再触发单击反馈。"""
+        if not self.click_through or not self._right_press_active:
+            return
+        if not (QApplication.mouseButtons() & Qt.MouseButton.RightButton):
+            self._cancel_right_press()
+            return
+        if not self.rect().contains(self.mapFromGlobal(QCursor.pos())):
+            self._cancel_right_press()
+            return
+        if self._pointer.right_hold() is not PointerAction.MENU:
+            return
+        # 菜单等松手再弹：右键仍按着时 exec() 会让菜单把这一次 release 当成
+        # 选中/关闭动作（标准右键菜单也是松手才弹）。
+        self._right_menu_armed = True
+        self._right_hold_timer.stop()
+
+    def _show_context_menu_at_cursor(self) -> None:
+        menu = self.host.build_menu(self)
+        if menu is None:
+            self._right_menu_shown = False
+            return
+        self._suppress_context_menu = True
+        try:
+            show_context_menu(menu, QCursor.pos(), topmost=self.always_on_top)
+        finally:
+            self._right_menu_shown = False
+            QTimer.singleShot(350, self, self._clear_suppress_context_menu)
+
+    def _clear_suppress_context_menu(self) -> None:
+        if not self.slingshot.suppresses_context_menu():
+            self._suppress_context_menu = False
+
+    def _right_click(self) -> None:
+        if self.motion.thrown or self.effects.throw_egg_active:
+            return
+        if self._edge_probe.on_clicked():
+            return
+        self._on_click()
+
+    def _cancel_left_press(self) -> None:
+        self._left_hold_timer.stop()
+        self._left_press_active = False
+        self._left_drag_armed = False
+        self._press_global = None
+        self._press_pos = None
+        self._pointer.left_release()
+
+    def _cancel_right_press(self) -> None:
+        self._right_hold_timer.stop()
+        self._right_press_active = False
+        self._right_menu_shown = False
+        self._right_menu_armed = False
+        self._pointer.right_cancel()
+
+    def _cancel_pointer_holds(self) -> None:
+        self._left_hold_timer.stop()
+        self._right_hold_timer.stop()
+        self._left_press_active = False
+        self._left_drag_armed = False
+        self._right_press_active = False
+        self._right_menu_shown = False
+        self._right_menu_armed = False
+        self.dragging = False
+        self.state.dragging = False
+        self._press_global = None
+        self._press_pos = None
+        self._pointer.reset()
+
     def mouseReleaseEvent(self, event) -> None:
         self._head_pat_tracker.reset()
+        if event.button() == Qt.MouseButton.RightButton:
+            self._release_right_button()
+            return
         if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self.click_through:
+            self._release_pass_through_left()
             return
         probe_throw = self._probe_drag_throw
         self._probe_drag_throw = False
         if self.slingshot.aiming:
-            launched = self.slingshot.launch()
-            self.dragging = False
-            self.state.dragging = False
-            self._press_global = None
-            self._press_pos = None
-            self._remember_geometry()
-            self._edge_probe.on_release(True)
-            self._click_sound_pair.cancel(self._click_sound_token)
-            self._click_sound_token = None
-            if launched:
-                if probe_throw:
-                    self.effects.arm_throw_egg()
-                self._play_throw_animation()
-            else:
-                self._play_idle()
+            self._launch_slingshot(probe_throw=probe_throw)
             return
         dragged = self.dragging
         self.dragging = False
@@ -1222,17 +1451,7 @@ class PetWindow(QWidget):
         self._press_global = None
         self._press_pos = None
         if dragged:
-            self._click_sound_pair.cancel(self._click_sound_token)
-            self._click_sound_token = None
-            self.motion.release()
-            if self.motion.thrown:
-                if probe_throw:
-                    # 从探头姿态拖出去甩飞：同样开启头部跟随速度的旋转。
-                    self.effects.arm_throw_egg()
-            else:
-                self._play_idle()
-            self._remember_geometry()
-            self._edge_probe.on_release(True)
+            self._finish_drag_release(probe_throw=probe_throw)
         elif self._edge_probe.on_clicked():
             self._click_sound_pair.cancel(self._click_sound_token)
             self._click_sound_token = None
@@ -1243,6 +1462,83 @@ class PetWindow(QWidget):
             )
             self._click_sound_token = None
             self._on_click(sound_already_played=played)
+
+    def _release_right_button(self) -> None:
+        if self.slingshot.aiming:
+            self.slingshot.cancel()
+            self._pointer.right_cancel()
+            return
+        if not self.click_through:
+            return
+        self._right_hold_timer.stop()
+        armed = self._right_menu_armed
+        action = self._pointer.right_release()
+        self._right_press_active = False
+        self._right_menu_shown = False
+        self._right_menu_armed = False
+        if armed:
+            if self.rect().contains(self.mapFromGlobal(QCursor.pos())):
+                self._show_context_menu_at_cursor()
+            return
+        if action is PointerAction.CLICK:
+            self._right_click()
+
+    def _release_pass_through_left(self) -> None:
+        self._left_hold_timer.stop()
+        armed = self._left_drag_armed
+        action = self._pointer.left_release()
+        self._left_press_active = False
+        self._left_drag_armed = False
+        probe_throw = self._probe_drag_throw
+        self._probe_drag_throw = False
+        if self.slingshot.aiming:
+            self._launch_slingshot(probe_throw=probe_throw)
+            return
+        if armed or self.dragging:
+            self._finish_drag_release(probe_throw=probe_throw)
+            return
+        self.dragging = False
+        self.state.dragging = False
+        self._press_global = None
+        self._press_pos = None
+        self._click_sound_pair.cancel(self._click_sound_token)
+        self._click_sound_token = None
+        if action is PointerAction.FORWARD_CLICK:
+            forward_left_click(self)
+
+    def _launch_slingshot(self, *, probe_throw: bool) -> None:
+        launched = self.slingshot.launch()
+        self.dragging = False
+        self.state.dragging = False
+        self._press_global = None
+        self._press_pos = None
+        self._remember_geometry()
+        self._edge_probe.on_release(True)
+        self._click_sound_pair.cancel(self._click_sound_token)
+        self._click_sound_token = None
+        if launched:
+            if probe_throw:
+                self.effects.arm_throw_egg()
+            self._play_throw_animation()
+        else:
+            self._play_idle()
+
+    def _finish_drag_release(self, *, probe_throw: bool) -> None:
+        self.dragging = False
+        self.state.dragging = False
+        self._press_global = None
+        self._press_pos = None
+        self._click_sound_pair.cancel(self._click_sound_token)
+        self._click_sound_token = None
+        self.motion.release()
+        if self.motion.thrown:
+            if probe_throw:
+                # 从探头姿态拖出去甩飞：同样开启头部跟随速度的旋转。
+                self.effects.arm_throw_egg()
+        else:
+            self._play_idle()
+        self._remember_geometry()
+        self._edge_probe.on_release(True)
 
     def _play_throw_animation(self) -> None:
         spec = self.catalog.find_for(GraphType.RAISED_DYNAMIC, AnimatType.B_LOOP)
@@ -1442,6 +1738,10 @@ class PetWindow(QWidget):
             self._edge_probe.maybe_enter()
 
     def contextMenuEvent(self, event) -> None:
+        if self.click_through:
+            # 穿透模式的菜单只由右键长按计时弹出，原生右键事件一律吞掉。
+            event.accept()
+            return
         if (
             self.slingshot.suppresses_context_menu()
             or self._suppress_context_menu
@@ -1499,6 +1799,12 @@ class PetWindow(QWidget):
             text, self.bubble_anchor_rect(), duration_ms, subtitle=subtitle
         )
         return self.bubble.isVisible()
+
+    def hide_bubble(self) -> None:
+        """立即收起气泡（展示会话结束用：音乐暂停不该让最后一句再挂几秒）。"""
+        self._cancel_say_sequence()
+        if self.bubble.isVisible():
+            self.bubble.hide()
 
     def say_sequence(
         self,
@@ -1813,6 +2119,7 @@ class PetWindow(QWidget):
 
     def closeEvent(self, event) -> None:
         self._head_pat_tracker.reset()
+        self._cancel_pointer_holds()
         self._click_sound_pair.cancel_all()
         self._click_sound_token = None
         self._cancel_say_sequence()
@@ -1831,6 +2138,7 @@ class PetWindow(QWidget):
 
     def shutdown(self) -> None:
         self._head_pat_tracker.reset()
+        self._cancel_pointer_holds()
         self._click_sound_pair.cancel_all()
         self._click_sound_token = None
         self._click_talk_timer.stop()

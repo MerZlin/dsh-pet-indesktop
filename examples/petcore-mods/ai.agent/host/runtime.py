@@ -53,6 +53,9 @@ class _Bridge:
     def animations(self) -> tuple[str, ...]:
         return self._runtime.animations()
 
+    def animation_state(self):
+        return self._runtime.animation_state()
+
     def play_animation(self, name: str) -> None:
         self._runtime.play_animation(name)
 
@@ -81,6 +84,9 @@ class AgentLinkRuntime:
         self._sources: list[_Source] = []
         self._signature: object = None
         self._recent: list[dict] = []
+        #: 本 runtime 是否真的请求过 loop=True 的动画；没有就绝不许 release_loop()，
+        #: 否则会误清唱歌/报时等其它持有者的循环。
+        self._requested_loop = False
         self.engine = LinkEngine(
             _Bridge(self),
             schedule=self._schedule,
@@ -329,14 +335,41 @@ class AgentLinkRuntime:
         except Exception:  # noqa: BLE001
             return ()
 
-    def play_animation(self, name: str) -> None:
+    def play_animation(self, name: str, *, loop: bool = False) -> None:
         presentation = getattr(self.ports, "presentation", None)
         player = getattr(presentation, "play_animation", None)
         if callable(player):
-            player(name)
+            self._requested_loop = bool(loop)
+            try:
+                player(name, loop=loop)
+            except TypeError:
+                # 旧 Core 的 play_animation 只收 name；本 mod 默认 loop=False。
+                player(name)
+
+    def animation_state(self):
+        """当前动画状态；端口/窗口查不到（含旧 Core 没有这个方法）返回 ``None``。"""
+        presentation = getattr(self.ports, "presentation", None)
+        query = getattr(presentation, "animation_state", None)
+        if not callable(query):
+            return None
+        try:
+            return query()
+        except Exception:  # noqa: BLE001 - 读不到就当未知，别据此重试
+            return None
 
     def reset_idle(self) -> None:
-        """解除可能存在的循环动画；一次性动作播完会自然回行为链。"""
+        """解除**自己**持有的循环动画；一次性动作播完会自然回行为链。
+
+        本 mod 默认只请求一次性动作（``loop=False``），所以没有 ``_requested_loop``
+        时**绝不**发 ``release_loop()``——``animation_state().loop`` 为真只说明
+        *某个*持有者还在循环（唱歌/报时），盲发会把别人的循环一起清掉。
+        """
+        if not self._requested_loop:
+            return
+        state = self.animation_state()
+        if state is None or not bool(getattr(state, "loop", False)):
+            return
+        self._requested_loop = False
         presentation = getattr(self.ports, "presentation", None)
         release = getattr(presentation, "release_loop", None)
         if callable(release):

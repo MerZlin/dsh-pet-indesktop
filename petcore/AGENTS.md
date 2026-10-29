@@ -62,6 +62,12 @@
   `kind=content`、`character.media`）；校验 body/head 与媒体存在；不许路径逃逸。
 - **Q 弹/旋转命中**：`paintEvent` 与 `is_transparent_at()` 的逆变换顺序必须是
   「先 Q 弹逆变换、再旋转逆变换」；探头角度、黄金回旋、击飞旋转相加，不许互相覆盖。
+  Q 弹幅度/次数/时长取 `click_squash_strength`（30–200，默认 100）/`click_squash_bounces`
+  （1–5，默认 1）/`click_squash_ms`（80–1000，默认 220）；`click_squash_enabled` 关闭时
+  点击/碰撞/撞岛/落地的所有 Q 弹入口都不弹。
+- **每帧不预缩放**：`renderer.frame_pixmap` 只做 QImage→QPixmap；缩放与镜像由
+  `paintEvent` 按目标矩形（含 Q 弹 rect）绘制，镜像用 painter 变换而不是每帧
+  `transformed()` 造中间 pixmap。
 - **多宠配置隔离**：主宠 `config.json`、子宠 `config-pet-N.json`；子宠播种不得
   复制位置/屏幕/朝向；**宠-宠**碰撞只能通过 `PetManager` 的 tick 改位置与速度
   （灵动岛是同步硬墙，见下面「岛 × 桌宠碰撞」一条）。
@@ -138,6 +144,16 @@
 - **自语/点击台词语音默认开**：`self_talk_voice_enabled` / `click_talk_voice_enabled`
   默认 true，彩蛋 `self_talk_champion_chance` 默认 8%；关闭后只冒泡。语音失败不得
   影响气泡与下一次排期。
+  **播放音量取 `SpeechResult.volume`**（= 合成时实际采用的值，含 `speech_volume` 配置）：
+  `SpeechRequest.volume` 留空是「沿用配置」，把它原样交给 `float()` 会 TypeError、整句
+  静默消失（`on_error` 为 None 时连日志都没有）。feature 调 `speak()` 一律带 `on_error`
+  只记 `reason`，别让「有气泡没声音」变成无迹可寻。
+- **重置设置是命令不是偏好**：`petcore/settings_reset.py` 按 `GLOBAL_CONFIG_KEYS` 把
+  「重置全局」与「重置本宠」定义成**两组键**（主宠的全局/本宠键同在 `config.json`，子宠
+  本宠键在 `config-pet-N.json`）；`active_pets`、`positions` 永不重置，本宠重置另保
+  `character`/`rx`/`ry`/`screen_name`。两个按钮放设置侧栏底部（不进页面列表/搜索索引），
+  确认框默认取消；重置落盘后**直接 `done(Accepted)`**，跳过 `_commit()` 与快照回滚——
+  否则旧控件值会把刚写的默认值翻回去。不碰 `api.json`/钥匙串/开机自启（后者是纯注册表状态）。
 - **致谢数据只读 + 断网可显示**：静态条目（作者账号/特别鸣谢）只从
   `petcore/community/data/credits.json` 读；动态条目（贡献者/issue·PR 作者/粉丝）取缓存与
   随包快照中「较新且非空」的一份。运行期**永不写回** `petcore/community/data/*`，刷新只写
@@ -182,13 +198,23 @@
   还在手上，被清掉就按退避重新请求（丢租约时不许再发 `release_loop()`，会误伤别人的循环）。
 - **歌词**：直连优先，最多切一次代理（同一 deadline，仅传输失败或 500/502/504，
   带 `Retry-After` 不切）；**不重复换路**；取词失败的重试由运行时按 60 秒冷却控制
-  （每曲 ≤3 次，首次失败说清原因），不是网络层重发；不落盘音频、不记录 URL/代理/密钥；
-  歌词气泡同一行只冒一次且间隔 ≥2s；无播放器时命令必须给明确原因。
+  （每曲 ≤3 次，首次失败说清原因），不是网络层重发；**取词只有一条常驻
+  `lyric-fetch` 线程（单槽队列，提交新请求会取消在飞请求）**，并发 ≤1，不许每次取词
+  `Thread(...).start()`；失败按**歌名**记 60s 负缓存（跨「艺人晚一拍/窗口源兜底」的
+  身份抖动不重取）；播放分支的同名降级身份记别名、不得重建曲目/清配额；不落盘音频、
+  不记录 URL/代理/密钥；歌词气泡同一行只冒一次且间隔 ≥2s；无播放器时命令必须给明确原因。
 - **暂停语义**：播放器明确 `paused` → **下一拍就 `release_loop()`**（`_silence_limit` 对 paused
   返回 0）；`music_sing_grace_seconds` 只给 `absent`（切歌抖动/播放器关掉，且至少
   `ABSENT_CONFIRM_TICKS` 拍）。暂停期间**不取词、不重置歌词与行号、不冒「歌词获取失败」**，
   也不消耗「每曲 ≤3 次」的配额；暂停时识别结果换了身份（SMTC 掉线 → 窗口标题兜底）按同一首处理
   （记别名），不许当换歌重建曲目。
+  **同一台播放器的残留 Active 会话不许把暂停翻成在播**：SMTC 说暂停时仍要问窗口源，但只认
+  「另一台」播放器（`normalized_exe(window.exe) != normalized_exe(smtc.app_id)`）；同一台播放器
+  暂停后 WASAPI 会话常仍挂 `active`，接受它会让本地时钟继续走、歌词每两秒换一句。
+  暂停的**边沿**（上一拍在播 → 这一拍 paused）必须 `presentation.hide(SCENE_OWNER)` 收掉最后
+  一句，别让它再挂 2–6 秒。
+- **收起气泡只收自己的**：`PresentationPort.hide(owner)` 在 `owner` 非空时只在闸门仍归它时生效；
+  歌词持有者可以收自己的气泡，绝不顺手动别人的（点击台词/提醒）。
 - **朝向口径**：角色素材原生朝左，`facing == "right"` 才水平镜像（同主分支）。
   `PetState.facing` 默认 `left`；反了就是「位移方向和面朝向相反」。
 - **碰边反馈**：抛掷/弹射按「离地→接触」的接触沿触发 `_on_motion_bounce()`，每次
@@ -203,6 +229,12 @@
 - **碰撞几何**：`engine/collision.py` 只用内切三圆链 + 主分支分离规则
   （slop 0.5 / 60% / 1..12px / 连续 3 tick 强制分离）。不许退回整框椭圆——
   椭圆四角不判撞，看起来就是穿模。
+- **多宠上限与粗筛**：身份上限是 `MAX_PETS = 99`（`config.py`，含主宠；`_pets()` 归一化、
+  旧 `config-pet-N.json` 迁移与 `PetManager` 共用这一个常量，不许再出现第二个 16）。
+  上限不是免费的：`collide()` 先过 `rects_may_touch()`（内切圆链必在矩形内 ⇒ 矩形分离
+  必不接触），`PetManager._tick_collision` 用按拍缓存的身体框（`_rect_cache`，`_apply_body`
+  移动即时失效）把 99 只的 n² 粗筛压到 1.2ms/拍；只有可能接触的配对才构造 `CollisionBody`
+  跑圆链数学。粗筛是**必要**条件，判定结果一个都不许变。
 - **岛 × 桌宠碰撞 = 同步硬墙 + 事件驱动拍飞**：几何在 `engine/island_field.py`
   （零 Qt：胶囊体育场 `min(高, 44)` + 矩形径向半径 + 中心在轴上强制向上 + 冲量公式），
   接线在 `ui/island_collision.py`（`host.island_field`），**不建定时器**。墙挂在
@@ -353,6 +385,12 @@
   非 Windows 报「不支持」而不是假装命中）与 `ui/fullscreen_hide.py`（进程内唯一 1Hz
   `QTimer`）负责。命中只隐藏**当时可见**的宠并记账，离开只恢复它们；全屏期间用户手动
   显示/隐藏的宠以用户为准（记 override，不再抢回）；开关关闭或平台不支持时**不建定时器**。
+  **翻转要连续 `confirm_polls`（默认 2）拍一致**（1 Hz 下约 2 s）：Task Manager/UWP/焦点
+  闪动不许单拍命中就 hide/show 全部宠；`taskmgr.exe` 视为非全屏应用。
+- **锁屏/睡眠停播**：`SessionWatcher` 的 `WM_WTSSESSION_CHANGE`（WTS lock/unlock）与
+  `WM_POWERBROADCAST`（suspend/resume）必须回调
+  `CoreHost.pause_for_session()`/`resume_after_session()`；锁屏时停播放节拍、碰撞表与
+  输入轮询，解锁续播当前帧（不回第 0 帧）。没有锁屏/睡眠事件时行为逐位不变。
 - **角色别名**：`character_aliases`（全局键，`{角色id: 名字}`，≤24 字符，空名=默认）是
   显示名的唯一来源；`CoreHost.characters()/character_for()/available_characters()` 一律经
   `_display_spec()` 出「别名 or 目录名」，**不要把别名写回目录层 `_characters`**。两个入口
@@ -371,9 +409,15 @@
 
 - **配图设置归位**：彩蛋与自言自语配图统一在「互动与物理 → 彩蛋与配图」；
   自言自语页不再重复放图片目录/大小/概率，避免两个入口互相覆盖。
-- **鼠标穿透只在托盘**：右键菜单模板不含 `click_through`，旧布局由
+- **鼠标穿透（仅左键）的开关只在托盘**：右键菜单模板不含 `click_through`，旧布局由
   `migrate_p9_menu()` 幂等摘除；托盘「鼠标穿透」一次作用所有桌宠并气泡说明恢复位置。
-  穿透开启后右键菜单自己点不到，托盘是唯一稳定恢复入口（同主分支）。
+  穿透开启后：左键单击在松手时转发给下层窗口（`SendInput` 一次 down+up，转发期间临时
+  挂 `WS_EX_TRANSPARENT`，`_through_hold_until` 由窗口独占、逐像素轮询不得抢写），
+  左键长按（`POINTER_DRAG_HOLD_MS`=250ms）才拖动；右键单击=旧左键点击、右键长按
+  （`POINTER_MENU_HOLD_MS`=350ms）=菜单；拖拽中右键仍进弹弓。Windows 上**不许**整窗挂
+  `WS_EX_TRANSPARENT`（右键会一起被放走）；非 Windows 仍走旧整窗穿透，如实登记右键不可用。
+- **碰撞表按需启停**：`PetManager` 只在 ≥2 只宠时启动 16ms 碰撞表（Coarse），单宠不空转；
+  `collision_enabled` 由 `_tick_collision` 每拍早退——按配置停表会让实时开关再也起不来。
 - **对话通道唯一**：mod 只能经 `HostPorts.chat`（`ChatPort`）驱动聊天窗口；窗口、
   Markdown、会话、取消都在 core。`token/done/error` 可能来自后台线程，controller
   必须用信号排队，不许在 worker 线程碰控件；`petcore/chat/` 保持 Qt-free。
@@ -402,6 +446,16 @@
   `fetch_url` 都在 `petcore/api/chat.py`；搜索引擎实现只在 `petcore/net/websearch.py`。
   mod 只能传 `WebSearchOptions` 与回调；搜索 Key 只进钥匙串
   （owner `core.websearch`），`config.json`/`api.json` 不许出现。
+- **联网检索是增强项，失败必须退回纯 API 回答**：`stream_chat()` 对 `research()` 与
+  `inject_search_context()` 各包一层降级（状态行 + 原始会话），`research()` 内部对
+  planner/工具的失败只发状态、不抛；异常**只记类型**（文本可能带 URL/查询串）。
+  主分支口径见 `pet/chat/providers.py` 的 `_research()`／`stream()`：
+  「联网检索不可用（…），将直接回答」，然后照常发正式请求。
+  `research()` 返回 `ResearchOutcome(notes, searched, failed)`（planner 失败 / 任何工具
+  失败 / 预算超时都算 `failed`）；**一条资料都没拿到**时正式请求前要给会话补一条 system
+  指令，要求回答开头说明「联网检索暂时不可用，以下内容未联网核实」，并冒状态行
+  「联网检索暂时不可用，已改用纯 API 回答」——只靠一闪而过的状态行，用户会把模型记忆
+  当成刚查到的实时信息。
 - **截图冻结帧必须是 QImage**：`grab_screen_image()` 接收 Qt6 的 `QPixmap` 时要
   `toImage()` 并 `setDevicePixelRatio(1.0)`；覆盖层构造函数再做一次兜底。
   `QPainter.drawImage(QRect, QPixmap)` 会抛 TypeError，整层画不出来 = 全屏灰。
@@ -556,9 +610,12 @@
   DXGI 名字）与 FPS（`platform/fps.py` + `fps_permission.py`，随包 PresentMon 子进程）
   都零 Qt、零网络库、不 import `pet.*`。岛**不许**直接调平台：它在 `_sync_sampling()`
   里算「还需要哪些段」（可见 + 段启用 + 未被折进 `+N`），交给
-  `ui/probes.py:IslandProbeHub` 启停采样器并逐秒推快照；空集要停采并清段快照。
+  `ui/probes.py:IslandProbeHub` 启停采样器并逐秒推快照；空集要停采并把段推回**定宽占位**
+  （盒样本/单位与真实读数同一套，停采不缩行——否则「推快照 → 变宽 → 折进 +N → 停采 →
+  变窄 → 复原」就是 1Hz 的折叠振荡）。`clear_probe_snapshot()` 只留给关停/停用。
 - **探针不伪造读数**：GPU/FPS 只有 `ok` 带读数，其余一律 `None` + 具体原因；`unsupported`
-  与「未接入探针」**不占位**，原因只写卡片一行。首次读数前是 `sampling`（PDH 基线），
+  与「宿主没接探针」**不占位**，原因只写卡片一行；探针已接上但还没有第一份读数时占一行
+  同宽占位（`--`，`sampling`）。首次读数前是 `sampling`（PDH 基线），
   不是 0。
 - **GPU query 属于创建线程**：跨线程 `read`/`close` 必须拒绝（owner 线程已退出时由新线程
   接管并重建基线，否则「停采→恢复」永久失效）。`poll()` 由调用线程付冷启成本（约 0.3 s），
@@ -566,6 +623,11 @@
 - **FPS 权限不许自动提权**：`fps_permission.request_access()` 只在用户点设置页按钮时弹
   一次 UAC；点「否」是 `cancelled` 不是错误。没有 Performance Log Users 时如实报
   `access denied`，不许写成「0 帧」或静默。
+- **FPS 目标生命周期**：目标正常退出（PresentMon 退出码 0）记 `target_gone`，**同一个
+  死 pid 不许再开会话**，只有 `set_target(新 pid)` 才解除；`set_target` 同 pid 幂等
+  （不重置重试代次/去抖）；换目标要过 `MIN_SESSION_SECONDS=3` + `TARGET_CHANGE_DEBOUNCE=2`；
+  进程级一次残留 `dsh-pet-fps-*` ETW 会话清扫（`logman query -ets`，只停属主已死的会话，
+  查询失败不关闸），`hub.shutdown(wait_seconds=1.0)` 有界等待 worker 收口。
 - **迁移幂等只认标记**：`<root>/migration.json` 的 `completed` 是唯一判据，**不许**用
   「目标文件不存在」代替（第一次启动后永久失效）。七个域各一个 `migrate(ctx)`，只返回
   条目；备份/写失败由 `MigrationContext` 记账。配置域**只补缺不覆盖**，且直接写合并后的
@@ -601,6 +663,17 @@
   「服务没选/Key 没配/JSON 坏了」显示成「网络不可达」，用户去找路由器。`ai.chat` 的四条失败路径
   （主聊天/快速气泡/看看屏幕/截图问答）统一走 `_failure_reason()` 并记一条
   `ai call failed: type=… reason=… service=… cause=…`（只打类型名，不打 Key/URL/响应体）。
+  **传输抖动换路由重试**：`api/chat.py` 只在「正文与思维链都还没吐出去」时重发，最多
+  3 次，路由计划依次是「默认（代理优先）→ 只直连 → 只代理」（`STREAM_ROUTE_PLANS`、
+  `RETRY_DELAY_S`）；可重试分类是 `network`/`tls`/`protocol`/`timeout`（含
+  IncompleteRead/BadStatusLine 这类半截响应），`HttpStatusError`（服务器明确答复）与
+  取消从不重试；已经显示给用户的半条回答绝不重发（会重复正文）。
+- **「固定直连」有期限且可撤销**：`net/http.py` 的进程级结论只在
+  `DEFAULT_DIRECT_PIN_SECONDS`（45s）内生效，过期后重新试代理；钉着直连时直连再失败
+  会把代理还回去试一次，代理成功即解除钉子，两条路都不通则清掉结论——一次加速器/VPN
+  抖动不许把进程永久钉在直连上。
+- **对话超时取配置**：`CoreApiPort.stream_chat(timeout=None)` 用该服务在 `api.json` 里的
+  `timeout`（钳到 5–300s），不许再写死 60s——设置页那一行必须真的生效。
 - **只有 API 主机可以改写进程级路由**：`urlopen(..., pollute=False)` 之外的调用点只允许
   `api/chat.py`、`api/probe.py`、`account/service.py`（同一台 API 主机的成败才算「这台 API 能不能
   走代理」）。搜索/读页/市场索引与下载/更新检查/歌词/天气一律 `pollute=False` 或走 `fetch_url`；
@@ -608,6 +681,11 @@
 - **换路由要重建请求**：`ProxyHandler`/重定向会**就地**改写 `Request`；`urlopen` 每次尝试
   必须 `clone_request()`。换路条件除传输失败与 `retry_statuses` 外，还要求响应**不带**
   `Retry-After`。
+- **5xx 是网关的错，不是链路的错**：`urlopen` 收到 500/502/503/504（且无 `Retry-After`）
+  时，只要代理与直连确实是两条不同的路（`_has_other_route`：没有系统代理或 `no_proxy`
+  命中就不重复问），就换一条路再问一次；两条路都 5xx 抛最后一条的答复。401/403/429 与带
+  `Retry-After` 的答复不换路。`routes=` 是**单次调用**的路由计划（`(False,)` = 只直连），
+  它**不改写**进程级「固定直连」结论。
 - **设置页差异写入**：页面的 `_on_changed` 只写「与上次写出的值不同」的键；整组回写会把
   右键菜单里刚改的勾选项按旧控件值翻回去。菜单编排只写内存，落盘统一由
   `SettingsDialog._commit()` 在所有页通过后做。

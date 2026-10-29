@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import __version__
+from ... import settings_reset
 from ...config import ScopedConfig
 from ..icons import MENU_ICON_SIZE, SIDEBAR_ICON_SIZE, icon as menu_icon
 from ..placement import place_beside_pet
@@ -220,6 +221,30 @@ class SettingsDialog(QDialog):
         self.search_status.setObjectName("searchStatus")
         self.search_status.setWordWrap(True)
         sidebar_layout.addWidget(self.search_status)
+
+        # 重置是**命令**不是偏好（`docs/SETTINGS-CHANGE-GATES.md`）：不进页面列表，
+        # 落在侧栏底部；主宠页两个按钮各自只动自己那一半键（见 settings_reset）。
+        self.reset_pet_button = make_button("重置本宠设置…", sidebar)
+        self.reset_pet_button.setObjectName("resetPetButton")
+        self.reset_pet_button.setAccessibleName("重置本宠设置")
+        self.reset_pet_button.setToolTip(
+            "把这只桌宠的偏好恢复为出厂默认（保留身份与位置，不影响全局设置与 API 配置）"
+        )
+        self.reset_pet_button.clicked.connect(
+            lambda: self._reset_scope(settings_reset.SCOPE_PET)
+        )
+        sidebar_layout.addWidget(self.reset_pet_button)
+
+        self.reset_global_button = make_button("重置全局设置…", sidebar)
+        self.reset_global_button.setObjectName("resetGlobalButton")
+        self.reset_global_button.setAccessibleName("重置全局设置")
+        self.reset_global_button.setToolTip(
+            "把所有全局设置恢复为出厂默认（保留宠物位置与活跃成员，不影响本宠偏好）"
+        )
+        self.reset_global_button.clicked.connect(
+            lambda: self._reset_scope(settings_reset.SCOPE_GLOBAL)
+        )
+        sidebar_layout.addWidget(self.reset_global_button)
 
         body.addWidget(sidebar)
 
@@ -485,6 +510,81 @@ class SettingsDialog(QDialog):
         if not self._commit():
             return
         super().accept()
+
+    # ------------------------------------------------------------ 重置（命令）
+
+    def _confirm_reset(self, scope: str) -> bool:
+        """破坏性动作的确认框：默认键与 Esc 都落「取消」（同主分支口径）。"""
+        if scope == settings_reset.SCOPE_PET:
+            title = "重置本宠设置"
+            body = (
+                "把这只桌宠的偏好恢复为出厂默认。\n\n"
+                "会重置：气泡与字号缩放、动画权重、互动与物理、语音、点击台词、"
+                "自言自语等按宠设置。\n"
+                "会保留：宠物身份与位置、全局设置、API 密钥与 api.json。\n\n"
+                "此操作不可撤销。"
+            )
+        else:
+            title = "重置全局设置"
+            body = (
+                "把所有全局设置恢复为出厂默认。\n\n"
+                "会重置：界面字号、多宠与菜单布局、灵动岛、AI 与联网、外观全局项等。\n"
+                "会保留：每只宠的身份与位置、活跃成员表、各自的按宠偏好、"
+                "API 密钥与 api.json。\n\n"
+                "此操作不可撤销。"
+            )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(title)
+        box.setText(body)
+        confirm = box.addButton("重置", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.setEscapeButton(cancel)
+        box.exec()
+        return box.clickedButton() is confirm
+
+    def _reset_scope(self, scope: str) -> None:
+        try:
+            scope = settings_reset.normalize_scope(scope)
+        except ValueError:
+            return
+        if not self._confirm_reset(scope):
+            return
+        try:
+            changed = settings_reset.apply_reset(self.config, scope)
+        except settings_reset.ResetError as exc:
+            QMessageBox.warning(self, "重置设置", f"无法写入配置：{exc}")
+            return
+        logger.info("settings reset applied: scope=%s keys=%d", scope, len(changed))
+        root = self.root_host
+        if scope == settings_reset.SCOPE_GLOBAL:
+            pets = getattr(root, "pets", None)
+            sync = getattr(pets, "sync_shared_settings", None)
+            if callable(sync):
+                try:
+                    sync()
+                except Exception:  # noqa: BLE001 - 子宠同步失败不该掩盖重置结果
+                    logger.warning("sync shared settings after reset failed", exc_info=True)
+        apply_live = getattr(root, "apply_live_settings", None)
+        if callable(apply_live):
+            try:
+                apply_live()
+            except Exception:  # noqa: BLE001 - 实时应用失败仍要关闭窗口
+                logger.warning("apply live settings after reset failed", exc_info=True)
+        if scope == settings_reset.SCOPE_GLOBAL:
+            reload_menu = getattr(root, "reload_menu", None)
+            if callable(reload_menu):
+                try:
+                    reload_menu()
+                except Exception:  # noqa: BLE001
+                    logger.warning("reload menu after reset failed", exc_info=True)
+        self._close_after_reset()
+
+    def _close_after_reset(self) -> None:
+        """重置已经落盘：关闭**不能**再走 ``_commit``（旧控件值会把默认值写回去）。"""
+        self._live_timer.stop()
+        self.done(QDialog.DialogCode.Accepted)
 
     def reject(self) -> None:
         self._live_timer.stop()

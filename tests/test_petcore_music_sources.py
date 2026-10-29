@@ -10,6 +10,7 @@ import importlib
 import importlib.util
 import os
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,6 +40,9 @@ _host_package()
 recognizer = importlib.import_module(f"{HOST_PKG}.recognizer")
 now_playing = importlib.import_module(f"{HOST_PKG}.now_playing")
 players_mod = importlib.import_module(f"{HOST_PKG}.players")
+sampling = importlib.import_module(f"{HOST_PKG}.sampling")
+audio_sessions = importlib.import_module(f"{HOST_PKG}.audio_sessions")
+window_source = importlib.import_module(f"{HOST_PKG}.window_source")
 
 
 # ---------------------------------------------------------------- 替身
@@ -145,6 +149,35 @@ def test_smtc_paused_stays_paused_even_if_audio_is_active() -> None:
         sample(playback=playback(playing=False), audio_rows=[audio("cloudmusic.exe")])
     )
     assert decision.status == recognizer.STATUS_PAUSED
+
+
+def test_smtc_paused_ignores_the_same_players_leftover_window_session() -> None:
+    """同一台播放器暂停后 WASAPI 会话常仍挂 active：不能拿它把暂停翻成在播。"""
+    decision = recognizer.decide(
+        sample(
+            playback=playback(playing=False),
+            audio_rows=[audio("cloudmusic.exe")],
+            windows=[window("cloudmusic.exe", "晴天 - 周杰伦")],
+        ),
+        parse_window=parse_ok,
+    )
+    assert decision.status == recognizer.STATUS_PAUSED
+    assert any("同一台播放器" in reason for reason in decision.reasons)
+
+
+def test_smtc_paused_yields_to_another_player_that_is_audible() -> None:
+    """挂着的客户端 + 另一台不注册 SMTC 的播放器在放：仍以窗口源为准。"""
+    decision = recognizer.decide(
+        sample(
+            playback=playback(playing=False),
+            audio_rows=[audio("cloudmusic.exe"), audio("foobar2000.exe")],
+            windows=[window("foobar2000.exe", "晴天 - 周杰伦")],
+        ),
+        parse_window=parse_ok,
+    )
+    assert decision.status == recognizer.STATUS_PLAYING
+    assert decision.source == recognizer.SOURCE_WINDOW
+    assert any("以窗口标题源为准" in reason for reason in decision.reasons)
 
 
 def test_uwp_app_id_without_exe_name_falls_back_to_smtc() -> None:
@@ -372,3 +405,269 @@ def test_window_allowlist_reasons_are_deduplicated() -> None:
     assert decision.status == recognizer.STATUS_ABSENT
     hits = [reason for reason in decision.reasons if "不在识别范围" in reason]
     assert len(hits) == 1
+
+
+# ---------------------------------------------------------------- 采样开销
+#
+# 每秒一拍的系统调用是这条链路唯一的稳态成本，两条实测口径必须钉住：
+#
+# 1. **暂停时整桌窗口枚举降到 2 秒一次**（SMTC / WASAPI 仍是 1 秒）：暂停期间没有
+#    "在播会话"要发现，而 ``EnumWindows`` + 逐 pid 查进程名是这里最贵的一次调用。
+#    ``absent``（什么都看不到）不节流——那时窗口源是唯一能发现新播放器的来源。
+# 2. **SMTC 管理器与会话表按线程缓存**：``request_async()`` 每次都走一次 WinRT 激活；
+#    会话集合变化远慢于 1Hz。但被选中会话的标题/进度**每拍现读**（暂停边沿一秒都不能漏）。
+
+
+def _window_info(exe: str = "foobar2000.exe", title: str = "晴天 - 周杰伦"):
+    return SimpleNamespace(pid=1, exe=exe, title=title)
+
+
+def _smtc_paused(*, title: str = "晴天", artist: str = "周杰伦"):
+    return now_playing.SmtcSample(
+        playback=now_playing.Playback(
+            title=title, artist=artist, app_id="cloudmusic.exe", playing=False
+        )
+    )
+
+
+def _smtc_absent():
+    return now_playing.SmtcSample(reason="系统里没有正在播放的媒体会话。")
+
+
+def _collect_ticks(counter: dict, *, smtc_factory, ticks: int = 5, monkeypatch=None):
+    """连采 ``ticks`` 拍（每拍推进 1 秒假时钟），返回 WindowCache 与三源调用计数。"""
+    if monkeypatch is not None:
+        monkeypatch.setattr(window_source, "available", lambda: True)
+        monkeypatch.setattr(audio_sessions, "available", lambda: True)
+    now = [100.0]
+    windows = counter.setdefault("windows", [])
+    audio = counter.setdefault("audio", [])
+    smtc = counter.setdefault("smtc", [])
+    cache = sampling.WindowCache()
+    samples = []
+    for _ in range(ticks):
+        samples.append(
+            sampling.collect(
+                tracked_app_id="cloudmusic.exe",
+                targets=frozenset({"foobar2000.exe"}),
+                smtc=lambda **_kwargs: (smtc.append(1), smtc_factory())[1],
+                audio=lambda: (audio.append(1), ())[1],
+                windows=lambda _targets: (
+                    windows.append(1),
+                    (_window_info(),),
+                )[1],
+                window_cache=cache,
+                clock=lambda: now[0],
+            )
+        )
+        now[0] += 1.0
+    return cache, samples
+
+
+def test_paused_window_enumeration_is_throttled_while_smtc_and_audio_keep_ticking(monkeypatch):
+    seen: dict = {}
+    _cache, samples = _collect_ticks(seen, smtc_factory=_smtc_paused, monkeypatch=monkeypatch)
+
+    assert all(sample.playback is not None for sample in samples)
+    # SMTC / WASAPI 仍然每秒一次（暂停/恢复的边沿一秒都不能漏）……
+    assert len(seen["smtc"]) == 5
+    assert len(seen["audio"]) == 5
+    # ……整桌窗口枚举降到 2 秒一次：100、102、104 三趟。
+    assert len(seen["windows"]) == 3
+
+
+def test_paused_window_enumeration_refreshes_on_the_two_second_boundary(monkeypatch):
+    seen: dict = {}
+    _cache, _samples = _collect_ticks(
+        seen, smtc_factory=_smtc_paused, ticks=3, monkeypatch=monkeypatch
+    )
+    # 秒数走到 100/101/102：第三拍刚好跨过 2 秒窗口。
+    assert len(seen["windows"]) == 2
+
+
+def test_absent_still_enumerates_windows_every_tick(monkeypatch):
+    """什么都看不到时窗口源是唯一能发现"新开了播放器"的来源，不许节流。"""
+    seen: dict = {}
+    _collect_ticks(seen, smtc_factory=_smtc_absent, monkeypatch=monkeypatch)
+    assert len(seen["windows"]) == 5
+
+
+def test_playing_smtc_never_enumerates_windows(monkeypatch):
+    """SMTC 明确在播时窗口源一条都不问（既有口径，节流不许把它变成"偶尔问"）。"""
+    seen: dict = {}
+
+    def playing():
+        return now_playing.SmtcSample(
+            playback=now_playing.Playback(
+                title="晴天", artist="周杰伦", app_id="cloudmusic.exe", playing=True
+            )
+        )
+
+    _collect_ticks(seen, smtc_factory=playing, monkeypatch=monkeypatch)
+    assert seen["windows"] == []
+
+
+def test_window_cache_is_invalidated_when_the_target_set_changes(monkeypatch):
+    monkeypatch.setattr(window_source, "available", lambda: True)
+    monkeypatch.setattr(audio_sessions, "available", lambda: True)
+    cache = sampling.WindowCache()
+    now = [100.0]
+    calls: list[frozenset] = []
+
+    def read_windows(targets):
+        calls.append(targets)
+        return (_window_info(),)
+
+    def tick(targets):
+        return sampling.collect(
+            targets=targets,
+            smtc=lambda **_kwargs: _smtc_paused(),
+            audio=lambda: (),
+            windows=read_windows,
+            window_cache=cache,
+            clock=lambda: now[0],
+        )
+
+    tick(frozenset({"foobar2000.exe"}))
+    now[0] += 0.5
+    tick(frozenset({"foobar2000.exe"}))  # 缓存有效：不重扫
+    assert len(calls) == 1
+
+    tick(frozenset({"foobar2000.exe", "aimp.exe"}))  # 换了识别目标：立刻重扫
+    assert len(calls) == 2
+    assert calls[-1] == frozenset({"foobar2000.exe", "aimp.exe"})
+
+
+# ---------------------------------------------------------------- SMTC 缓存（按线程）
+
+_MEDIA_MUSIC = now_playing.MEDIA_TYPE_MUSIC
+_STATUS_PLAYING = now_playing.PLAYBACK_STATUS_PLAYING
+_STATUS_PAUSED = 5
+
+
+class _Seconds:
+    """timeline 时间字段（真实实现是 ``datetime.timedelta``）。"""
+
+    def __init__(self, value: float):
+        self._value = value
+
+    def total_seconds(self) -> float:
+        return self._value
+
+
+class _FakeSmtc:
+    """假的 WinRT 侧：统计"建管理器 / 列会话 / 读属性"各被调用了多少次。"""
+
+    def __init__(self) -> None:
+        self.sessions: list = []
+        self.manager_requests = 0
+        self.list_calls = 0
+        self.props_calls = 0
+        self.info_calls = 0
+
+    def manager_class(self):
+        outer = self
+
+        class _ManagerClass:
+            @staticmethod
+            async def request_async():
+                outer.manager_requests += 1
+                return _FakeManager(outer)
+
+        return _ManagerClass
+
+
+class _FakeManager:
+    def __init__(self, parent: _FakeSmtc) -> None:
+        self.parent = parent
+
+    def get_sessions(self):
+        self.parent.list_calls += 1
+        return list(self.parent.sessions)
+
+
+class _FakeSession:
+    def __init__(self, parent: _FakeSmtc, *, title: str = "晴天", playing: bool = True) -> None:
+        self.parent = parent
+        self.source_app_user_model_id = "cloudmusic.exe"
+        self.title = title
+        self.playing = playing
+
+    def get_playback_info(self):
+        self.parent.info_calls += 1
+        status = _STATUS_PLAYING if self.playing else _STATUS_PAUSED
+        return SimpleNamespace(playback_type=_MEDIA_MUSIC, playback_status=status)
+
+    def get_timeline_properties(self):
+        return SimpleNamespace(
+            position=_Seconds(30.0),
+            end_time=_Seconds(180.0),
+            last_updated_time=SimpleNamespace(year=1601),
+        )
+
+    async def try_get_media_properties_async(self):
+        self.parent.props_calls += 1
+        return SimpleNamespace(title=self.title, artist="周杰伦")
+
+
+def _install_fake_smtc(monkeypatch):
+    fake = _FakeSmtc()
+    fake.sessions = [_FakeSession(fake)]
+    monkeypatch.setattr(now_playing, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(now_playing, "_manager_class", fake.manager_class)
+    return fake
+
+
+def test_smtc_manager_and_session_list_are_cached_per_thread(monkeypatch):
+    fake = _install_fake_smtc(monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(now_playing, "_now", lambda: clock[0])
+    try:
+        first = now_playing.read_sample()
+        assert first.playback is not None and first.playback.title == "晴天"
+        assert (fake.manager_requests, fake.list_calls) == (1, 1)
+        assert (fake.props_calls, fake.info_calls) == (1, 1)
+
+        # 1 秒后：管理器与会话表都不重建；标题/进度仍然现读（每拍一次）。
+        clock[0] += 1.0
+        second = now_playing.read_sample()
+        assert second.playback is not None and second.playback.title == "晴天"
+        assert (fake.manager_requests, fake.list_calls) == (1, 1)
+        assert (fake.props_calls, fake.info_calls) == (2, 2)
+
+        # 跨过一个刷新窗口：会话表重列一次，管理器继续复用。
+        clock[0] += now_playing.SESSION_REFRESH_SECONDS
+        now_playing.read_sample()
+        assert fake.manager_requests == 1
+        assert fake.list_calls == 2
+        assert fake.props_calls == 3
+    finally:
+        now_playing.close_thread_loop()
+
+
+
+def test_smtc_cache_is_per_thread(monkeypatch):
+    """WinRT 对象不能跨线程用：另一条采样线程必须有自己的管理器。"""
+    fake = _install_fake_smtc(monkeypatch)
+    monkeypatch.setattr(now_playing, "_now", lambda: 500.0)
+    box: dict = {}
+
+    def worker() -> None:
+        try:
+            box["sample"] = now_playing.read_sample()
+        finally:
+            now_playing.close_thread_loop()
+
+    try:
+        thread = threading.Thread(target=worker, name="smtc-cache-probe")
+        thread.start()
+        thread.join(10.0)
+        assert thread.is_alive() is False
+        assert box["sample"].playback is not None
+        assert fake.manager_requests == 1
+
+        # 主线程自己的缓存没被那条线程建立的管理器顶掉。
+        assert now_playing.read_sample().playback is not None
+        assert fake.manager_requests == 2
+    finally:
+        now_playing.close_thread_loop()

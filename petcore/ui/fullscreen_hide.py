@@ -6,6 +6,10 @@ W32 轮询等于把 CPU/句柄成本乘以宠数。
 
 状态机（进入/离开只在**翻转**时动作，重复命中天然幂等）：
 
+- 翻转要**连拍确认**：探测结果与已生效状态不同时，必须连续 ``confirm_polls`` 拍
+  （默认 2，1 Hz 下约 2 秒）都是同一结果才真正切换；中途抖一下就作废重来。任务
+  管理器、UWP 覆盖层、焦点闪现这类单拍抖动因此不会把桌宠一秒藏、一秒放。代价是
+  真进入/离开全屏会晚一拍生效（启动时已在全屏的话，桌宠最多多露 1 秒）。
 - 进入全屏：把所有**当前可见**的桌宠 ``set_visible(False)``（气泡随之收起），记进
   ``_auto_hidden``；进入前就隐藏的宠不记录。
 - 全屏期间每拍只做一次对账：
@@ -33,6 +37,10 @@ logger = logging.getLogger("petcore.ui.fullscreen_hide")
 
 FULLSCREEN_POLL_MS = 1000
 
+#: 默认连拍确认数：1 Hz 下要连续两拍同一结果才翻转隐藏态，单拍抖动（任务管理器
+#: 置顶最大化、UWP 覆盖层、焦点闪现）不会再让桌宠每秒藏一次又放一次。
+DEFAULT_CONFIRM_POLLS = 2
+
 
 def _unpack(result) -> tuple[bool, str]:
     """探测结果归一：``(hit, detail)`` 或裸布尔都接受。"""
@@ -54,6 +62,7 @@ class FullscreenHideController(QObject):
         supported: bool | None = None,
         parent: QObject | None = None,
         interval_ms: int = FULLSCREEN_POLL_MS,
+        confirm_polls: int = DEFAULT_CONFIRM_POLLS,
     ) -> None:
         super().__init__(parent)
         self._pets = pets
@@ -62,7 +71,12 @@ class FullscreenHideController(QObject):
             bool(fullscreen.supported()) if supported is None else bool(supported)
         )
         self._enabled = False
+        # 连拍确认数；1 = 单拍即翻（旧语义，测试与诊断用），0/负数按 1 处理。
+        self._confirm_polls = max(1, int(confirm_polls))
+        # 已生效（应用）的探测结果；候选结果要先攒够 ``_confirm_polls`` 拍才覆盖它。
         self._hit = False
+        self._pending_hit: bool | None = None
+        self._pending_polls = 0
         # key -> window：我们隐藏的（离开全屏要恢复的）
         self._auto_hidden: dict[object, object] = {}
         # 全屏期间用户手动显示过的宠：不再隐藏，也不在离开时动它
@@ -77,6 +91,11 @@ class FullscreenHideController(QObject):
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    @property
+    def confirm_polls(self) -> int:
+        """翻转隐藏态需要的连续探测拍数（已归一为 ≥1）。"""
+        return self._confirm_polls
 
     def supported(self) -> bool:
         return self._supported
@@ -100,10 +119,13 @@ class FullscreenHideController(QObject):
                 # 非 Windows：如实不支持，绝不起常驻定时器去空转。
                 logger.debug("fullscreen hide unsupported on this platform")
                 return
-            self.poll()  # 启动时已经在全屏：桌宠不该先露一下再藏
+            # 起表前先探一拍：确认从第一拍开始攒，真全屏里最多多露一拍（1 秒）。
+            self.poll()
             self._timer.start()
             return
         self._timer.stop()
+        # 关开关是显式用户动作：未确认的候选一并作废，隐藏态立即恢复。
+        self._reset_pending()
         if self._hit:
             self._hit = False
             self._leave_fullscreen()
@@ -112,6 +134,7 @@ class FullscreenHideController(QObject):
         """退出路径：只停表，不动窗口（进程马上就要结束了）。"""
         self._timer.stop()
         self._enabled = False
+        self._reset_pending()
 
     # ---------------------------------------------------------------- 轮询
     def poll(self) -> None:
@@ -120,20 +143,45 @@ class FullscreenHideController(QObject):
             return
         try:
             result = self._probe()
-        except Exception:  # noqa: BLE001 - 探测失败不翻转状态（同主分支）
+        except Exception:  # noqa: BLE001 - 探测失败不翻转状态，也不计入连拍（同主分支）
             logger.debug("fullscreen probe raised", exc_info=True)
             return
         hit, detail = _unpack(result)
-        if hit != self._hit:
-            self._hit = hit
-            logger.info("fullscreen hide hit=%s (%s)", hit, detail)
+        if hit == self._hit:
+            # 与已生效状态一致：任何待定候选作废，重复命中照常对账。
+            self._reset_pending()
             if hit:
-                self._enter_fullscreen()
-            else:
-                self._leave_fullscreen()
+                self._reconcile()
             return
+        self._note_candidate(hit, detail)
+
+    def _note_candidate(self, hit: bool, detail: str) -> None:
+        """候选翻转：连续 ``confirm_polls`` 拍同一结果才真正切换隐藏态。"""
+        if hit == self._pending_hit:
+            self._pending_polls += 1
+        else:
+            self._pending_hit = hit
+            self._pending_polls = 1
+        if self._pending_polls < self._confirm_polls:
+            logger.debug(
+                "fullscreen hide candidate hit=%s (%s/%s) %s",
+                hit,
+                self._pending_polls,
+                self._confirm_polls,
+                detail,
+            )
+            return
+        self._reset_pending()
+        self._hit = hit
+        logger.info("fullscreen hide hit=%s (%s)", hit, detail)
         if hit:
-            self._reconcile()
+            self._enter_fullscreen()
+        else:
+            self._leave_fullscreen()
+
+    def _reset_pending(self) -> None:
+        self._pending_hit = None
+        self._pending_polls = 0
 
     # ---------------------------------------------------------------- 状态机
     def _enter_fullscreen(self) -> None:

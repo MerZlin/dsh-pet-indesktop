@@ -79,6 +79,12 @@ function Sign-Artifact([string]$Path) {
         $sig = Set-AuthenticodeSignature -FilePath $Path -Certificate $cert -HashAlgorithm SHA256
     }
     if ($sig.Status -ne "Valid") {
+        # 时间戳服务器超时不一定抛异常，而是返回 UnknownError（0x80072ee2）；
+        # 这种情况下再签一次不带时间戳的（签名本身有效，只是没有可信时间）。
+        Write-Host "timestamped signature returned $($sig.Status); retrying without timestamp"
+        $sig = Set-AuthenticodeSignature -FilePath $Path -Certificate $cert -HashAlgorithm SHA256
+    }
+    if ($sig.Status -ne "Valid") {
         throw "signature invalid for $Path : $($sig.Status) $($sig.StatusMessage)"
     }
     Write-Host "signed: $Path ($($cert.Subject))"

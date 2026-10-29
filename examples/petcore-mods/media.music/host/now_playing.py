@@ -14,6 +14,10 @@
   在 :data:`_VETO_APP_IDS` 里直接否决。
 - **winrt 只在这里惰性导入**：它在非 Windows 或未装可选依赖时不存在；导入发生在
   调用线程（运行时是后台轮询线程），模块导入本身不碰 COM。
+- **管理器与会话表按线程缓存**：``request_async()`` 每次都走一次 WinRT 激活，实测
+  是本链路最贵的一步；会话集合的变化远慢于 1Hz。所以管理器缓存在**调用线程**上，
+  会话列表最多每 :data:`SESSION_REFRESH_SECONDS` 秒重列一次；被选中那一个的
+  标题/进度仍然**每拍现读**（暂停边沿、切歌、进度跳变一秒都不能漏）。
 
 **未移植 foobar2000 窗口标题源**：它需要读进程列表 + 枚举顶层窗口标题，属于另一
 套 Win32 代码（主分支 ``pet/foobar_playing.py``）。本 mod 只做 SMTC；foobar 用户
@@ -27,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
+import time
 from dataclasses import dataclass
 
 # Windows.Media.MediaPlaybackType
@@ -314,6 +319,40 @@ _LOOP_LOCAL = threading.local()
 #: WinRT 请求会把采样线程永久钉住（主分支的现场教训）。
 CALL_TIMEOUT = 3.0
 
+#: 会话列表的重列间隔（秒）。管理器（``request_async``）本来就只建一次；
+#: 会话对象本身按引用缓存，每次采样现读它们的播放状态与元数据。
+SESSION_REFRESH_SECONDS = 2.0
+
+
+def _now() -> float:
+    """节流用的单调时钟（独立函数便于测试注入）。"""
+    return time.monotonic()
+
+
+@dataclass
+class _ThreadCache:
+    """一条采样线程上的 SMTC 缓存（``threading.local`` 持有，天然线程隔离）。"""
+
+    manager: object = None
+    sessions: tuple = ()
+    at: float | None = None
+
+
+_CACHE_LOCAL = threading.local()
+
+
+def _thread_cache() -> _ThreadCache:
+    cache = getattr(_CACHE_LOCAL, "state", None)
+    if cache is None:
+        cache = _ThreadCache()
+        _CACHE_LOCAL.state = cache
+    return cache
+
+
+def reset_thread_cache() -> None:
+    """丢掉**本线程**的管理器与会话缓存（线程退出或会话表明显失效时调用）。"""
+    _CACHE_LOCAL.state = _ThreadCache()
+
 
 def _run_sync(coro):
     """在调用线程的**常驻**事件循环里跑协程（每拍新建循环是主分支实测的开销大头）。
@@ -331,6 +370,7 @@ def close_thread_loop() -> None:
     """关闭**本线程**的常驻事件循环（采样线程退出时调用，避免未关闭循环告警）。"""
     loop = getattr(_LOOP_LOCAL, "loop", None)
     _LOOP_LOCAL.loop = None
+    reset_thread_cache()
     if loop is None:
         return
     try:
@@ -387,15 +427,37 @@ def _snapshot(session, index: int) -> Session:
 async def _sample_async(
     *, browser_media_enabled: bool, tracked_app_id: str, allowed_ids: frozenset[str] | None = None
 ) -> SmtcSample:
-    """采一次：全部会话的事实 + 被选中那一个的曲目。"""
+    """采一次：全部会话的事实 + 被选中那一个的曲目。
+
+    管理器与会话列表按**调用线程**缓存（:data:`SESSION_REFRESH_SECONDS`），被选中
+    会话的播放状态/元数据/时间轴仍然每拍现读——缓存的是"有哪些会话"，不是
+    "在放什么"。
+    """
     manager_class = _manager_class()
     if manager_class is None:
         return SmtcSample(reason=unavailable_reason())
-    try:
-        manager = await manager_class.request_async()
-        raw_sessions = list(manager.get_sessions() or ())
-    except Exception:
-        return SmtcSample(reason="读取系统媒体信息失败。", failed=True)
+    cache = _thread_cache()
+    manager = cache.manager
+    if manager is None:
+        try:
+            manager = await manager_class.request_async()
+        except Exception:
+            return SmtcSample(reason="读取系统媒体信息失败。", failed=True)
+        cache.manager = manager
+        cache.sessions = ()
+        cache.at = None
+    now = _now()
+    if cache.at is None or (now - cache.at) >= SESSION_REFRESH_SECONDS:
+        try:
+            cache.sessions = tuple(manager.get_sessions() or ())
+        except Exception:
+            # 管理器自己失效（播放器崩溃/系统重置）：丢掉缓存，下一次重建。
+            cache.manager = None
+            cache.sessions = ()
+            cache.at = None
+            return SmtcSample(reason="读取系统媒体信息失败。", failed=True)
+        cache.at = now
+    raw_sessions = list(cache.sessions)
     if not raw_sessions:
         return SmtcSample(reason="系统里没有正在播放的媒体会话。")
     snapshots = [_snapshot(session, index) for index, session in enumerate(raw_sessions)]
@@ -431,6 +493,8 @@ async def _sample_async(
         duration = float(timeline.end_time.total_seconds())
         raw_position = float(timeline.position.total_seconds())
     except Exception:
+        # 选中的会话已经被换掉/失效：下一拍重列会话表，别在同一个死句柄上再撞。
+        _thread_cache().at = None
         return SmtcSample(sessions=facts, reason="读取系统媒体信息失败。", failed=True)
     title = str(getattr(props, "title", "") or "").strip()
     artist = str(getattr(props, "artist", "") or "").strip()

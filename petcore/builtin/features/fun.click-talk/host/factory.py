@@ -18,6 +18,19 @@ logger = logging.getLogger("petcore.features.click-talk")
 CLICK_TALK_OWNER = "fun.click-talk"
 
 
+def _log_speech_failure(tag: str):
+    """语音失败不能静默：只记稳定分类，不记台词/URL。"""
+
+    def failed(error) -> None:
+        logger.warning(
+            "%s speech failed: reason=%s",
+            tag,
+            getattr(error, "reason", type(error).__name__),
+        )
+
+    return failed
+
+
 class ClickTalkRuntime:
     def __init__(self, context):
         self.context = context
@@ -115,6 +128,7 @@ class ClickTalkRuntime:
                 owner=CLICK_TALK_OWNER,
                 slot=slot,
                 guard=valid,
+                on_error=_log_speech_failure("click-talk"),
             )
         except Exception:  # noqa: BLE001 - 语音失败不能影响点击反馈
             logger.debug("click-talk speech failed", exc_info=True)

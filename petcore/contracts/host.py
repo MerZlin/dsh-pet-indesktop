@@ -68,6 +68,13 @@ class PresentationPort(Protocol):
     def refresh_scene(self, owner: str) -> bool:
         """续期且不加重入计数：返回会话是否仍归 ``owner``（持有者按拍调用）。"""
         ...
+    def hide(self, owner: str = "") -> None:
+        """收起气泡；``owner`` 非空时**只在它仍持有展示会话时**生效。
+
+        给「播放/展示结束」用（音乐暂停就收歌词气泡）：持有者收自己的气泡天经地义，
+        但绝不能顺手把别人的（点击台词、提醒）一起收掉。
+        """
+        ...
     def animation_state(self) -> AnimationState | None:
         """当前动画状态；端口/窗口查不到时返回 ``None``（= 未知，别据此重试）。"""
         ...

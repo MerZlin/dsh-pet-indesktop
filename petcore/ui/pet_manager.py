@@ -9,12 +9,13 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, Qt
 
 from .. import paths
-from ..config import Config
+from ..config import MAX_PETS, Config
 from ..engine.collision import (
     FORCE_FULL_TICKS,
     HIT_FEEDBACK_MIN_SPEED,
     CollisionBody,
     collide,
+    rects_may_touch,
     stable_tie_break,
 )
 from ..engine import spawn as spawn_mod
@@ -23,7 +24,6 @@ from .pet_window import PetWindow
 
 logger = logging.getLogger("petcore.ui.pets")
 
-MAX_PETS = 16
 #: 播种子宠档案时不复制的键：位置/成员表/菜单布局是每宠独立的，`extra` 是全局的
 #: （扩展偏好由共享运行时读取，复制进子宠只会造成「文件里有值、实际不生效」）。
 SEED_EXCLUDED_KEYS = frozenset(
@@ -56,9 +56,13 @@ class PetManager(QObject):
         self.windows: dict[int, PetWindow] = {}
         self.diagnostics: list[str] = []
         self._overlap_streak: dict[tuple[int, int], int] = {}
+        #: 本拍的身体框缓存（`_tick_collision` 开头清空，移动即时失效）。
+        self._rect_cache: dict[int, tuple[int, int, int, int]] = {}
         self._collision_timer = QTimer(self)
         self._collision_timer.setInterval(16)
-        self._collision_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        # 碰撞没有 dt 依赖，Coarse 的 ±1ms 抖动无感；单宠时整张表会停掉，
+        # 所以不要用 Precise 把系统计时器精度钉在 1ms。
+        self._collision_timer.setTimerType(Qt.TimerType.CoarseTimer)
         self._collision_timer.timeout.connect(self._tick_collision)
 
     # ---------------------------------------------------------------- 创建/恢复
@@ -67,8 +71,21 @@ class PetManager(QObject):
         self.primary = window
         self.windows[0] = window
         window.start(character)
-        self._collision_timer.start()
+        self._sync_collision_timer()
         return window
+
+    def _sync_collision_timer(self) -> None:
+        """单宠不空转：碰撞结算只在至少两只宠时才有意义。
+
+        ``collision_enabled`` 是设置页可实时切换的，不能在停表时据此判断
+        （关掉后再打开就没有任何事件来重启表）；这里只看人数，配置门由
+        ``_tick_collision`` 每拍早退。
+        """
+        should_run = len(self.windows) >= 2
+        if should_run and not self._collision_timer.isActive():
+            self._collision_timer.start()
+        elif not should_run and self._collision_timer.isActive():
+            self._collision_timer.stop()
 
     def seed_config(self, slot: int) -> Config:
         path = paths.pet_config_path(self.root, slot)
@@ -91,7 +108,7 @@ class PetManager(QObject):
 
     def spawn(self, *, slot: int | None = None, character_id: str | None = None) -> PetWindow | None:
         if len(self.windows) >= MAX_PETS:
-            self._say("最多同时显示 16 只桌宠。")
+            self._say(f"最多同时显示 {MAX_PETS} 只桌宠。")
             return None
         if slot is None:
             slot = next(
@@ -108,6 +125,7 @@ class PetManager(QObject):
         window.start(character)
         self._attach_interaction(window)
         self._place_spawned(window, slot)
+        self._sync_collision_timer()
         self.remember_active()
         return window
 
@@ -193,6 +211,7 @@ class PetManager(QObject):
             return False
         for key in [pair for pair in self._overlap_streak if slot in pair]:
             self._overlap_streak.pop(key, None)
+        self._sync_collision_timer()
         self._detach_interaction(window)
         try:
             window.shutdown()
@@ -251,6 +270,22 @@ class PetManager(QObject):
         for window in self.each():
             window.handle_screens_changed()
 
+    def pause_for_session(self) -> None:
+        """锁屏/睡眠：停碰撞表与全部宠的播放节拍（保留当前帧）。"""
+        self._collision_timer.stop()
+        for window in self.each():
+            pause = getattr(window, "pause_animation", None)
+            if callable(pause):
+                pause()
+
+    def resume_after_session(self) -> None:
+        """解锁/恢复：续播并只在多宠时重新启动碰撞表。"""
+        for window in self.each():
+            resume = getattr(window, "resume_animation", None)
+            if callable(resume):
+                resume()
+        self._sync_collision_timer()
+
     def shutdown(self) -> None:
         self._collision_timer.stop()
         for slot in sorted(self.windows, reverse=True):
@@ -273,6 +308,8 @@ class PetManager(QObject):
         ]
         if len(windows) < 2:
             return
+        # 粗筛缓存按拍重建：上一拍的位置不能拿来判这一拍（拖拽/漫游都在动）。
+        self._rect_cache.clear()
         # 两轮分离：三只以上叠在一起时，单轮会被「后来者」顶回去（主分支同理）。
         for _pass in range(2):
             moved = False
@@ -285,6 +322,20 @@ class PetManager(QObject):
     def _collide_pair(self, first: PetWindow, second: PetWindow) -> bool:
         # 拖拽中的桌宠不与别人结算：否则会推着另一只一路滑走，也会把对方顶出屏幕。
         if first.dragging or second.dragging:
+            return False
+        # 轴对齐粗筛（99 只 = 4851 对）：矩形分离时圆链必不重叠，省掉两次 body 构造
+        # 与 9 对圆心距离。可能与接触的配对仍走完整几何，判定结果不变。
+        if not rects_may_touch(self._body_rect(first), self._body_rect(second)):
+            # 离开接触就清连续重叠计数（与旧行为一致：以前这里也会被 collide 的
+            # None 分支清掉）。空表时不构造 key，99 只的稳态下这对是纯空转。
+            if self._overlap_streak:
+                self._overlap_streak.pop(
+                    (
+                        min(int(first.slot), int(second.slot)),
+                        max(int(first.slot), int(second.slot)),
+                    ),
+                    None,
+                )
             return False
         a = self._body(first)
         b = self._body(second)
@@ -392,6 +443,20 @@ class PetManager(QObject):
             slot=int(window.slot),
         )
 
+    def _body_rect(self, window: PetWindow) -> tuple[int, int, int, int]:
+        """本拍的身体框缓存：粗筛只要矩形，真可能接触的才去建 ``CollisionBody``。
+
+        ``PetWindow.body_rect()`` 每次都读窗口几何，多宠时 n² 对里重复取同两只的矩形
+        是纯浪费（实测 99 只时一对要 1.5µs 建 body）。移动后由 ``_apply_body`` 立刻
+        失效，所以同一拍内的矩形永远是新鲜的。
+        """
+        slot = int(window.slot)
+        rect = self._rect_cache.get(slot)
+        if rect is None:
+            rect = window.body_rect()
+            self._rect_cache[slot] = rect
+        return rect
+
     def _apply_body(
         self,
         window: PetWindow,
@@ -410,6 +475,10 @@ class PetManager(QObject):
         moved = (new_x, new_y) != (window.x(), window.y())
         if moved:
             window.move(new_x, new_y)
+            # 本拍剩下的配对要看到新位置（窗口一定带 slot；测试替身可以不带）。
+            slot = getattr(window, "slot", None)
+            if slot is not None:
+                self._rect_cache.pop(int(slot), None)
         # 只有真撞击才写速度：``set_velocity`` 会切到 thrown（换飞行素材、
         # 停止掷骰），轻碰写速度 = 走路宠一碰就变抛掷态。已经在抛掷里的不覆盖——
         # 位置出口可能刚因撞岛写过冲量，这里再按分离速度重写就是「两处改速度打架」。

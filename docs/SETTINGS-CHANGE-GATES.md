@@ -83,6 +83,26 @@ recovery
 
 ## 变更记录
 
+### 2026-10-29 — Q 弹弹性系数/次数/持续时间 + 左键穿透语义
+
+用户需求原文：「新增可选弹性：弹性系数可调（弹的次数和持续时间），可关闭（不触发Q弹）」
+「点击穿透只穿透左键……右键单点替换之前的左键单点，右键长按调出菜单，左键长按拖动」。
+
+| 项 | 内容 |
+|---|---|
+| setting_id / 键 | 新增每宠 `click_squash_bounces`（int 1–5，默认 1）、`click_squash_strength`（int 30–200，默认 100）；`click_squash_enabled`/`click_squash_ms` 已存在，本次把 `click_squash_ms` 在设置页暴露 |
+| 归属 | 「互动与物理 → 点击与音效 → 点击 Q 弹」行下方三行（弹跳次数/弹性强度/持续时间），关闭 Q 弹开关时三行置灰 |
+| 为什么准入 | 弹性观感是用户明确想调的偏好，应用无法自动推断；默认 1 次/100%/220ms 与旧观感逐位一致，未配置时行为不变 |
+| 明确不加键 | 左键转发/长按阈值（`POINTER_DRAG_HOLD_MS`/`POINTER_MENU_HOLD_MS`）是交互实现参数，先不暴露；`click_through` 仍是既有全局键，**不新增**模式键 |
+| 作用域 | 两个新键是**每宠**（不进 `GLOBAL_CONFIG_KEYS`）；`click_through` 仍是全局键，托盘一次作用所有宠 |
+| migration / recovery | 旧配置缺键 → `_normalize` 补默认；坏数据按 `_number` 钳制（1–5 / 30–200）并取整；`SCHEMA_VERSION` 未变。取消/`discard_changes` 回滚三行 |
+| 语义与实时性 | 设置页改动即时写入当前宠配置，下一次点击/碰撞即用新参数；关闭开关后 `EffectController.start_squash` 直接 return，点击/碰撞/撞岛/落地都不弹 |
+| 左键穿透 | 开关文案改为「仅左键穿透：左键单击点下层，左键长按拖动；右键单击互动、右键长按菜单」。Windows 不再整窗 `WS_EX_TRANSPARENT`；转发点击是「松手时一次 down+up」，下层拖拽/框选不支持，提权窗口收不到合成输入（如实说明） |
+| 版式与可达性 | 三行沿用 `SettingsCard.add_row`，窄窗不裁切；Q 弹开关 `toggled` 同步三行 enabled |
+| 搜索 | `page_interaction.keywords()` 补「弹跳次数/弹性强度/持续时间」；Q 弹/穿透行文案自动进搜索 |
+| 测试 | `tests/test_petcore_interaction.py`（几何/effect/设置读取）、`tests/test_petcore_pointer.py`（状态机）、`tests/test_petcore_platform_win.py`（转发/轮询）、`tests/test_petcore_settings.py`（三行/取消回滚）、`tests/test_petcore_config_scope.py`（默认值/钳制/每宠作用域） |
+| 未验证 | 真实鼠标端到端（下层按钮/右键菜单/长按拖动）需本机实机验收；非 Windows 仍是旧整窗穿透，右键不可用 |
+
 ### 2026-10-28 — 全屏自动隐藏 + 角色重命名（第二批）
 
 用户需求原文：「在常规设置中补充一下主分支的『全屏自动隐藏』功能」「主分支可以修改动画
@@ -826,3 +846,24 @@ C 盘剩余空间显示选项（性能占用要低）」。
    离线性能实测 / 实机运行记录）并在 [`INDEX.md`](INDEX.md) 的「PR 报告存档」登记。
    `CONTEXT.md` 无新概念需要登记（「每日一签」的口径写在 `pet/divination.py` 的模块
    docstring 与设置页文案里）。
+
+### 2026-10-29 — petcore：重置设置入口移植（命令类，无新增设置项）
+
+本刀**不新增、不删除任何持久设置**：没有新键、没有默认值变更、没有迁移；改的是设置页的
+命令入口与保存语义。证据见
+[`PR-REPORT-PETCORE-NETWORK-MUSIC-RESET-TTS-2026-10-29.md`](PR-REPORT-PETCORE-NETWORK-MUSIC-RESET-TTS-2026-10-29.md)。
+
+| 项 | petcore 口径 |
+|---|---|
+| 准入判断 | 重置是**命令不是偏好**（本文准入规则第 1 条的反例：一次性动作、没有持久值），所以不进设置条目、不加配置键；沿用 2026-10-17 的既有结论——侧栏命令类控件**不进搜索索引**，落点在侧栏底部 |
+| 作用域 | petcore 与主分支存储布局不同：主宠的全局键与本宠键同在 `config.json`，子宠本宠键在 `config-pet-N.json`。因此两个按钮是**两组键**（`GLOBAL_CONFIG_KEYS` ∩ `DEFAULTS` vs `DEFAULTS − GLOBAL_CONFIG_KEYS`），不是两个文件；主宠页两个按钮各管一半，谁都不覆盖谁 |
+| 保留项 | `active_pets`、`positions` 任何作用域都不重置；「重置本宠」另保 `character`/`rx`/`ry`/`screen_name`（身份与位置是这只宠的存在本身，同主分支 `reset_slot_profile` 口径）；未登记键（`extra`）不动 |
+| 不碰的东西 | `api.json`（服务规格）、系统钥匙串（API Key）、开机自启（petcore 是纯注册表状态，没有配置键）——确认框正文逐条写明 |
+| 确认框 | `QMessageBox.Warning`，「重置」是 DestructiveRole、**默认键与 Esc 都落「取消」**；两个作用域两套文案，按钮标签自己写作用域（不靠 tooltip 猜） |
+| 关闭语义 | 重置已落盘 → **直接 `done(Accepted)`**，跳过 `_commit()` 与 `reject()` 的快照回滚。petcore 的 X 关闭=保存、取消=回滚快照，任何一个都会把旧控件值写回去（=重置白做） |
+| 失败路径 | 写盘失败 `reset()` 回滚内存并弹「无法写入配置：…」，窗口不关；全局作用域额外 `pets.sync_shared_settings()` + `reload_menu()`，二者失败只记 warning、不掩盖重置结果 |
+
+准出对应：契约（无新键 / 无迁移 / 失败路径明确）✓；TDD（`tests/test_petcore_settings_reset.py`
+8 例 + `tests/test_petcore_settings.py` 6 例，先红后绿）✓；布局（720×500 最小窗口 × 13/18px
+两种字号下两枚按钮都落在侧栏视口内且可见、导航仍有高度——**几何断言有，真机截图未做**）；
+跨平台（纯 Qt 文案与键级操作，无平台分支）✓；文档（本节 + L124 + PR 报告 + `INDEX.md` 登记）✓。

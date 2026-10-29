@@ -61,6 +61,36 @@ def stable_tie_break(slot_a: int, slot_b: int) -> tuple[float, float]:
     return math.cos(angle), math.sin(angle)
 
 
+#: 轴对齐粗筛的容差：内切圆链只可能在矩形内/相切处相交，留 1px 抵消浮点与 SLOP。
+MAY_TOUCH_MARGIN = 1.0
+
+
+def rects_may_touch(
+    rect_a: tuple[float, float, float, float],
+    rect_b: tuple[float, float, float, float],
+    *,
+    margin: float = MAY_TOUCH_MARGIN,
+) -> bool:
+    """两矩形是否可能接触（**必要**条件，不是判定结果）。
+
+    碰撞几何是矩形**内切**的三圆链（:func:`circles_from_rect`），圆只会在矩形内部或
+    相切处相交，所以「矩形分离」⇒「圆链不可能重叠」。多宠数量上去以后这条粗筛把
+    n² 对里的绝大多数（彼此离得远的）压到几次比较，真正的圆链数学只跑相邻的那几对；
+    相交的矩形仍照旧交给 :func:`deepest_overlap`，判定结果一个都没改。
+    """
+    ax, ay, aw, ah = rect_a
+    bx, by, bw, bh = rect_b
+    if aw <= 0 or ah <= 0 or bw <= 0 or bh <= 0:
+        return False
+    reach = float(margin)
+    return (
+        ax - reach < bx + bw
+        and bx - reach < ax + aw
+        and ay - reach < by + bh
+        and by - reach < ay + ah
+    )
+
+
 @dataclass(frozen=True)
 class CollisionBody:
     x: float
@@ -158,6 +188,12 @@ def collide(
     tie_break: tuple[float, float] | None = None,
 ) -> CollisionResult | None:
     """求解一对碰撞。``force_full`` 时一次完全分离，否则按 60% 规则逐步推。"""
+    # 粗筛放在这里（而不是只放在调用方）：圆链在矩形内切，矩形分离时圆链必不重叠，
+    # 直接省掉 9 对圆心距离计算；对相交矩形没有任何影响。
+    if not rects_may_touch(
+        (a.x, a.y, a.width, a.height), (b.x, b.y, b.width, b.height)
+    ):
+        return None
     direction = tie_break or stable_tie_break(a.slot, b.slot)
     overlap = deepest_overlap(a.circles, b.circles, tie_break=direction)
     if overlap is None:

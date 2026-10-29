@@ -93,6 +93,12 @@ UNKNOWN_TEXT = "--"
 #: 格式化器仍输出合并串（``sys_monitor.format_cpu/format_mem``）——卡片与其他消费方
 #: 用同一个串，兼容面不因拆盒而破。
 PERCENT_UNIT = "%"
+#: GPU/FPS 探针段的定宽占位素材：盒样本与单位都取自真实读数那一套，因此
+#: 「有快照 ↔ 停采占位 ↔ 还没有第一份读数」三种形态的行宽逐像素相同。
+#: 宽度必须与采样状态无关：否则「推快照 → 变宽 → 折进 +N → 停采 → 变窄 → 复原」
+#: 会变成 1Hz 的折叠振荡（与 AUD-25 同族）。``unsupported`` 仍**不占位**。
+PROBE_BOX_TEXT = {GPU: "100", FPS: "9999"}
+PROBE_UNITS = {GPU: PERCENT_UNIT, FPS: "fps"}
 #: 右省略符。用单字符 …（``...`` 会白占两列，盒宽紧张时更早截断）。
 ELLIPSIS = "…"
 #: 字体指纹的探针串：度量对象不暴露字体（QFontMetrics 没有 ``font()``），

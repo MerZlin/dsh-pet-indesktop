@@ -4352,3 +4352,450 @@ petcore 全仓没有 `QMovie`，所以 `.gif` 能显示但永远是静态首帧�
 - 没有目视截图（offscreen 无 CJK 字体）；720×500 下 pack 行实际 224px、行宽 466px 不溢出，
   但把字号抬到 19pt 时约 591px，会走页面既有的横向滚动（不裁切，观感未确认）。
 - 两个 GitHub 按钮当前指向仓库根（`CHARACTER_PACKS_URL = REPO_URL`）；换独立素材页只改一行。
+
+## L122 — 2026-10-29 — 对话传输瞬时失败自动重试一次（零输出才算「没发生」）
+
+**主题**：用户报 petcore 版 AI 对话偶发「请求失败：网络不可达」，下一轮又正常；「看看屏幕」
+气泡里还会显示英文 `network`。
+
+**证据**
+- 文案唯一来源 `petcore/net/errors.py:36` + `NetworkError.__init__`（空消息才显示「网络不可达」）；
+  `api/chat.py` 只在「打开连接失败」或「读流中断且一个正文/思维链字节都没收到」时抛它。
+- 真机：`getproxies()` 为空、`http_proxy/https_proxy/all_proxy` 全空、`ProxyEnable=0`；
+  对 `api.deepseek.com` 连续 3 次 curl 全部 0.2–0.4s 成功 ⇒ 是**瞬时**传输失败（TLS 重置 /
+  连接被掐 / DNS 抖动），不是持续不可达。旧 `urlopen` 的「代理→直连」两次尝试在无代理时
+  是同一个直连、紧挨着、无退避，等于没有重试。
+- 放大因素：`net/http.py` 的 `_force_direct` 一旦置真永不复位（`reset_transport()` 只有测试调用）。
+- 「屏幕 network」：`ai.chat` 的 `_REASON_TEXT` 只映射 `internal`，`_look_failed` 用
+  `_REASON_TEXT.get(text, text)` 把 `network` 原样贴到气泡；`_on_ask` 还会拼成 `network：网络不可达`。
+
+**实现**（`petcore/api/chat.py` +113/−28、`petcore/net/http.py` +18/−5、`petcore/ui/ports.py`
++14/−3、`contracts/api.py` 1/1、`ai.chat/host/runtime.py` +16/−2）
+- `_Progress`（正文/思维链计数）+ `_stream_once()`：`stream_chat` 最多 2 次尝试，仅当失败分类是
+  `network`/`tls`、未取消、且 `progress` 全为 0 时重发一次（`RETRY_DELAY_S=0.6`，状态行
+  「网络抖动，正在重试…」）。`HTTPError`、`timeout`、`protocol` 从不重试；已吐出半条正文的
+  断流仍返回 `interrupted`（不重发，避免重复）。
+  > 与 L120「不给 chat 加通用重试」的关系：L120 拒绝的是「掩盖真实故障的通用重试」；
+  这次只在**用户什么都没看到**的传输层抖动上重发一次并显式告知，任何服务器答复都不重试。
+- `_open_response()`：`_post_json`（联网检索 planner）与正式请求共用的打开阶段重试（≤2 次），
+  `HTTPError` 立刻转成稳定分类抛出。
+- `net/http.py`：`_force_direct` 带 TTL（`DEFAULT_DIRECT_PIN_SECONDS=300`），过期后重新试代理；
+  `force_direct()`/`reset_transport()` 同步。
+- `CoreApiPort.stream_chat(timeout=None)` 改用 `api.json` 的 `metadata.timeout`（钳 5–300s），
+  设置页那行不再恒 60s 骗人。
+- `ai.chat` 的 `_REASON_TEXT` 补全六类中文；`AiChatFailure` 不再把同一句拼两遍。
+
+**验证**
+- 新增/改写 `tests/test_petcore_api_chat_stream.py`（+113/−27）：首连 RST、次连正常 → 返回完整
+  回答且只吐一次正文；两次都失败 → `network` 且服务端只看到 2 次连接；半截分块 → `protocol`
+  且**不重试**（`accepted == 1`）；已有 delta 的断流不重试。
+- `tests/test_petcore_http_safety.py` +31：钉子 10s 内只走直连、过期后重新试代理。
+- `tests/test_petcore_api_chat.py` +33：`api.json` 的 `timeout=59` 真的传到传输层，显式传参优先。
+- `tests/test_petcore_ai_mod.py` +19：`AiChatFailure("network", "网络不可达") == "网络不可达"`。
+- 性能（本机，样本见 PR 报告）：`_open_response` 无重试时固定开销 **0.47 µs/次**；同一请求
+  里 `ssl.create_default_context()` 本身 14.5–26.3 ms。`decide()` 未受影响（见 L123）。
+
+**未覆盖 / 风险**
+- 没有抓到真机上「同一秒的失败前后」日志（用户那次失败不在当前日志窗口内）；重试是否必然救回
+  取决于抖动时长（超过一次重试仍失败会照旧报错）。
+- 重试会让同一轮最多多一次 POST（只在零输出时）；DeepSeek 是否对未返回的连接计费未核实。
+
+## L123 — 2026-10-29 — 音乐暂停：同源窗口会话不再翻盘 + 暂停边沿立刻收气泡
+
+**主题**：用户报「音乐暂停后，桌宠还会播放一段时间歌词」。
+
+**根因**
+- `recognizer.decide()` 在 SMTC 报暂停时仍问窗口标题源，只要该 exe 的 WASAPI 会话是 `active`
+  就判「在播」并**直接返回**；而同一台播放器暂停后会话常仍挂 `active`（`audio_sessions` 自己
+  写了这条事实）。窗口源的 `Track` 没有 `position`，运行时改用本地时钟累加
+  （`runtime._position`），于是暂停期间每 ≥2 秒继续换一句歌词。
+- 暂停只 `end_scene`，**没人收气泡**：最后一句按 2–6 秒继续挂着。
+
+**实现**（`media.music/host/recognizer.py` +13/−1、`runtime.py` +16、`petcore/ui/app.py` +14、
+`contracts/host.py` +7、`ui/pet_window.py` +6）
+- 同源排除：窗口源判在播、且 `normalized_exe(window.exe) == normalized_exe(smtc.app_id)` 时
+  **不接受**它翻盘（记 reason「同一台播放器…残留的 Active 会话不算在播」）；另一台播放器仍按
+  原契约以窗口源为准（AGENTS 的「SMTC 暂停仍要问窗口源」本意保留）。
+- 新增 `PresentationPort.hide(owner="")`：`owner` 非空时只在闸门仍归它时生效（绝不收别人的
+  气泡）；`_PresentationAdapter.hide` → `PetWindow.hide_bubble()`。
+- 运行时在「上一拍在播 → 这一拍 paused」的**边沿**调用 `hide(SCENE_OWNER)`。
+
+**验证**
+- `tests/test_petcore_music_sources.py` +29：同 exe 窗口 active → `paused` 且带理由；
+  另一 exe 在出声 → 仍 `playing`（以窗口源为准）。
+- `tests/test_petcore_music_mod.py` +6：暂停边沿 `hidden == ["media.music"]`。
+- `tests/test_petcore_presentation_gate.py` +18：`hide(owner)` 只收自己持有的气泡。
+- 性能（本机，5 轮取中位，每轮 2000 次）：`decide()` 暂停无窗口源 **4.27 µs**；暂停 + 同源窗口
+  源 **9.05 µs**（多出的 4.8 µs 只出现在「paused 且采到窗口」的拍子上，1 Hz）。
+
+**未覆盖 / 风险**
+- 真机没有复现「暂停但会话仍 active」的那一刻（`scripts/music_probe.py` 抓到的 cloudmusic 当时
+  是 `inactive`）；同源分支由判定表用例覆盖，未在真实播放器上验证。
+- 没有动 `absent` 的宽限语义：切歌间隙仍保留上一句，故意不 hide。
+
+## L124 — 2026-10-29 — 移植主分支「重置本宠设置 / 重置全局设置」到设置侧栏
+
+**主题**：把 4.4.0 的两个重置按钮搬进 petcore，按 petcore 的存储布局重新定义作用域。
+
+**设计**
+- petcore 与主分支存储布局不同：主宠的全局设置与自己的偏好同在 `config.json`，子宠偏好在
+  `config-pet-N.json`。所以两个按钮是**两组键**（`GLOBAL_CONFIG_KEYS`），不是两个文件。
+- 永不重置：`active_pets`、`positions`；本宠重置另保 `character`/`rx`/`ry`/`screen_name`
+  （主分支 `reset_slot_profile` 的保留口径）。未登记键（`extra`）不动。
+- 不碰 `api.json` / 钥匙串 / 开机自启（petcore 后者是纯注册表状态，没有配置键）。
+
+**实现**（新 `petcore/settings_reset.py` +110、`petcore/ui/settings/dialog.py` +100）
+- `reset_keys(scope)` / `reset_values(scope)` / `apply_reset(config, scope)`：先 `snapshot()`，
+  逐键写 `DEFAULTS`（深拷贝），`ScopedConfig.save()` 落盘；`OSError` → `restore()` 回滚 + `ResetError`。
+- 侧栏底部两枚按钮（`resetPetButton` / `resetGlobalButton`，非主按钮 + accessibleName + tooltip）；
+  确认框 `QMessageBox.Warning`，「重置」是 DestructiveRole、默认键与 Esc 都落「取消」。
+- 重置落盘后 `_close_after_reset()`：停实时预览定时器、**跳过 `_commit()` 与快照回滚**、
+  `done(Accepted)` —— petcore 的 X 关闭=保存、取消=回滚快照，任何一个都会把旧控件值写回去。
+- 全局作用域额外 `pets.sync_shared_settings()` + `reload_menu()`；两者都 `apply_live_settings()`。
+
+**验证**
+- 新 `tests/test_petcore_settings_reset.py`（8 例）：两个作用域覆盖的键集合互斥、保留项、
+  全局重置不动位置/身份/本宠偏好、本宠重置不动全局键与身份位置、落盘、主宠同一文件拆半、
+  子宠只写自己的文件、写盘失败回滚内存。
+- `tests/test_petcore_settings.py` +89/−2：两个按钮存在且不可达搜索索引、取消不写、确认后
+  `_commit` 一次都没调、本宠重置保身份与全局字号；另有两条**几何**用例（720×500 最小窗口 ×
+  13/18px 字号）：两枚按钮都在侧栏视口内且可见、导航仍有高度。
+- 性能（本机，5 轮 × 每轮 3 次，取中位）：`apply_reset(config, global)` = **2.92 ms**
+  （含原子写盘；作用域 129 键 / 本宠 81 键，只写取值为默认的键）。
+
+**未覆盖 / 风险**
+- 没有做真机点击录屏；`QMessageBox` 的三个按钮在 offscreen 下由注入 `_confirm_reset` 跳过，
+  确认框本身只在 `--check`/手工路径里出现。
+- 重置后不做「按新配置重建设置页控件」——窗口直接关闭；若以后要求留在设置页，需要补重建路径。
+
+## L125 — 2026-10-29 — 点击台词/自言自语真的出声：播放音量取合成结果
+
+**主题**：用户报「点击的自言自语和自言自语的语音现在还是没声音」。
+
+**证据**
+- 真机 `%APPDATA%/dsh-pet-core/config.json`：`click_talk_enabled/self_talk_enabled/voice_enabled`
+  全 true、`speech_backend=edge`；日志每下点击都有 `click-talk kind=...`；`cache/tts` 里已有 43 个
+  mp3/wav ⇒ 合成成功、**播放**失败且无日志。
+- 断点：`CoreSpeechPort._play` 把 `job.request.volume`（`SpeechRequest.volume` 默认 `None`）交给
+  `AudioAdapter.play_tracked`，后者 `float(volume)` → `TypeError` → 收敛成 `SpeechError` →
+  `on_error`（feature 没传）→ 无声无日志。
+
+**实现**（`contracts/speech.py` +7、`speech/service.py` +8/−1、`ui/speech_channel.py` +6/−2、
+两个内置 feature 各 +14）
+- `SpeechResult` 增 `volume: float = 1.0`（合成时实际采用的值，含 `speech_volume`）；
+  三处 return 都带上它。`_play` 用 `result.volume`，不再回读请求里的 `None`。
+- `fun.click-talk` / `fun.self-talk` 调 `speak()` 带 `on_error`，只记 `reason`（不记台词/URL）。
+
+**验证**
+- `tests/test_petcore_speech.py` +52：`TrackedAudio` 复刻真机 `float(volume)` 语义——请求留空时
+  播放音量必须是 `1.0`（改前 TypeError → on_error）；`speech_volume=0.4` 时播放音量 0.4。
+- 真机探针 `.scratch/tts_click_probe.py`（真实 `SpeechService` + `CoreSpeechPort` + `AudioAdapter`
+  + 真 Qt 事件循环）：合成 3.5s 的 mp3 并**播完**（`finished: True`、`errors: []`），本机听到声音。
+- 性能：音量解析 **0.26 µs/次**（每次播放一次）；无新增线程/网络/磁盘。
+
+**未覆盖 / 风险**
+- 只在真机上验证了「点击台词」这一句文本；`self_talk` 用同一条 `_play` 路径，未单独听。
+- 免打扰期间 `speak()` 仍按既有语义拒绝（现在会留下一条 `reason=unavailable` 的 warning）。
+
+## L126 — 2026-10-29 — 桌宠身份上限 16 → 99（含碰撞粗筛）
+
+**主题**：用户要求「子桌宠生成上限调为无上限，或 99 只」。
+
+**为什么不是「无上限」**：每个身份背后是一个真实 `PetWindow`（各自的动画播放器、配置、
+碰撞结算）。身份空间没有上限就只剩内存与 CPU 兜底，失败形态是系统卡死而不是一条可读提示。
+99 是「够大且仍守得住 16ms 碰撞拍」的实测上限（见下）。
+
+**实现**
+- `petcore/config.py` 新增 `MAX_PETS = 99` 作为**单一真值**；`_pets()`（`active_pets` 归一化）
+  与旧 `config-pet-N.json` 迁移的 slot 校验从硬编码 `16` 改为读它。
+- `petcore/ui/pet_manager.py`：删掉本地 `MAX_PETS = 16`，改从 config 导入（同一常量）；
+  上限提示改 f-string；`range(1, MAX_PETS)` 覆盖 slot 1..98（0..98 共 99 只）。
+- `petcore/ui/settings/page_pets.py`：「当前 N 只（最多 16 只）」改读常量。
+- **碰撞粗筛**（不放宽上限就必然卡帧）：99 只 = 4851 对/拍，旧路径每对 2×`_body()`（1.5µs）
+  + `collide()`（2.85µs）≈ 28.4ms，单拍就超过 16ms 预算。
+  - `engine/collision.py` 新增 `rects_may_touch()`（轴对齐、1px 容差）并在 `collide()` 入口调用：
+    内切三圆链只在矩形内/相切处相交 ⇒ 矩形分离必有 `None`，结果不变、省掉 9 对圆心距离。
+  - `PetManager._tick_collision` / `_collide_pair`：按拍缓存身体框（`_rect_cache`，
+    `_apply_body` 移动即时失效），只有可能接触的配对才构造 `CollisionBody`。
+
+**验证**
+- 新/改测试：`tests/test_petcore_multipet.py` +17/−3（上限改为注入 `MAX_PETS=4` 验边界，
+  另加「`active_pets` 归一化接受 98、丢弃 99」）；`tests/test_petcore_p5.py` +27
+  （`rects_may_touch` 的相交/相切/分离/退化矩形、`collide()` 远端返回 None、重叠仍报深度）。
+- 性能（本机，2,000,000 次）：粗筛 **0.21 µs**/对；新热路径（两次缓存查表 + 粗筛）
+  **0.25 µs**/对 ⇒ 99 只 × 4851 对 = **1.2 ms/拍**（旧路径 28.4 ms/拍，约 24×）。
+  `collide()` 远距对从 2.85 µs 降到 0.96 µs。
+- `pytest tests/test_petcore_multipet.py tests/test_petcore_p5.py tests/test_petcore_pet_push.py
+  tests/test_petcore_click_listeners.py tests/test_petcore_config_extra.py -q` 全绿。
+
+**未覆盖 / 风险**
+- 没有真机开满 99 只：99 个真实窗口的内存/解码开销远大于碰撞（每只一个动画播放器），
+  本刀只保证「上限放行 + 碰撞拍不炸」；满编时的实际帧率未测。
+- 上限提示只在两个入口（生成失败的气泡、设置 →「多宠」的状态行）；托盘/菜单没有单独的
+  「已达上限」提示（沿用既有静默返回 None）。
+- `MAX_PETS` 改了名字的含义（含主宠），`active_pets` 里仍是从 0 开始的身份列表。
+
+## L127 — 2026-10-29 — 语音首次 import 串行化 + 测试禁止真实联网合成
+
+**主题**：跑全量 petcore 套件时反复出现 Windows 原生崩溃（access violation）。
+
+**证据**：4 次全量跑崩 2 次，faulthandler dump 每次都停在
+`tests/test_petcore_click_listeners.py` 的 `QTest.qWait`，同时有 3–4 条播报线程卡在
+`edge_tts/communicate.py:47` 的模块级 `ssl.create_default_context()`，
+其余线程在 `importlib._bootstrap.acquire` 等 import 锁。崩溃与本次改动无关
+（不在 `_play` 路径上），但它让「全量绿」不可复现，必须收口。
+
+**实现**
+- `petcore/net/tts.py`：新增 `_EDGE_IMPORT_LOCK`，`edge_synthesize()` 的惰性
+  `import edge_tts` 串行化（只有首次 import 会等锁）。生产里一个进程一个播报端口，
+  但 mod 可以直接调 `SpeechPort.synthesize()`（预缓存），多线程并发首次 import 是真实姿势。
+- `tests/conftest.py`：新增**会话级** autouse `_no_real_tts_synthesis`——把
+  `petcore.net.tts.synthesize` 替换成「立刻抛 `NetworkError(network)`」，并把
+  `service.RETRY_DELAY_S` 压到 0。必须是会话级：函数级 monkeypatch 在用例结束就还原，
+  而播报线程常活到用例之后（实测崩溃残留线程正是这样拿着真实实现去联网）。
+  需要真实合成的用例本来就注入 `synthesizer=`（`SpeechService` 的接缝），不受影响。
+
+**验证**
+- 全量套件（`pytest tests/test_petcore_*.py tests/test_architecture.py -q`）：加桩后连续两跑
+  **2372 passed, 1 skipped**（每跑约 3 分 52 秒），不再出现 access violation；加桩前 4 跑崩 2 次。
+- `pytest tests/test_petcore_speech.py tests/test_petcore_speech_local.py
+  tests/test_petcore_click_listeners.py tests/test_petcore_self_talk.py -q` → 66 passed。
+- 真机：`.scratch/tts_click_probe.py`（不走 pytest 夹具）仍然合成并播完 3.5s —— 桩只在测试进程里。
+
+**未覆盖 / 风险**
+- 原生崩溃的根因在 CPython/Windows 的 `ssl` 首次初始化，本刀只把测试里的「并发首次
+  import」消除，并给生产加了串行；没有直接复现「单线程首次 import 崩」的路径。
+- 测试里不再覆盖真实 edge-tts 合成（网络边界，符合「只 mock 不可确定的外部边界」）。
+
+## L128 — 2026-10-29 — 联网检索失败一律退回纯 API 回答
+
+**主题**：用户要求「联网失败也不要不回答，而是只走纯 API 回答」；先看主分支口径再对齐。
+
+**主分支现状**（`pet/chat/providers.py`，`stream()` → `_research()` → `_stream_answer()`）：
+planner 失败在第 0 轮发一条状态行「联网检索不可用（…），将直接回答」并返回空串，工具失败
+把「搜索失败：…」当工具结果喂回模型；`stream()` 无论如何都会继续 `_stream_answer()`。
+petcore 的 `research()` 逻辑与它一致——**但调用点没有保险**：`stream_chat()` 里那句
+`notes = research(...)` 裸调用，检索阶段任何非预期异常（回调/解析/以后新增的分支）
+都会直接冒泡成「本次回复未保存」。
+
+**实现**（`petcore/api/chat.py`）
+- `stream_chat()` 的检索调用包 `try/except Exception`：失败记一条
+  `web search degraded to a plain answer: <异常类型>`（**只记类型**，异常文本可能带 URL/查询串），
+  发状态行「联网检索不可用，将直接回答」，`notes=""`，照常发正式请求。
+- `inject_search_context()` 也包一层：拼接失败发「联网资料无法并入提问，将直接回答」，
+  用**原始会话**发正式请求。
+- 取消语义不变：检索失败时若用户已点停止，返回 `cancelled=True` 而不是继续发请求。
+
+**验证**
+- `tests/test_petcore_api_chat.py` +128：planner 500 → 仍拿到「你好！」且正式请求的 messages
+  与原文一模一样；planner 返回烂 JSON → 仍回答；`research` 抛 `RuntimeError` → 仍回答且状态行
+  不含异常文本；`inject_search_context` 抛错 → 仍回答且用原始会话。
+- `pytest tests/test_petcore_api_chat.py -q` → 20 passed；全量见本轮最终结果。
+
+**未覆盖 / 风险**
+- 只保证「检索失败不阻断回答」；如果**正式回答**自身两次都传输失败，仍会报「网络不可达」
+  （那是聊天链路，不是检索，按 L122 的重试口径处理）。
+
+## L129 — 2026-10-29 — 探针 churn 收口：隐藏即停采、停采不缩行、FPS 目标生命周期、残留会话清扫
+
+**主题**：FPS/ETW 探针在「隐藏 / 折叠 / 换目标」三条路径上白烧；岛的 GPU/FPS 段还会随采样状态翻转折叠计划（1Hz 振荡）。
+
+**根因**
+1. `DynamicIsland.stop()` 不通知宿主：隐藏/停用只停了 net/sys/disk，GPU/FPS 由 `IslandProbeHub` 持有，要等下一次 1Hz 心跳才收到空集——隐藏后白采满一拍（FPS 是一整场 ETW 会话 + 子进程）。
+2. 停采会缩行：`hub.sync(set())` 清掉两段快照 → 行变窄 → 折叠计划重排 → 段不在 `+N` 里 → 下一拍重新起采 → 快照回来 → 变宽 → 折叠……；「已启用但还没有第一份快照」走同一条跳变。
+3. FPS 目标没有记忆：目标正常退出（退出码 0）后仍对同一个死 pid 重开会话；`set_target` 连名字变了都算换目标；没读数时每 5 秒解析一次前台，目标刚退出时最密集。
+
+**实现**
+- `ui/island.py`：`stop()` 末尾 `_sync_sampling()`；`set_visible(False)` 无条件收口；新增 `set_probe_sampling()`（定宽占位，盒样本/单位与真实读数同一套）；`_metric_segments` 在「探针已接上但还没有快照」时渲染同宽占位，`unsupported`/未接探针仍不占位；`set_probe_sync_callback` 接上宿主时重建行。
+- `island/segments.py`：`PROBE_BOX_TEXT` / `PROBE_UNITS` 成为占位宽度的单一真值。
+- `ui/probes.py`：停掉的段推 `set_probe_sampling` 而不是清快照（`clear_probe_snapshot` 只留给关停/停用）；`unsupported` 缓存 60s 且只推一次；`_retarget_fps` 改成「活着就不读前台 / 没读数 ≤5s 一次 / 目标退出后 30s」，同 pid 不重复 `set_target`，前台是桌宠自己时清成无目标；`shutdown(wait_seconds=1.0)`。
+- `platform/fps.py`：`target_gone`/`gone_pid`（退出码 0 = 目标没了，同 pid 不再重开，只有 `set_target(新 pid)` 解除）；`set_target` 同 pid 幂等；`MIN_SESSION_SECONDS=3` + `TARGET_CHANGE_DEBOUNCE=2`；`shutdown(1.0)`；进程级一次残留 ETW 会话清扫（`logman query -ets` / `logman stop <name> -ets`，守护线程，只停属主已死的 `dsh-pet-fps-*`，解析是纯函数，查询失败不关闸，logman 不可用只记原因）。
+- `petcore/AGENTS.md`：两条探针口径改成「停采推定宽占位」「已接探针但还没首读占同宽占位」，并新增 FPS 目标生命周期/残留清扫一条。
+
+**验证**
+- 全量 `pytest tests/test_petcore_*.py -q` → 2462 passed, 1 skipped（248.5s；本批最终全量 2478 passed）。
+- 定向 5 个文件 → 160 passed；`fps_probe` 连跑 5×（42 passed/次）；`ruff check pet/ tests/ petcore/` → All checks passed；`python -m petcore --check --strict` → exit 0。
+- 实测（`.scratch/fps-probe-churn-2026-10-29/measure.py`，offscreen，200 次中位）：`hub._poll()` 377µs；`set_probe_snapshot()` 177µs；`set_probe_sampling()` 176µs；`island.stop()` 空闲 9.6µs / 首次 0.60ms；停采前后 plan 完全一致（width 636）；`parse_logman_sessions()` 7.0µs；真机 `logman query -ets` 43/179ms（rc=0，0 个我们前缀的会话）。
+
+**未覆盖 / 风险**
+- 真机 ETW 仍因权限（access denied）采不到任何真实 FPS；`logman stop` 路径没有在真机上命中过残留会话。
+- `MIN_SESSION_SECONDS=3` 比主分支 1.0s 保守：换游戏最多延迟约 3s 才换会话，属刻意的反 churn 取舍。
+- 探针段只要宿主接了探针且段启用就总占一行定宽；整机 unsupported 依赖推一次 `unsupported` 快照退出占位。
+
+## L130 — 2026-10-29 — 音乐取词单飞 + 身份稳定 + 失败负缓存 + 采样降频
+
+**主题**：用户报「用 QQ 音乐同步歌词时线程泄漏、CPU 持续提升」。根因不是永久泄漏，而是
+每次取词新开 `music-runtime` 线程 × 每曲 3 次 × 每次 6 跳 HTTP，且播放中曲目身份抖动
+（艺人字段晚一拍）会 `_begin_track` 清歌词/重置配额；失败不缓存，SMTC 管理器每拍重建、
+暂停时每拍整桌面 `EnumWindows`。
+
+**实现**（`examples/petcore-mods/media.music/host/`）
+- `runtime.py`：新增 `LyricFetchWorker`（唯一常驻 `lyric-fetch` 线程、单槽队列、每个
+  job 一个 cancel event；`submit()` 覆盖待处理并取消在飞；`stop()` 有界 join 1s）与
+  `_LyricJob`；`poll()` 不再在 GUI 线程内联采样（worker 死掉只记一次原因并尝试重启）；
+  播放分支同名降级身份记别名（保留曲目/歌词/配额，只重锚进度）；失败按**歌名**记
+  60s 负缓存（容量 64、按过期清理）；`_cache()` 的 mkdir 移到取词线程；传输命令改用
+  `spawn_task` 接缝，`background` 保留给取词。
+- `lyrics.py`：新增 `LyricsCancelled`，`cancelled=` 贯穿 `fetch_lyrics` → 三源 → `_get_json`，
+  每跳 HTTP 前检查；取消结果不记失败/冷却/负缓存。
+- `sampling.py`：`WINDOW_PAUSED_INTERVAL=2.0` + `WindowCache`（按目标缓存、时钟可注入）；
+  暂停时窗口枚举 2s 一次，SMTC/WASAPI 仍 1s；`absent`/`playing` 行为不变。
+- `now_playing.py`：`_ThreadCache`（每线程 manager + 会话列表，`SESSION_REFRESH_SECONDS=2.0`）；
+  选中会话的曲目/进度仍每拍读；选中会话失效时下一拍重列。
+- 测试：`tests/test_petcore_music_mod.py` +305、`test_petcore_music_sources.py` +299，
+  覆盖 100 次快速切歌并发取词 ≤1、同名别名不重建、60s 负缓存、stop join、
+  暂停窗口枚举降频、`music_enabled=false` 不唤醒 worker、取词取消 1 跳内收手。
+
+**验证**
+- 定向：96 passed（music_mod + music_sources，6.86s）；加相关 5 个文件 → 176 passed（7.64s）。
+- `ruff check` 改动文件 → All checks passed；本批最终全量 2478 passed, 1 skipped。
+- 计数口径：取词并发峰值 1、待处理 ≤1、每首 1 条 `lyric-fetch` 线程；暂停时窗口枚举
+  3/5 拍（SMTC+WASAPI 5/5）；取消在 1 跳内结束。
+
+**未覆盖 / 风险**
+- 真机 SMTC/WASAPI 计时未测（无播放器会话）；只有假端口/计数验证。
+- `stop()` 仍可能留一条在飞 HTTP 调用 ≤8s（有界 join + 结果按 generation 丢弃，记 warning）。
+- 负缓存按歌名，60s 内同名不同曲共用一次封锁（刻意的降抖动取舍）。
+- `runtime.background` 语义改为取词接缝、传输命令用 `spawn_task`；仓外 fake 需要跟着改。
+- `media.music` 版本仍是 1.2.0（未发新扩展包）；`dist-extensions/media.music` 未重打包。
+
+## L131 — 2026-10-29 — DSH 联动动画不再每 2 秒重启
+
+**主题**：用户报「和 DSH 联动后，DSH 一思考桌宠 CPU 就很高」。DSH 忙碌期每 ~1.5s
+一条 busy 事件，`ai.agent` 每 `ai_agent_min_interval_seconds`（默认 2s）请求一次
+`play_animation`；联动动作是 10s 级单次片段，于是每 2s 打断一次：WebM 终止旧
+ffmpeg + 新起一个，FrameSeq 被 `start()` 拉回第 0 帧，整轮思考都在重启解码。
+
+**实现**（`examples/petcore-mods/ai.agent/host/`）
+- `links.py`：新增 `AGENT_ANIMATION_MIN_SECONDS=8.0` 旋转地板；`LinkEngine` 记
+  `_last_anim_name/_last_anim_at`；`_on_busy` 先过 `_should_request(now)`：
+  当前动画名 == 上次请求名且 `locked=False` → 让 clip 播完，不重发；名字已换/被接管
+  也要等地板过。旧 Core 无 `animation_state()` 时退回旧节流，不猜。
+- `runtime.py`：`_Bridge/AgentLinkRuntime` 增加 `animation_state()`（端口缺失/异常
+  返回 None）；`reset_idle()` 只在**本 runtime 确实请求过 loop**（`_requested_loop`）
+  且 Core 仍报 loop 时才 `release_loop()`，一次性动作不再误清唱歌/报时的循环。
+- 测试：`tests/test_petcore_agent_mod.py` +173，覆盖「仍在播 → 只 play 一次」、
+  「名字换了 → 地板后才请求」、「locked 仍受地板约束」、旧桥无方法退回节流、
+  done 不误清别人的 loop。
+
+**验证**
+- `pytest tests/test_petcore_agent_mod.py tests/test_petcore_agent_state_wiring.py -q`
+  → 95 passed；`ruff` 通过；本批最终全量 2478 passed。
+- 纯状态机模型（60s 忙碌、1.5s 事件、10s clip）：HEAD 20 次 `play_animation`
+  （每 3s）→ 新 5 次（每 12s）。
+
+**未覆盖 / 风险**
+- 8s 地板先于 `locked` 判断：探头/击飞接管期间也最多 8s 一次请求（Core 会降级到
+  idle），有界但非立即。
+- `state.loop` 不能证明 loop 是本 mod 的；用 `_requested_loop` 补了所有权判断，
+  但仍不是跨进程租约。
+- `ai.agent` 版本号未 bump，设置页「最小间隔」文案仍指请求间隔（实际轮换有 8s 地板）。
+
+## L132 — 2026-10-29 — 全屏连拍确认 + 任务管理器排除
+
+**主题**：1Hz 全屏探测单拍命中就 hide/show 全部宠；Task Manager 置顶最大化、UWP
+覆盖层、焦点闪动会让状态在 10s 内翻 4 次，每次都是一轮隐藏/恢复 + clip 停/起。
+
+**实现**
+- `ui/fullscreen_hide.py`：`confirm_polls`（默认 2）连拍确认；候选结果要连续 N 拍
+  一致才翻转，中途抖动作废；配置关闭/显式恢复仍立即执行；`stop()`/关闭清候选。
+- `platform/fullscreen.py`：`_SKIP_PROCESSES` 增加 `taskmgr.exe`。
+- 测试：`tests/test_petcore_fullscreen_hide.py` 27 passed；新增 20 拍 hit/no-hit
+  交替 → 只 hide 1 次、restore 1 次；原即时语义用例显式传 `confirm_polls=1`。
+
+**验证**
+- 真机脚本（`.scratch/fullscreen-flap/probe_flap.py`）：HEAD 20 拍交替 21 次
+  `set_visible` → 新版 1 次。
+- `ruff` 通过；本批最终全量 2478 passed。
+
+**未覆盖 / 风险**
+- 进入/离开真全屏晚一拍（1Hz 下 ~1-2s）；启动时已在全屏最多多露 1s。
+- 独占全屏 D3D 游戏、钉住的 UWP/永在最前窗口未逐一实机验证。
+
+## L133 — 2026-10-29 — 对话「网络不可达」修复：5xx 换路 + 钉直连可撤销 + 联网工具失败说明
+
+**主题**：用户报「AI 对话仍偶发网络不可达，但 API 一直能连」。根因是
+`net/http.py::urlopen` 在 `HTTPError` 分支直接抛：系统代理/VPN 返回 502 时不会换直连，
+502 又被分类为 `network`；`_force_direct` 钉 300s 且钉住后不再试代理；流式请求重试
+仍走同一代理优先路由。另 `research()` 只回 notes，无法让模型知道联网工具失败。
+
+**实现**
+- `petcore/net/http.py`：`urlopen(..., routes=None)` 单次调用路由计划（True=代理，
+  False=只直连）；500/502/503/504（无 Retry-After）在确有另一条路时用
+  `clone_request()` 换路重试；`DEFAULT_DIRECT_PIN_SECONDS` 300→45；钉住直连失败
+  会再试一次代理，成功/两路都失败都清钉子；`pollute` 只作用于默认调用。
+- `petcore/api/chat.py`：`STREAM_RETRY_ATTEMPTS=3`、`STREAM_ROUTE_PLANS=(默认, 只直连,
+  只代理)`；仅在 `progress.emitted` 为假时重试，`HttpStatusError`/取消不重试；
+  `research()` 返回 `ResearchOutcome(notes, searched, failed)`（planner 失败/工具失败/
+  预算超时都算 failed）；`failed and not notes` 时给 system 消息补
+  「联网检索暂时不可用，请直接回答并在开头说明未联网核实」+ 状态行。
+- `petcore/AGENTS.md`：补 5xx 换路/钉直连 TTL/流式路由计划/ResearchOutcome 四条口径。
+- 测试：`test_petcore_http_safety.py` +187、`test_petcore_api_chat_stream.py` +311、
+  `test_petcore_api_chat.py` +211、`test_petcore_ai_mod.py` +163，覆盖代理 502→直连 200、
+  200 后断流→强制直连、IncompleteRead 换路、Retry-After 不换、钉直连失败回代理、
+  检索失败→纯 API + system 提示且不触发 `chat.error`。
+
+**验证**
+- 定向 4 个文件 → 115 passed；`ruff` 通过；本批最终全量 2478 passed。
+- 本机无真实代理/VPN 502 与真实 SSE 断流，全部用假 opener/响应验证，未产生真实网络流量。
+
+**未覆盖 / 风险**
+- 超时现在也是可重试分类：无 token 的流最多可等 3×timeout（默认 180s）才报错。
+- 配置了代理时，真 5xx 会多一次请求（planner 与正式回答各一次）才失败。
+- `urlopen` 最终仍抛原始 `urllib.error.HTTPError`（市场 304/探测需要 `code`），
+  `_open_response` 再统一转 `NetworkError`。
+
+## L134 — 2026-10-29 — 仅左键穿透/右键交互 + 可调 Q 弹 + 帧路径/碰撞表/锁屏收口
+
+**主题**：用户要「点击穿透只穿透左键，右键代替旧左键单击；右键长按菜单，左键长按
+拖动；弹性系数/次数/时长可调、可关闭」；同批收口单宠常驻 16ms 碰撞表、隐藏宠输入
+轮询、每帧中间 pixmap 与锁屏/睡眠不停播。
+
+**实现**
+- `engine/pointer.py`（新，零 Qt）：`PointerArbiter` + `POINTER_DRAG_HOLD_MS=250` /
+  `POINTER_MENU_HOLD_MS=350`；左键快速单击→转发，长按→拖动；右键快速单击→点击反馈，
+  长按→菜单；拖拽中右键→弹弓。
+- `platform/win.py`：`forward_left_click()` 临时置 `WS_EX_TRANSPARENT` + `SendInput`
+  左键 down+up，80ms 后恢复；`_user32()` 声明 64 位安全 argtypes；逐像素轮询不再因
+  `click_through` 整窗穿透，按住/转发期间不抢写样式；`stop()/resume()` 随显隐停/开。
+- `ui/pet_window.py`：穿透模式左右长按计时、右键菜单松手弹出、`contextMenuEvent`
+  吞掉；`_finish_drag_release/_launch_slingshot` 抽出复用；`pause_animation/resume_animation`
+  （锁屏/睡眠，保留当前帧）；`_play_spec` 锁屏期间不拉新动画；隐藏时停输入轮询。
+- `engine/squash.py` + `ui/effects.py`：`squash_geometry(strength=1.0,bounces=1)`；
+  `click_squash_bounces`（1–5，默认 1）/`click_squash_strength`（30–200，默认 100）/
+  `click_squash_ms`（80–1000，默认 220）三键；关闭开关时所有 Q 弹入口直接 return。
+- `ui/renderer.py` + `ui/pet_window.py`：`frame_pixmap` 只做 QImage→QPixmap；缩放/
+  镜像改到 `paintEvent` 的目标矩形（按原比例适配、左上对齐、镜像绕目标中心）；不再
+  每帧 `transformed()` 造中间 pixmap。
+- `ui/pet_manager.py`：碰撞表只在 ≥2 只宠时启动（Coarse 16ms），单宠 0 次唤醒；
+  `collision_enabled` 由 `_tick_collision` 每拍早退（按配置停表会让实时开关起不来）。
+- `platform/session.py` + `ui/app.py`：`SessionWatcher` 处理 `WM_WTSSESSION_CHANGE`
+  （lock/unlock）与 `WM_POWERBROADCAST`（suspend/resume），回调
+  `CoreHost.pause_for_session/resume_after_session`；`WTSRegisterSessionNotification`
+  声明 HWND argtypes。
+- `pet/frameseq_clip.py` + `petcore/media/clip.py`：`FrameSeqClip` 增加可选
+  `timer_type`（默认 Precise 不变）与 `rearm_same()`；petcore 帧表用 Coarse 并传
+  `rearm_same`，同 clip 重播不再拉回第 0 帧。
+- 设置页：互动与物理「点击与音效」新增弹跳次数/弹性强度/持续时间三行（跟随开关
+  置灰），差量写入与取消回滚；`pages_core` 穿透 hint 改为仅左键语义；托盘气泡文案同步。
+- 测试：新增 `test_petcore_pointer.py`（11）、`test_petcore_platform_win.py`（3）、
+  `test_petcore_paint.py`（2）；扩展 interaction（+6）、renderer（改写）、settings
+  （+1）、config_scope（+1）、multipet（+1）、session（+1）。
+
+**验证**
+- 本批相关 360 passed（window/settings/tray/menu/agent/fullscreen/multipet/playback/
+  interaction/renderer/platform/session/config/pointer/frameseq）。
+- 全量 `pytest tests/test_petcore_*.py tests/test_architecture.py -q` → 2478 passed,
+  1 skipped（211.67s）；`ruff check pet/ tests/ petcore/ examples/petcore-mods/` 全绿；
+  `git diff --check` 无空白错误；`python -m petcore --check` 通过。
+- 微基准（QPixmap 绘制路径，不含 DWM 合成，80 帧均值）：461×259 0.73→0.47 ms/帧
+  （−36%），1920×1080 5.99→2.93 ms/帧（−51%）。
+
+**未覆盖 / 风险**
+- 左键转发是「松手时一次 down+up」：下层拖拽/框选/滚动条拖动不支持，hover/光标形状
+  不穿透，提权窗口（UIPI）收不到合成输入；非 Windows 仍是旧整窗穿透（右键不可用）。
+- 右键菜单在松手时弹出（长按只做闸门），不是按住期间就弹；这是为避免菜单把 release
+  当选中。
+- 锁屏停播只覆盖宠物播放/碰撞/输入轮询；灵动岛探针、音乐采样仍按各自节拍运行。
+- 真机鼠标端到端（下层按钮/右键菜单/长按拖动）需本机实机验收；本机微基准不能代表
+  弱机独显/DWM 合成路径。

@@ -36,6 +36,8 @@ class EffectController(QObject):
         self._squash_active = False
         self._squash_started = 0.0
         self._squash_duration_ms = 220.0
+        self._squash_strength = 1.0
+        self._squash_bounces = 1
 
         self._spin_active = False
         self._spin_pending = False
@@ -86,6 +88,8 @@ class EffectController(QObject):
             self.window.width(),
             self.window.height(),
             self.squash_progress(),
+            strength=self._squash_strength,
+            bounces=self._squash_bounces,
         )
 
     def any_active(self) -> bool:
@@ -95,11 +99,24 @@ class EffectController(QObject):
     def start_squash(self, duration_ms: int | None = None) -> None:
         if not bool(self.window.config.get("click_squash_enabled", True)):
             return
+        config = self.window.config
         self._squash_active = True
         self._squash_started = self._clock()
         self._squash_duration_ms = float(
-            duration_ms or self.window.config.get("click_squash_ms", 220) or 220
+            duration_ms or config.get("click_squash_ms", 220) or 220
         )
+        try:
+            self._squash_strength = max(
+                0.3, min(2.0, float(config.get("click_squash_strength", 100) or 100) / 100.0)
+            )
+        except (TypeError, ValueError):
+            self._squash_strength = 1.0
+        try:
+            self._squash_bounces = max(
+                1, min(5, int(config.get("click_squash_bounces", 1) or 1))
+            )
+        except (TypeError, ValueError):
+            self._squash_bounces = 1
         self._ensure_timer()
         self.window.update()
 

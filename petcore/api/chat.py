@@ -7,6 +7,7 @@ mod 只看到 :class:`petcore.contracts.api.ApiPort`；代理兜底、取消、�
 from __future__ import annotations
 
 import json
+import logging
 import ssl
 import threading
 import time
@@ -20,8 +21,45 @@ from ..net import errors
 from ..net import websearch
 from ..net.http import urlopen
 
+logger = logging.getLogger("petcore.api.chat")
+
 STREAM_DONE = "[DONE]"
 DEFAULT_MODEL = "deepseek-chat"
+
+#: 传输层抖动（断连/TLS 重置/DNS 抖动）最多再试几次、每次之间歇多久。
+#: 只重试「一个字都还没吐」的失败：已经显示给用户的正文不能重来（会重复）。
+STREAM_RETRY_ATTEMPTS = 3
+OPEN_RETRY_ATTEMPTS = 2
+RETRY_DELAY_S = 0.6
+#: 同一条路由上重开一次连接的条件：只有这两类是「链路本身没通」；超时是慢、
+#: 认证是配置问题，重试只会翻倍等待。
+RETRYABLE_REASONS = (errors.NETWORK, errors.TLS)
+#: 换**路由**再发一次的条件。响应不完整（``protocol``：IncompleteRead/
+#: BadStatusLine/半截 SSE）与超时也算：代理缓冲/空闲掐断正是「小请求能通、
+#: 长连接必死」的典型形状，换条路往往就好了。
+STREAM_RETRY_REASONS = (
+    errors.NETWORK,
+    errors.TLS,
+    errors.PROTOCOL,
+    errors.TIMEOUT,
+)
+#: 正式回答的路由计划：默认（代理优先）→ 只直连 → 只走代理。
+#: 代理把 SSE 卡死或掐断时，重发同一条路只会再失败一次。
+STREAM_ROUTE_PLANS: tuple[tuple[bool, ...] | None, ...] = (None, (False,), (True,))
+
+
+class _Progress:
+    """已向 UI 吐出的内容计数：> 0 就绝不重试（重试会把同一段再打一遍）。"""
+
+    __slots__ = ("content", "reasoning")
+
+    def __init__(self) -> None:
+        self.content = 0
+        self.reasoning = 0
+
+    @property
+    def emitted(self) -> bool:
+        return bool(self.content or self.reasoning)
 
 #: 联网检索阶段最多几轮 planner / 每轮最多几次工具调用（同主分支）。
 _MAX_RESEARCH_ROUNDS = 3
@@ -46,6 +84,11 @@ _CONTEXT_PROMPT = (
     "以资料为准；资料不足以回答时如实说明。如果引用了资料，在回答末尾用「参考来源」"
     "简短列出对应链接。"
 )
+_WEB_UNAVAILABLE_PROMPT = (
+    "本次联网检索暂时不可用，请直接根据已有知识回答，并在回答开头简短说明"
+    "『联网检索暂时不可用，以下内容未联网核实』。"
+)
+_WEB_UNAVAILABLE_STATUS = "联网检索暂时不可用，已改用纯 API 回答"
 _WEB_TOOLS = [
     {
         "type": "function",
@@ -204,6 +247,60 @@ def _context(request: ApiRequest):
     return context
 
 
+def _open_response(
+    http_request: urllib.request.Request,
+    request: ApiRequest,
+    *,
+    timeout: float,
+    opener=None,
+    attempts: int = OPEN_RETRY_ATTEMPTS,
+    routes: tuple[bool, ...] | None = None,
+):
+    """打开连接；传输层抖动时再试一次（``HTTPError`` 是服务器答复，永不重试）。
+
+    秒级抖动（TLS 握手被掐、连接重置、DNS 抖动）在真机上是常态：以前一次失败
+    就直接报「网络不可达」，用户只能再发一遍。这里替用户重发一次，仍然失败才抛。
+
+    ``routes`` 原样透传给 :func:`petcore.net.http.urlopen`，是**本次调用**的路由
+    计划（``(False,)`` = 只直连、``(True,)`` = 只走代理）；它不改写进程级
+    「固定直连」结论——正式回答的换路重试不能替整个进程下结论。
+    """
+    last_exc: Exception | None = None
+    tries = max(1, int(attempts))
+    for index in range(tries):
+        if index:
+            time.sleep(RETRY_DELAY_S)
+        try:
+            return urlopen(
+                http_request,
+                timeout=max(1.0, float(timeout)),
+                context=_context(request),
+                opener=opener,
+                routes=routes,
+            )
+        except errors.HttpStatusError:
+            # 服务器有答复（4xx/5xx）：链路是通的，不重试、不换路，按状态码分类。
+            raise
+        except errors.NetworkError as exc:
+            if exc.reason not in RETRYABLE_REASONS or index + 1 >= tries:
+                raise
+            last_exc = exc
+        except urllib.error.HTTPError as exc:
+            # 服务器有答复（4xx/5xx）：链路是通的，不重试、不换路，按状态码分类。
+            raise errors.http_error(exc) from None
+        except Exception as exc:  # noqa: BLE001 - 传输失败交给统一分类
+            reason = errors.classify_exception(exc)
+            if reason not in RETRYABLE_REASONS or index + 1 >= tries:
+                if reason is None:
+                    raise
+                raise errors.NetworkError(reason=reason) from exc
+            last_exc = exc
+    reason = errors.classify_exception(last_exc) if last_exc is not None else None
+    if reason is None:
+        raise errors.NetworkError(reason=errors.NETWORK)
+    raise errors.NetworkError(reason=reason) from last_exc
+
+
 def _status(on_status, text: str) -> None:
     if on_status is not None:
         on_status(str(text))
@@ -251,7 +348,23 @@ def inject_search_context(
     messages: Sequence[Mapping[str, Any]], notes: str
 ) -> list[dict[str, Any]]:
     """把检索资料并入首条 system 消息（无 system 时插到最前），不改动原列表。"""
-    block = _CONTEXT_PROMPT.format(today=_today_text(), notes=notes)
+    return _merge_system(messages, _CONTEXT_PROMPT.format(today=_today_text(), notes=notes))
+
+
+def inject_web_unavailable_notice(
+    messages: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """告诉模型「这次没联网」，让它在**回答里**说清未核实（不改动原列表）。
+
+    只靠状态行不够：状态行一闪而过，用户看到的仍是一段「像是刚查过」的答案。
+    拼接口径与 :func:`inject_search_context` 一致。
+    """
+    return _merge_system(messages, _WEB_UNAVAILABLE_PROMPT)
+
+
+def _merge_system(
+    messages: Sequence[Mapping[str, Any]], block: str
+) -> list[dict[str, Any]]:
     prepared = [dict(item) if isinstance(item, Mapping) else item for item in messages]
     if (
         prepared
@@ -276,20 +389,7 @@ def _post_json(
 ) -> Mapping[str, Any]:
     """非流式 JSON 请求（联网检索的 planner 用）。"""
     http_request = _build_request(request, payload, accept="application/json")
-    try:
-        response = urlopen(
-            http_request,
-            timeout=max(1.0, float(timeout)),
-            context=_context(request),
-            opener=opener,
-        )
-    except urllib.error.HTTPError as exc:
-        raise errors.http_error(exc) from None
-    except Exception as exc:  # noqa: BLE001 - 传输失败交给统一分类
-        reason = errors.classify_exception(exc)
-        if reason is None:
-            raise
-        raise errors.NetworkError(reason=reason) from exc
+    response = _open_response(http_request, request, timeout=timeout, opener=opener)
     try:
         raw = response.read(4 * 1024 * 1024)
     finally:
@@ -352,6 +452,20 @@ def _run_tool(
     return f"未知工具：{name}", False, []
 
 
+@dataclass(frozen=True, slots=True)
+class ResearchOutcome:
+    """检索阶段的结果：资料、是否真的搜过、是否**失败**。
+
+    ``failed`` 的口径是「这次没能拿到可信的联网资料」：planner 请求失败、
+    任何一次工具调用失败、或整轮预算耗尽。它只决定要不要告诉模型「没联网」，
+    **不是**错误——正式回答照发（``petcore/AGENTS.md``：检索是增强项）。
+    """
+
+    notes: str = ""
+    searched: bool = False
+    failed: bool = False
+
+
 def research(
     request: ApiRequest,
     messages: Sequence[Mapping[str, Any]],
@@ -363,16 +477,16 @@ def research(
     on_status: Callable[[str], None] | None = None,
     cancel: Any | None = None,
     opener=None,
-) -> str:
-    """检索阶段：非思考模式 + 工具调用，让模型决定搜什么；返回资料文本。
+) -> ResearchOutcome:
+    """检索阶段：非思考模式 + 工具调用，让模型决定搜什么；返回 :class:`ResearchOutcome`。
 
     单独走一轮非思考请求，而不是在正式回答里挂 tools：DeepSeek 思考模式带 tools 时
     要求回传历史所有轮次的 ``reasoning_content``（缺失即 400），而会话历史不保存
-    思维链。任何检索失败都降级成状态行，绝不阻断正式回答。
+    思维链。任何检索失败都降级成状态行 + ``failed=True``，绝不阻断正式回答。
     """
     dialogue = _recent_dialogue(messages)
     if not dialogue:
-        return ""
+        return ResearchOutcome()
     tools = list(_WEB_TOOLS) if options.fetch_pages else _WEB_TOOLS[:1]
     planner: list[dict[str, Any]] = [
         {"role": "system", "content": _PLANNER_PROMPT.format(today=_today_text())},
@@ -381,14 +495,16 @@ def research(
     notes: list[str] = []
     used = 0
     searched = False
+    failed = False
     net_timeout = max(5.0, min(float(timeout), 20.0))
     deadline = time.monotonic() + _RESEARCH_BUDGET_SECONDS
     _status(on_status, "正在判断是否需要联网…")
     for round_no in range(_MAX_RESEARCH_ROUNDS):
         if _cancelled(cancel):
-            return ""
+            return ResearchOutcome(_join_notes(notes), searched, failed)
         if time.monotonic() > deadline:
             _status(on_status, "联网检索超时，改用已有资料继续回答")
+            failed = True
             break
         payload: dict[str, Any] = {
             "model": str(model or request.metadata.model or DEFAULT_MODEL),
@@ -403,19 +519,21 @@ def research(
         try:
             data = _post_json(request, payload, timeout=net_timeout, opener=opener)
         except Exception as exc:  # noqa: BLE001 - 检索不可用不影响回答
+            failed = True
             if _cancelled(cancel):
-                return ""
+                return ResearchOutcome(_join_notes(notes), searched, failed)
             if round_no == 0:
                 _status(on_status, f"联网检索不可用（{exc}），将直接回答")
-                return ""
+                return ResearchOutcome(_join_notes(notes), searched, True)
             break
         choices = data.get("choices")
         first = choices[0] if isinstance(choices, list) and choices else None
         message = first.get("message") if isinstance(first, Mapping) else None
         if not isinstance(message, Mapping):
+            failed = True
             if round_no == 0:
                 _status(on_status, "联网检索返回了无法识别的响应，将直接回答")
-                return ""
+                return ResearchOutcome(_join_notes(notes), searched, True)
             break
         calls = [
             call
@@ -435,9 +553,10 @@ def research(
         planner.append(assistant)
         for call in calls:
             if _cancelled(cancel):
-                return ""
+                return ResearchOutcome(_join_notes(notes), searched, failed)
             if time.monotonic() > deadline:
                 _status(on_status, "联网检索超时，改用已有资料继续回答")
+                failed = True
                 break
             function = call.get("function") or {}
             try:
@@ -455,6 +574,8 @@ def research(
             )
             for line in lines:
                 _status(on_status, line)
+            if not ok:
+                failed = True
             if ok and used < _MAX_NOTES_CHARS:
                 note = text[: _MAX_NOTES_CHARS - used]
                 notes.append(note)
@@ -462,8 +583,12 @@ def research(
             planner.append(
                 {"role": "tool", "tool_call_id": str(call.get("id", "")), "content": text}
             )
-    if not searched:
+    if not searched and not failed:
         _status(on_status, "无需联网，直接回答")
+    return ResearchOutcome(_join_notes(notes), searched, failed)
+
+
+def _join_notes(notes: Sequence[str]) -> str:
     return "\n\n---\n\n".join(notes)
 
 
@@ -495,22 +620,52 @@ def stream_chat(
     """
     conversation = [dict(item) if isinstance(item, Mapping) else item for item in messages]
     if web_search is not None and not _cancelled(cancel):
-        notes = research(
-            request,
-            conversation,
-            options=web_search,
-            search_key=search_key,
-            model=model,
-            timeout=timeout,
-            on_status=on_status,
-            cancel=cancel,
-            opener=opener,
-        )
+        # 联网检索是**增强项**，不是回答的前提：检索阶段的任何失败都必须退回
+        # 纯 API 回答（主分支 `pet/chat/providers.py` 的 `_research` 同口径）。
+        # `research()` 自己已经吞掉传输/HTTP/工具错误并标 ``failed``，这里再兜一层
+        # 是给「非预期异常」（回调、解析、未来新增分支）用的——一次检索失败绝不能
+        # 让用户拿到「本次回复未保存」。
+        try:
+            outcome = research(
+                request,
+                conversation,
+                options=web_search,
+                search_key=search_key,
+                model=model,
+                timeout=timeout,
+                on_status=on_status,
+                cancel=cancel,
+                opener=opener,
+            )
+        except Exception as exc:  # noqa: BLE001 - 检索失败降级，不冒泡给界面
+            if _cancelled(cancel):
+                return ChatResult(text="", cancelled=True)
+            # 只记类型：异常文本可能带 URL/查询串。
+            logger.warning("web search degraded to a plain answer: %s", type(exc).__name__)
+            _status(on_status, "联网检索不可用，将直接回答")
+            outcome = ResearchOutcome(failed=True)
         if _cancelled(cancel):
             return ChatResult(text="", cancelled=True)
-        if notes:
-            conversation = inject_search_context(conversation, notes)
-            _status(on_status, "已获取联网资料，正在组织回答…")
+        if outcome.notes:
+            try:
+                conversation = inject_search_context(conversation, outcome.notes)
+            except Exception as exc:  # noqa: BLE001 - 资料拼接失败同样降级
+                logger.warning(
+                    "web search context injection failed: %s", type(exc).__name__
+                )
+                _status(on_status, "联网资料无法并入提问，将直接回答")
+            else:
+                _status(on_status, "已获取联网资料，正在组织回答…")
+        elif outcome.failed:
+            # 没资料但确实试过：让模型在回答里自己说清「未联网核实」。只在
+            # 「一条资料都没拿到」时这么说；拿到了就不用给用户泼冷水。
+            try:
+                conversation = inject_web_unavailable_notice(conversation)
+            except Exception as exc:  # noqa: BLE001 - 拼接失败也要照常回答
+                logger.warning(
+                    "web search notice injection failed: %s", type(exc).__name__
+                )
+            _status(on_status, _WEB_UNAVAILABLE_STATUS)
 
     payload = build_payload(
         request,
@@ -520,21 +675,72 @@ def stream_chat(
         thinking=thinking,
         reasoning_effort=reasoning_effort,
     )
+    progress = _Progress()
+    attempt = 0
+    while True:
+        attempt += 1
+        routes = STREAM_ROUTE_PLANS[min(attempt - 1, len(STREAM_ROUTE_PLANS) - 1)]
+        try:
+            return _stream_once(
+                request,
+                payload,
+                timeout=timeout,
+                on_delta=on_delta,
+                on_reasoning=on_reasoning,
+                on_status=on_status,
+                cancel=cancel,
+                opener=opener,
+                progress=progress,
+                routes=routes,
+            )
+        except errors.NetworkError as exc:
+            if (
+                attempt >= STREAM_RETRY_ATTEMPTS
+                or _cancelled(cancel)
+                or progress.emitted
+                or not _stream_retryable(exc)
+            ):
+                raise
+            # 一个字都没到用户眼前：这一次失败对用户等于「没发生」，换条路由重发。
+            _status(on_status, "网络抖动，正在重试…")
+            time.sleep(RETRY_DELAY_S)
+
+
+def _stream_retryable(exc: errors.NetworkError) -> bool:
+    """这次失败值不值得换一条路由再发一次。
+
+    ``HttpStatusError`` 是服务器对这次请求的明确答复（401/429/HTTP 错误帧，
+    含 500/502/504——:func:`petcore.net.http.urlopen` 已经在两条路由上问过了），
+    换条路只会把同一句话再问一遍。
+    """
+    if isinstance(exc, errors.HttpStatusError):
+        return False
+    return exc.reason in STREAM_RETRY_REASONS
+
+
+def _stream_once(
+    request: ApiRequest,
+    payload: dict[str, Any],
+    *,
+    timeout: float,
+    on_delta: Callable[[str], None] | None,
+    on_reasoning: Callable[[str], None] | None,
+    on_status: Callable[[str], None] | None,
+    cancel: Any | None,
+    opener,
+    progress: _Progress,
+    routes: tuple[bool, ...] | None = None,
+):
+    """一次正式流式请求（打开 + 读流）；失败分类与半条回答的语义同 ``stream_chat``。"""
     http_request = _build_request(request, payload)
-    try:
-        response = urlopen(
-            http_request,
-            timeout=max(1.0, float(timeout)),
-            context=_context(request),
-            opener=opener,
-        )
-    except urllib.error.HTTPError as exc:
-        raise errors.http_error(exc) from None
-    except Exception as exc:  # noqa: BLE001 - 传输失败交给统一分类
-        reason = errors.classify_exception(exc)
-        if reason is None:
-            raise
-        raise errors.NetworkError(reason=reason) from exc
+    response = _open_response(
+        http_request,
+        request,
+        timeout=timeout,
+        opener=opener,
+        attempts=1,
+        routes=routes,
+    )
 
     parts: list[str] = []
     reasoning_parts: list[str] = []
@@ -563,11 +769,13 @@ def stream_chat(
             finish_reason = finish
         if reasoning:
             reasoning_parts.append(reasoning)
+            progress.reasoning += 1
             if on_reasoning is not None:
                 on_reasoning(reasoning)
         if delta:
             parts.append(delta)
             chunks += 1
+            progress.content += 1
             if on_delta is not None:
                 on_delta(delta)
 
@@ -653,11 +861,13 @@ def stream_chat(
         text, reasoning, finish = _extract_delta(body)
         if reasoning:
             reasoning_parts.append(reasoning)
+            progress.reasoning += 1
             if on_reasoning is not None:
                 on_reasoning(reasoning)
         if text:
             parts.append(text)
             chunks += 1
+            progress.content += 1
             if on_delta is not None:
                 on_delta(text)
         if finish:

@@ -587,7 +587,7 @@ class CoreApiPort:
         *,
         model: str = "",
         temperature: float | None = None,
-        timeout: float = 60.0,
+        timeout: float | None = None,
         on_delta=None,
         on_reasoning=None,
         on_status=None,
@@ -596,15 +596,26 @@ class CoreApiPort:
         web_search=None,
         cancel=None,
     ):
-        """Core 唯一的对话出口：mod 只给消息与开关，HTTP/SSE 与密钥都在这里。"""
+        """Core 唯一的对话出口：mod 只给消息与开关，HTTP/SSE 与密钥都在这里。
+
+        ``timeout`` 留空时取该服务在 ``api.json`` 里配置的超时（1..300 已由
+        ``api/spec.py`` 校验）：设置页里那一行必须真的生效，而不是永远 60 秒。
+        """
         from ..api.chat import stream_chat
 
+        api_request = self.resolve(service_id)
+        if timeout is None:
+            try:
+                configured = float(api_request.metadata.timeout or 0)
+            except (TypeError, ValueError):
+                configured = 0.0
+            timeout = max(5.0, min(300.0, configured)) if configured > 0 else 60.0
         search_key = ""
         if web_search is not None:
             engine = str(getattr(web_search, "engine", "") or "")
             search_key = self._web_search_key(engine)
         return stream_chat(
-            self.resolve(service_id),
+            api_request,
             messages,
             model=model,
             temperature=temperature,

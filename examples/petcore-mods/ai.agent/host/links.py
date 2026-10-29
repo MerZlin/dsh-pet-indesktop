@@ -8,6 +8,8 @@
 * ``prefs() -> LinkPrefs``：每次判定现取，设置改完立即生效；
 * ``visible() -> bool``：隐藏态不切动画；
 * ``animations() -> tuple[str, ...]``：当前角色的动作名；
+* ``animation_state() -> AnimationState | None``（可选）：正在播的动作名 / 循环标志 /
+  接管态；旧 Core 没有这个方法，返回 ``None`` 表示「未知」；
 * ``play_animation(name)`` / ``reset_idle()`` / ``say(text, important=False)``；
 * ``play_sound(kind)``：``kind`` 为 ``start`` / ``done`` / ``error``。
 """
@@ -36,6 +38,11 @@ ACTIVITY_GLOBAL_MIN_S = 8.0
 ACTIVITY_SAME_LABEL_S = 60.0
 #: 音效冷却（默认值，可被配置覆盖）。
 SOUND_COOLDOWN_S = 2.0
+#: 联动动作的最小旋转间隔。一次联动动作是 10 秒级的单次片段，而 DSH 一轮思考里
+#: 每 1.5 s 就可能写一条 busy 事件：按 ``ai_agent_min_interval_seconds``（默认 2 s）
+#: 重发 ``play_animation`` 会让 WebM 终止+重开、FrameSeq 回到第 0 帧，整轮思考都在
+#: 烧 CPU。即使上一次动作已经播完、名字变了，也不许比这个间隔更频繁地换动作。
+AGENT_ANIMATION_MIN_SECONDS = 8.0
 
 ERROR_TEXT = "好像遇到报错了…"
 ATTENTION_TEXT = "这边需要你看一眼～"
@@ -80,6 +87,10 @@ class LinkEngine:
         self._activity_global_last = 0.0
         self._sound_at: dict[tuple[str, str], float] = {}
         self._link_seq = 0
+        # 上一次真正请求的联动动作（名字 + 时刻）：用来判断「我请求的那段还在播吗」
+        # 与旋转地板。跨 Agent 共用一份——动画状态是整个桌宠的，不分 Agent。
+        self._last_anim_name = ""
+        self._last_anim_at: float | None = None
 
     # ------------------------------------------------------------ 查询
 
@@ -98,6 +109,8 @@ class LinkEngine:
         self._raw.clear()
         self._applied.clear()
         self._link_seq = 0
+        self._last_anim_name = ""
+        self._last_anim_at = None
 
     def close(self) -> None:
         self.reset()
@@ -168,9 +181,48 @@ class LinkEngine:
         self._applied[agent] = ("working", now)
         if not prefs.animation or not self._bridge.visible():
             return
+        if not self._should_request(now):
+            return
         name = self._next_animation()
-        if name:
-            self._bridge.play_animation(name)
+        if not name:
+            return
+        self._last_anim_name = name
+        self._last_anim_at = now
+        self._bridge.play_animation(name)
+
+    def _animation_state(self):
+        """问 Core 当前动画状态；旧桥没有这个方法就返回 ``None``（= 未知）。"""
+        query = getattr(self._bridge, "animation_state", None)
+        if not callable(query):
+            return None
+        try:
+            return query()
+        except Exception:  # noqa: BLE001 - 查询失败按未知处理，不该打断状态机
+            return None
+
+    def _should_request(self, now: float) -> bool:
+        """这一拍要不要真的请求联动动作（不改旋转序列）。
+
+        状态可读时两条闸门，缺一条就是「整轮思考每 2 秒重开一次素材」：
+
+        1. 我上一次请求的那段**还在播**（名字相同、当前没被探头/击飞/拖拽接管）
+           → 让它播完，不重发；
+        2. 旋转地板 :data:`AGENT_ANIMATION_MIN_SECONDS`：即使名字已经变了，也
+           不许比这更频繁地换动作。
+
+        旧 Core 查不到状态（``None``）时退回旧的节流口径：每
+        ``min_interval`` 一拍请求一次，不额外加闸（不认识的状态不猜）。
+        """
+        state = self._animation_state()
+        if state is None:
+            return True
+        last_at = self._last_anim_at
+        if last_at is not None and (now - last_at) < AGENT_ANIMATION_MIN_SECONDS:
+            return False
+        if self._last_anim_name and not bool(getattr(state, "locked", False)):
+            if str(getattr(state, "name", "") or "") == self._last_anim_name:
+                return False
+        return True
 
     def _next_animation(self) -> str:
         acts = tuple(self._bridge.animations() or ())

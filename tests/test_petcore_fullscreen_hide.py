@@ -132,6 +132,25 @@ def test_real_probe_reports_unsupported_without_raising() -> None:
     assert fs.probe_fullscreen_hit() is hit or isinstance(fs.probe_fullscreen_hit(), bool)
 
 
+def test_task_manager_is_never_a_fullscreen_app(monkeypatch) -> None:
+    """置顶最大化的任务管理器铺满整块屏，但它不是全屏应用：探测层直接排除。"""
+    monkeypatch.setattr(fs, "supported", lambda: True)
+    monkeypatch.setattr(
+        fs.foreground,
+        "foreground_window_info",
+        lambda: {
+            "pid": 4242,
+            "process": "Taskmgr.exe",  # Windows 报的是首字母大写
+            "title": "任务管理器",
+            "hwnd": 1,
+            "rect": (0, 0, 1920, 1080),
+        },
+    )
+    hit, detail = fs.probe_fullscreen()
+    assert hit is False, "任务管理器不许触发全屏隐藏"
+    assert "taskmgr" in detail.lower(), detail
+
+
 # ------------------------------------------------------------------ 状态机
 
 
@@ -162,9 +181,16 @@ class FakeProbe:
         return (self.hit, "fake probe")
 
 
-def _controller(pets, probe, *, supported: bool = True):
+def _controller(pets, probe, *, supported: bool = True, confirm_polls: int = 1):
+    """单拍即翻（``confirm_polls=1``）：下面这些用例验的是状态机对账语义，
+    不是连拍确认本身；连拍确认另有用默认值（2）的专门用例。
+    """
     return FullscreenHideController(
-        lambda: list(pets), probe=probe, supported=supported, interval_ms=60_000
+        lambda: list(pets),
+        probe=probe,
+        supported=supported,
+        interval_ms=60_000,
+        confirm_polls=confirm_polls,
     )
 
 
@@ -380,6 +406,96 @@ def test_probe_failure_keeps_state(app) -> None:
         probe.error = RuntimeError("boom")
         ctrl.poll()
         assert a.visible is False, "探测异常不翻转状态，也不抛给宿主"
+    finally:
+        ctrl.stop()
+
+
+def test_flip_needs_two_consecutive_polls_by_default(app) -> None:
+    """默认 confirm_polls=2：单拍命中/单拍未命中都不翻状态。"""
+    a = FakePet(0)
+    probe = FakeProbe(True)
+    ctrl = FullscreenHideController(
+        lambda: [a], probe=probe, supported=True, interval_ms=60_000
+    )
+    try:
+        assert ctrl.confirm_polls == 2, "默认连拍确认数是 2"
+        ctrl.set_enabled(True)  # 第 1 拍命中：只是候选
+        assert a.visible is True
+        ctrl.poll()  # 第 2 拍命中：确认隐藏
+        assert a.visible is False
+        assert a.calls == [False]
+
+        probe.hit = False
+        ctrl.poll()  # 第 1 拍未命中：只是候选
+        assert a.visible is False, "单拍未命中不恢复"
+        ctrl.poll()  # 第 2 拍未命中：确认恢复
+        assert a.visible is True
+        assert a.calls == [False, True]
+    finally:
+        ctrl.stop()
+
+
+def test_alternating_probe_never_flaps_with_default_confirmation(app) -> None:
+    """任务管理器/UWP 覆盖层/焦点闪现：20 拍单拍交替只留一次隐藏、一次恢复。"""
+    a = FakePet(0)
+    probe = FakeProbe(True)
+    ctrl = FullscreenHideController(
+        lambda: [a], probe=probe, supported=True, interval_ms=60_000
+    )
+    try:
+        ctrl.set_enabled(True)
+        ctrl.poll()  # 两拍命中 → 隐藏
+        assert a.visible is False
+        for index in range(20):
+            # 未命中/命名单拍交替，且以命中收尾（不留半个未命中候选）。
+            probe.hit = index % 2 == 1
+            ctrl.poll()
+            assert a.visible is False, f"第 {index + 1} 拍抖动不许把桌宠放出来"
+        assert a.calls == [False], "抖动期间一次多余的 set_visible 都不许有"
+        probe.hit = False
+        ctrl.poll()
+        assert a.visible is False, "单拍未命中不恢复"
+        ctrl.poll()
+        assert a.visible is True
+        assert a.calls == [False, True], "20 拍抖动之后仍只有一次隐藏和一次恢复"
+    finally:
+        ctrl.stop()
+
+
+def test_confirm_polls_is_configurable_and_clamped(app) -> None:
+    pet = FakePet(0)
+    ctrl = _controller([pet], FakeProbe(True), confirm_polls=3)
+    try:
+        ctrl.set_enabled(True)
+        ctrl.poll()
+        assert pet.visible is True, "3 拍确认：前两拍只是候选"
+        ctrl.poll()
+        assert pet.visible is False
+        assert pet.calls == [False]
+    finally:
+        ctrl.stop()
+
+    clamped = _controller([FakePet(0)], FakeProbe(True), confirm_polls=0)
+    try:
+        assert clamped.confirm_polls == 1, "0/负数按单拍处理"
+    finally:
+        clamped.stop()
+
+
+def test_disabling_clears_pending_candidate(app) -> None:
+    """关开关时未确认的候选一并作废：重新打开要重新攒拍，不许沿用旧候选。"""
+    a = FakePet(0)
+    probe = FakeProbe(True)
+    ctrl = FullscreenHideController(
+        lambda: [a], probe=probe, supported=True, interval_ms=60_000
+    )
+    try:
+        ctrl.set_enabled(True)  # 候选 1/2
+        ctrl.set_enabled(False)
+        ctrl.set_enabled(True)  # 重新开：候选重新从 1/2 起算
+        assert a.visible is True
+        ctrl.set_enabled(False)
+        assert a.visible is True and a.calls == []
     finally:
         ctrl.stop()
 

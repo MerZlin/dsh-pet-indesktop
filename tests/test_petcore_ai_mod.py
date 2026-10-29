@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -1159,4 +1160,166 @@ def test_transport_failure_without_content_still_reports_an_error(tmp_path, quic
 
     errors_seen = [call for call in port.calls if call[0] == "error"]
     assert errors_seen and errors_seen[0][1] == net_errors.NETWORK
+    # 屏幕上只能是中文：英文 reason 是给日志/分类用的，不是给人看的。
+    assert errors_seen[0][2] == "网络不可达"
     assert not [call for call in port.calls if call[0] == "done"]
+
+
+def test_ai_chat_failure_text_never_repeats_the_reason(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    instance = _create_host(context).runtime_factory(context)
+    try:
+        module = sys.modules[type(instance).__module__]
+        failure_cls = module.AiChatFailure
+        assert str(failure_cls("network", "网络不可达")) == "网络不可达"
+        assert str(failure_cls("tls")) == "证书校验失败"
+        assert str(failure_cls("network", "HTTP 502")) == "网络不可达：HTTP 502"
+        # 「看看屏幕」的气泡文案也走同一张表（以前会显示英文 network）。
+        assert module._REASON_TEXT["network"] == "网络不可达"
+        assert module._REASON_TEXT["protocol"] == "服务端返回了无法识别的响应"
+    finally:
+        instance.stop()
+
+
+# ---------------------------------------------------------------- 联网检索降级
+
+
+def test_web_search_failure_never_reaches_the_mod_error_path(tmp_path: Path, monkeypatch) -> None:
+    """联网检索挂了也要走 done（带「未联网核实」说明），不能弹错误卡。
+
+    这是用户看到的那条链：mod → core 传输层 → 本机服务端。检索轮先回一个
+    ``web_search`` 工具调用、搜索本身抛错，正式回答必须照发；状态行走
+    ``ChatPort.status``，**不是** ``ChatPort.error``。
+    """
+    import json
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from petcore.api.chat import stream_chat as core_stream_chat
+    from petcore.contracts.api import ApiMetadata, ApiRequest
+    from petcore.net import errors as net_errors
+    from petcore.net import http as net_http
+    from petcore.net import websearch
+
+    planner_calls = {"count": 0}
+
+    class _Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *_args):  # noqa: A003 - 静音
+            return
+
+        def do_POST(self):  # noqa: N802 - HTTP 方法名
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if body.get("tools"):
+                planner_calls["count"] += 1
+                if planner_calls["count"] == 1:
+                    payload = {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": "",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_1",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "web_search",
+                                                "arguments": json.dumps({"query": "新闻"}),
+                                            },
+                                        }
+                                    ],
+                                }
+                            }
+                        ]
+                    }
+                else:
+                    payload = {"choices": [{"message": {"content": "无需搜索"}}]}
+                data = json.dumps(payload, ensure_ascii=False).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            data = (
+                b'data: {"choices":[{"delta":{"content":"\xe7\xba\xaf API \xe5\x9b\x9e\xe7\xad\x94"}}]}\n\n'
+                b"data: [DONE]\n\n"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    class _Server(ThreadingHTTPServer):
+        daemon_threads = True
+
+        def handle_error(self, request, client_address):
+            return
+
+    httpd = _Server(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+    def boom(*_args, **_kwargs):
+        raise websearch.SearchError("连接被重置", reason=net_errors.NETWORK)
+
+    monkeypatch.setattr(websearch, "search", boom)
+
+    def direct_urlopen(request, *, timeout, context=None, opener=None, routes=None, **kwargs):
+        return net_http._opener(False, context).open(request, timeout=timeout, **kwargs)  # noqa: SLF001
+
+    # 本机服务端：绕过系统代理，用例只观察 mod 的错误路径有没有被走。
+    monkeypatch.setattr("petcore.api.chat.urlopen", direct_urlopen)
+
+    context = _context(tmp_path)
+    context.host.config.set("ai_web_search", True)
+    request = ApiRequest(
+        ApiMetadata(
+            service_id="svc",
+            name="服务",
+            base_url=f"http://127.0.0.1:{httpd.server_address[1]}",
+            model="chat-model",
+        ),
+        "secret-key",
+    )
+
+    def stream(
+        service_id,
+        messages,
+        *,
+        web_search=None,
+        cancel=None,
+        on_delta=None,
+        on_reasoning=None,
+        on_status=None,
+        **_kwargs,
+    ):
+        return core_stream_chat(
+            request,
+            messages,
+            on_delta=on_delta,
+            on_reasoning=on_reasoning,
+            on_status=on_status,
+            web_search=web_search,
+            cancel=cancel,
+            timeout=5.0,
+        )
+
+    context.ports.api.stream_chat = stream
+    instance = _create_host(context).runtime_factory(context)
+    chat = context.ports.chat
+    try:
+        instance._start(0, [{"role": "user", "content": "今天有什么新闻"}])
+        assert chat.done_event.wait(10), "失败回调没有结束"
+    finally:
+        instance.stop()
+        httpd.shutdown()
+        httpd.server_close()
+
+    assert not [call for call in chat.calls if call[0] == "error"], chat.calls
+    assert any(
+        call[0] == "status" and "联网检索暂时不可用" in call[1] for call in chat.calls
+    ), chat.calls
+    done = [call for call in chat.calls if call[0] == "done"]
+    assert done and "纯 API 回答" in done[-1][1]

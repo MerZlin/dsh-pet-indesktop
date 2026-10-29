@@ -196,6 +196,20 @@ class _PresentationAdapter:
     def refresh_scene(self, owner: str) -> bool:
         return presentation_gate.refresh_scene(owner)
 
+    def hide(self, owner: str = "") -> None:
+        """收起气泡；给了 ``owner`` 就只在它仍持有展示会话时收（别人的不动）。"""
+        name = str(owner or "").strip()
+        if name and presentation_gate.owner() != name:
+            return
+        window = self._window()
+        hider = getattr(window, "hide_bubble", None)
+        if not callable(hider):
+            return
+        try:
+            hider()
+        except Exception:  # noqa: BLE001 - 收气泡失败不该影响调用方状态机
+            logger.debug("hide bubble failed", exc_info=True)
+
     def animation_state(self):
         """当前动画名 + 循环标志 + 接管态；读不到（窗口没有动画状态）返回 None。"""
         window = self._window()
@@ -1465,9 +1479,10 @@ class CoreHost:
         say = getattr(target, "say", None)
         if callable(say):
             message = (
-                "已开启鼠标穿透，可从托盘菜单关闭"
+                "已开启鼠标穿透（仅左键）：左键点下层/长按拖动，右键单击互动、右键长按菜单。"
+                "可从托盘菜单关闭"
                 if value
-                else "已关闭鼠标穿透"
+                else "已关闭鼠标穿透（恢复左键点击）"
             )
             try:
                 say(message, 5000)
@@ -1487,6 +1502,23 @@ class CoreHost:
                 logger.debug("failed to close dialog", exc_info=True)
             if getattr(self, attribute, None) is dialog:
                 setattr(self, attribute, None)
+
+    def pause_for_session(self) -> None:
+        """锁屏/睡眠：停播放与碰撞（窗口不隐藏，解锁后原地续播）。"""
+        manager = getattr(self, "pets", None)
+        if manager is not None:
+            try:
+                manager.pause_for_session()
+            except Exception:  # noqa: BLE001 - 挂起路径不许被单只宠拖垮
+                logger.debug("pause for session failed", exc_info=True)
+
+    def resume_after_session(self) -> None:
+        manager = getattr(self, "pets", None)
+        if manager is not None:
+            try:
+                manager.resume_after_session()
+            except Exception:  # noqa: BLE001
+                logger.debug("resume after session failed", exc_info=True)
 
     def quit_app(self) -> None:
         self._closing = True
@@ -1595,7 +1627,17 @@ def run(config: Config, *, root: Path, mod_dirs, instance: str | None = None) ->
 
         start_background_provision(host)
 
-    watcher = SessionWatcher(manager.shutdown, app)
+    watcher = SessionWatcher(
+        manager.shutdown,
+        app,
+        on_lock=host.pause_for_session,
+        on_unlock=host.resume_after_session,
+        hwnd_provider=(
+            lambda: int(manager.primary.winId())
+            if manager.primary is not None
+            else 0
+        ),
+    )
     watcher.install()
     _wire_screens(app, manager)
 

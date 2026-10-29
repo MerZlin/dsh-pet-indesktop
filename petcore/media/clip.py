@@ -77,8 +77,37 @@ class PetClip:
         result = self._impl.start()
         return result is not False
 
+    def rearm_same(self) -> None:
+        """同一段 clip 的续圈：帧序列在跑时不要拉回第 0 帧。
+
+        WebM 的 ``start()`` 本身是圈末 re-arm 的入口（``_running`` 为真时也
+        需要它唤醒驻留的 reader），所以只让显式提供 ``rearm_same`` 的实现
+        走短路；其余仍按旧语义 ``start()``。
+        """
+        rearm = getattr(self._impl, "rearm_same", None)
+        if callable(rearm):
+            rearm()
+            return
+        self.start()
+
     def stop(self) -> None:
         self._impl.stop()
+
+    def pause(self) -> None:
+        pause = getattr(self._impl, "pause", None)
+        if callable(pause):
+            try:
+                pause()
+            except Exception:
+                pass
+
+    def resume(self) -> None:
+        resume = getattr(self._impl, "resume", None)
+        if callable(resume):
+            try:
+                resume()
+            except Exception:
+                pass
 
     def jump_to_frame(self, index: int) -> bool:
         try:
@@ -154,10 +183,16 @@ def create_clip(path: Path, name: str) -> PetClip | None:
 
 def create_frame_clip(frames_dir: Path, name: str) -> PetClip | None:
     try:
+        from PySide6.QtCore import Qt
+
         from pet.frameseq_clip import FrameSeqClip
     except Exception:
         return None
-    return PetClip(FrameSeqClip(frames_dir), name)
+    # petcore 的帧表是 24fps 级的呈现节拍，Coarse 的 5% 容差无感；
+    # Precise 会让 24fps 常驻把系统计时器精度钉在 1ms（旧版仍用默认 Precise）。
+    return PetClip(
+        FrameSeqClip(frames_dir, timer_type=Qt.TimerType.CoarseTimer), name
+    )
 
 
 def create_fallback_clip(name: str = "fallback") -> PetClip:

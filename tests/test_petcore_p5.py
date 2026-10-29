@@ -31,6 +31,7 @@ from petcore.engine.collision import (
     circles_from_rect,
     collide,
     deepest_overlap,
+    rects_may_touch,
     separation_distance,
     stable_tie_break,
 )
@@ -75,6 +76,32 @@ def test_deepest_overlap_is_none_when_far_apart() -> None:
     a = circles_from_rect((0, 0, 100, 100))
     b = circles_from_rect((300, 0, 100, 100))
     assert deepest_overlap(a, b) is None
+
+
+def test_rects_may_touch_is_a_necessary_condition_only() -> None:
+    """粗筛只排除「矩形分离」的配对：相交 / 相切 / 重叠都必须放行给圆链判定。"""
+    assert rects_may_touch((0, 0, 100, 100), (40, 0, 100, 100)) is True
+    assert rects_may_touch((0, 0, 100, 100), (0, 0, 100, 100)) is True
+    assert rects_may_touch((0, 0, 100, 100), (100.5, 0, 100, 100)) is True
+    assert rects_may_touch((0, 0, 100, 100), (0, 100.5, 100, 100)) is True
+    assert rects_may_touch((0, 0, 100, 100), (300, 0, 100, 100)) is False
+    assert rects_may_touch((0, 0, 100, 100), (0, 300, 100, 100)) is False
+    # 退化矩形（宽/高为 0）没有内切圆 ⇒ 不可能接触。
+    assert rects_may_touch((0, 0, 0, 100), (0, 0, 100, 100)) is False
+
+
+def test_collide_rejects_far_bodies_before_circle_math() -> None:
+    """99 只时 n² 对里绝大多数离得很远：粗筛直接返回 None，结果与圆链判定一致。"""
+    a = CollisionBody(x=0, y=0, width=100, height=100, slot=1)
+    b = CollisionBody(x=900, y=900, width=100, height=100, slot=2)
+    assert collide(a, b) is None
+
+
+def test_collide_still_reports_overlapping_bodies() -> None:
+    a = CollisionBody(x=0, y=0, width=100, height=100, slot=1)
+    b = CollisionBody(x=20, y=0, width=100, height=100, slot=2)
+    result = collide(a, b)
+    assert result is not None and result.depth > 0 and result.nx > 0
 
 
 def test_stable_tie_break_is_deterministic_and_unit_length() -> None:

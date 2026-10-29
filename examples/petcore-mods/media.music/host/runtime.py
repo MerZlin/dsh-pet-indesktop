@@ -3,7 +3,9 @@
 一秒一拍（``POLL_MS``）。**所有系统调用只跑在常驻后台线程**（``start()`` 起
 ``music-smtc``）：主分支实测在主线程查 SMTC 会永久阻塞窗口，所以 GUI 线程这一拍
 只做「唤醒采样线程」；上一拍没回来就跳过（不排队、不堆积），结果经
-``scheduler.call_later(0)`` 回到 GUI 线程再动动画与气泡。
+``scheduler.call_later(0)`` 回到 GUI 线程再动动画与气泡。采样线程没了就记一条日志
+并在下一拍重拉，**绝不在 GUI 线程上补采一次**（那就是把实测会卡死窗口的调用搬回
+主线程）。
 
 ## 三件事各有一条状态机
 
@@ -22,6 +24,17 @@
 
 ## 几条刻意的取舍
 
+- **取词只有一条常驻线程**（``lyric-fetch``，单槽队列）：旧实现每次取词都
+  ``Thread(...).start()``，一首歌三拨、每拨三源六跳，切歌快的时候十几条线程同时在
+  跑，`stop()` 还停不掉。现在同一时刻最多一个请求在飞，新任务替换排队中的那个并
+  取消在飞的那个（``fetch_lyrics(cancelled=...)`` 在每跳之间收手）；``stop()``
+  置停止位并**有界等待**（``FETCH_JOIN_SECONDS``）线程退出。
+- **失败记进内存负缓存**：同一首（同标题）刚失败过，60 秒内不再联网——哪怕曲目
+  身份在抖动（艺人字段晚一拍到、SMTC 掉线换窗口源），也不会反复重取。
+  每曲 3 次的上限照旧；负缓存只挡"同标题的重复轮次"。
+- **身份抖动不算换歌**：暂停里与播放中一视同仁——**歌名相同**的新身份记成当前
+  曲目的别名（``_track_aliases``），保留曲目/歌词/取词配额；只有歌名真的变了才
+  ``_begin_track``。
 - **不因一次缺席清空歌词**：旧实现一次采样失败就 ``_forget_track()``，于是同一
   首歌被当成新歌重新联网取词、重放第一句、重启动画。现在只有"换了一首歌"才替换
   曲目状态，缺席只冻结时钟。
@@ -50,12 +63,15 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass
 
 from . import audio_sessions, now_playing, players, recognizer, sampling, window_source
 from . import lyrics as lyrics_mod
+
+log = logging.getLogger("media.music")
 
 #: 播放时让桌宠哼歌的动画名（角色包里 ``random/悠闲哼歌``）。
 SING_ANIM = "悠闲哼歌"
@@ -78,6 +94,16 @@ MIN_BUBBLE_SECONDS = 2.0
 #: 取词失败后的冷却（秒），以及每曲最多尝试次数。
 LYRIC_RETRY_SECONDS = 60.0
 LYRIC_MAX_ATTEMPTS = 3
+#: 取词失败的**内存负缓存**：同一首歌（归一后的标题）在这么多秒内不再联网。
+#: 冷却/配额是"每曲"的，而负缓存挡的是**身份抖动出来的新曲目**（同标题、新 key）。
+LYRIC_NEGATIVE_TTL = 60.0
+#: 负缓存的条目上限（一次运行最多记这么多首，按到期时间淘汰最早的）。
+LYRIC_NEGATIVE_LIMIT = 64
+#: 取词线程的退出等待上限（秒）：一轮取词最多 ``lyrics.DEFAULT_TIMEOUT``，不能把
+#: ``stop()``（GUI 线程）卡满 8 秒。超时就记一条日志，线程靠取消位自行退出。
+FETCH_JOIN_SECONDS = 1.0
+#: 常驻取词线程名（诊断与测试都按这个名字找它）。
+FETCH_THREAD_NAME = "lyric-fetch"
 #: 「歌词对齐」每次的步长与循环区间（秒）。
 OFFSET_STEP = 0.5
 OFFSET_MIN = -3.0
@@ -121,7 +147,172 @@ def next_offset(current: float) -> float:
 
 
 def _spawn_thread(work) -> None:
+    """一次性后台任务（传输命令这类用户手点的冷路径；取词**不走这里**）。"""
     threading.Thread(target=work, name="music-runtime", daemon=True).start()
+
+
+def _never() -> bool:
+    """``cancelled`` 的默认值：这一轮不取消（同步派发路径没有取消位）。"""
+    return False
+
+
+class _LyricJob:
+    """一次取词任务：``work(cancel)`` 在取词线程上跑。
+
+    ``cancel`` 是一个 :class:`threading.Event`：被新一轮顶掉或运行时停止时置位，
+    取词循环在**每次发请求之前**看它一眼（``fetch_lyrics(cancelled=...)``）。
+    """
+
+    __slots__ = ("work", "cancel")
+
+    def __init__(self, work) -> None:
+        self.work = work
+        self.cancel = threading.Event()
+
+    def run(self) -> None:
+        try:
+            self.work(self.cancel)
+        except Exception:  # 取词任务自己兜住所有异常，这里只防"线程被打断"
+            log.exception("lyric fetch job crashed")
+
+
+class LyricFetchWorker:
+    """常驻取词线程：**单槽**请求队列，同一时刻最多一个请求在飞。
+
+    - ``submit(work)`` 把任务放进唯一的槽位：排队中的旧任务被丢弃并置取消位，
+      **正在跑的那个也会被置取消位**（它的下一跳之前就会收手）。
+    - 线程只建一次（**第一次真正取词时**才建：从不取词的运行时不占线程）；``start()``
+      幂等。``stop()`` 置停止位并**有界** ``join``，绝不把 GUI 线程押在一次 8 秒的
+      HTTP 上。
+    - 取词本身的异常/结果交回 GUI 线程由 ``work`` 自己负责（它持有运行时那半）。
+    """
+
+    __slots__ = (
+        "_name", "_lock", "_wake", "_closing", "_stopped", "_pending", "_running", "_thread",
+    )
+
+    def __init__(self, name: str = FETCH_THREAD_NAME) -> None:
+        self._name = name
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._closing = threading.Event()
+        self._stopped = False
+        self._pending: _LyricJob | None = None
+        self._running: _LyricJob | None = None
+        self._thread: threading.Thread | None = None
+
+    # ---------------------------------------------------------------- 查询
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def alive(self) -> bool:
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
+    def busy(self) -> bool:
+        """有任务在飞或排队（诊断与测试用）。"""
+        with self._lock:
+            return self._running is not None or self._pending is not None
+
+    def pending(self) -> int:
+        with self._lock:
+            return 1 if self._pending is not None else 0
+
+    # ---------------------------------------------------------------- 生命周期
+
+    def arm(self) -> None:
+        """允许再次 ``submit``（运行时 ``start()`` 时调用）；**不建线程**。
+
+        线程在第一次真正取词时才建：一声不吭的运行时不占一条常驻线程。
+        """
+        with self._lock:
+            self._stopped = False
+
+    def start(self) -> None:
+        with self._lock:
+            self._stopped = False
+            thread = self._thread
+            if thread is not None and thread.is_alive():
+                self._closing.clear()
+                return
+            self._closing = threading.Event()
+            self._wake = threading.Event()
+            self._thread = threading.Thread(
+                target=self._loop,
+                args=(self._closing, self._wake),
+                name=self._name,
+                daemon=True,
+            )
+            self._thread.start()
+
+    def stop(self, timeout: float = FETCH_JOIN_SECONDS) -> bool:
+        """置停止位 + 取消在飞/排队的任务；返回线程是否已经退出。"""
+        with self._lock:
+            self._stopped = True
+            pending, self._pending = self._pending, None
+            running = self._running
+        for job in (pending, running):
+            if job is not None:
+                job.cancel.set()
+        self._closing.set()
+        self._wake.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout)
+        return not self.alive()
+
+    def submit(self, work) -> bool:
+        """排队一次取词；已 ``stop()`` 时返回 False（调用方放弃这一次）。"""
+        with self._lock:
+            if self._stopped:
+                return False
+        self.start()
+        if not self.alive():
+            # 极小概率的竞态：``start()`` 复用了"已经通过退出判断、正要收尾"的线程。
+            # ``stop()``/``submit()`` 都在 GUI 线程上，所以这里重拉不会把已停的线程
+            # 复活（那只可能是 stop() 还没跑完，而它会把 _stopped 再置回去）。
+            self.start()
+        job = _LyricJob(work)
+        with self._lock:
+            superseded = self._pending
+            running = self._running
+            self._pending = job
+        for older in (superseded, running):
+            if older is not None:
+                older.cancel.set()
+        self._wake.set()
+        return True
+
+    # ---------------------------------------------------------------- 线程体
+
+    def _loop(self, closing: threading.Event, wake: threading.Event) -> None:
+        try:
+            while not closing.is_set():
+                if not wake.wait(0.5):
+                    continue
+                wake.clear()
+                while not closing.is_set():
+                    with self._lock:
+                        job = self._pending
+                        self._pending = None
+                        self._running = job
+                    if job is None:
+                        break
+                    if closing.is_set():
+                        job.cancel.set()
+                        break
+                    try:
+                        job.run()
+                    finally:
+                        with self._lock:
+                            if self._running is job:
+                                self._running = None
+        finally:
+            with self._lock:
+                self._running = None
+                self._pending = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +353,12 @@ class MusicRuntime:
         self.control_playback = now_playing.transport
         self.fetch_lyrics = lyrics_mod.fetch_lyrics
         self.launch_player = players.launch
-        self.background = _spawn_thread
+        #: 取词派发接缝：默认交给常驻线程的单槽队列（**不**每次开线程）。
+        #: 测试把它换成同步执行（``lambda work: work()``），结果就在 ``poll()`` 里就位。
+        self._fetch_worker = LyricFetchWorker()
+        self.background = self._fetch_worker.submit
+        #: 一次性后台任务（传输命令这类用户手点的冷路径）。
+        self.spawn_task = _spawn_thread
         self.clock = time.monotonic
 
         self._timer: str | None = None
@@ -174,15 +370,19 @@ class MusicRuntime:
         self._stopped = False
         self._pending: _Request | None = None
         self._inflight = False
+        #: 采样线程意外退出时只记一条日志（每拍刷屏没有意义）。
+        self._worker_lost = False
+        #: 暂停期间窗口源的枚举缓存（2 秒一次，见 ``sampling.WINDOW_PAUSED_INTERVAL``）。
+        self._window_cache = sampling.WindowCache()
         #: 每拍递增的采样令牌；落地时丢弃比已落地更旧的包（迟到/乱序）。
         self._seq = 0
         self._delivered_seq = 0
         self._app_id = ""
         self._track: recognizer.Track | None = None
         self._track_key: tuple[str, str] | None = None
-        #: 暂停期间见过的"降级身份"（SMTC 掉线 → 窗口标题源兜底：艺人/专辑/时长都没了，
-        #: ``Track.key`` 因此变了）。这些 key 视为**当前曲目**的别名：暂停里不换歌，
-        #: 恢复播放后也不会被当成新歌重新取词。换歌（``_begin_track``）时清空。
+        #: 「暂停里见过」与「播放中见过」的降级身份（SMTC 掉线 → 窗口标题源兜底：
+        #: 艺人/专辑/时长都没了，``Track.key`` 因此变了）。这些 key 视为**当前曲目**
+        #: 的别名：不换歌、不清歌词、不重置取词配额。换歌（``_begin_track``）时清空。
         self._track_aliases: set[tuple[str, str]] = set()
         #: 上一次判定的"是否真的在播"：取词结果回来时据此决定失败要不要冒泡。
         self._playing_now = False
@@ -194,6 +394,9 @@ class MusicRuntime:
         self._fetch_attempts = 0
         self._lyric_retry_at: float | None = None
         self._lyric_reported = False
+        #: 取词失败的负缓存：``{归一标题: 到期时刻}``。挡的是"身份抖动出来的新曲目"
+        #: （同标题、新 key）——那不是换歌，不该重新联网。
+        self._lyric_negative: dict[str, float] = {}
         self._lyric_source = ""
         self._lyric_score = 0.0
         self._anchor_at: float = 0.0
@@ -333,6 +536,12 @@ class MusicRuntime:
         return players.recognition_targets(paths if isinstance(paths, dict) else {}, extras)
 
     def _cache(self) -> lyrics_mod.LyricsCache | None:
+        """磁盘缓存句柄。
+
+        **只在取词线程上调用**：``StoragePort.data_dir`` 会 ``mkdir``，那是文件系统
+        操作，不该挂在每秒一拍的 GUI 线程上。构造本身不做 I/O（``mkdir`` 在
+        :meth:`LyricsCache.put` 里，也在取词线程上）。
+        """
         storage = getattr(self.context.ports, "storage", None)
         if storage is None:
             return None
@@ -348,8 +557,12 @@ class MusicRuntime:
     def poll(self) -> None:
         """一拍：把三源采样交给后台线程，回来后再动动画/歌词。
 
-        上一拍还没回来就跳过这一拍（不排队、不堆积）；采样线程不在（测试路径或
-        线程起不来）时同步采样。
+        上一拍还没回来就跳过这一拍（不排队、不堆积）。**采样线程不在时不补采**：
+        采样线程死了就记一条日志并在下一拍重拉——在 GUI 线程上跑 SMTC 正是主分支
+        实测会永久卡死窗口的那件事。``music_enabled`` 关着时连唤醒都不做。
+
+        唯一同步采样的路径是"运行时还没 ``start()``"（测试与诊断直接调 ``poll()``
+        的走法）：那时没有常驻线程可等，也无所谓时序。
         """
         if self._stopped:
             return
@@ -357,7 +570,7 @@ class MusicRuntime:
             self._release()
             self._forget_track()
             return
-        # 令牌必须在两条路径（后台线程 / 同步兜底）上都有效：先自增再建请求，
+        # 令牌必须在两条路径（后台线程 / 同步）上都有效：先自增再建请求，
         # 否则同步路径的 seq 恒为 0，迟到判断形同虚设。
         self._seq += 1
         request = _Request(
@@ -373,14 +586,22 @@ class MusicRuntime:
             if self._closing.is_set():
                 return
         worker = self._worker
-        if worker is not None and worker.is_alive():
-            if self._inflight:
+        if worker is None or not worker.is_alive():
+            if not self._started:
+                # 运行时还没 start()（测试/诊断直接调 poll()）：没有常驻线程可等。
+                self._consume(self._collect(request), request)
                 return
-            self._inflight = True
-            self._pending = request
-            self._wake.set()
+            # 线程意外退出：上面已经尝试重拉；还是不在就记一条日志、**跳过这一拍**。
+            # 绝不在 GUI 线程补采——SMTC 实测能把主线程永久钉住。
+            if not self._worker_lost:
+                self._worker_lost = True
+                log.warning("music sampling worker is not running; skipping polls until it restarts")
             return
-        self._consume(self._collect(request), request)
+        if self._inflight:
+            return
+        self._inflight = True
+        self._pending = request
+        self._wake.set()
 
     def _collect(self, request: _Request) -> sampling.Sample:
         """三源采样（编排在 ``sampling.collect``，这里只注入运行时自己的探针接缝）。"""
@@ -392,6 +613,8 @@ class MusicRuntime:
             smtc=self.sample_smtc,
             audio=self.sample_audio,
             windows=self.sample_windows,
+            window_cache=self._window_cache,
+            clock=self.clock,
         )
 
     def _decide(self, sample: sampling.Sample, request: _Request):
@@ -448,6 +671,7 @@ class MusicRuntime:
             # 读失败：不动歌词、不动动画；宽限期照常推进（长时间读不到就自然停下）。
             self._on_silence(now, status)
             return
+        was_playing = self._playing_now
         self._playing_now = bool(getattr(decision, "playing", False))
         app_id = str(getattr(decision, "app_id", "") or "")
         if app_id:
@@ -455,6 +679,10 @@ class MusicRuntime:
         track = getattr(decision, "track", None)
         if not bool(getattr(decision, "playing", False)):
             self._scene_wanted = False
+            if status == recognizer.STATUS_PAUSED and was_playing:
+                # 「播放 → 暂停」的边沿：气泡里的最后一句不该再挂 2–6 秒（看起来像
+                # 还在唱）。端口只在「本 owner 仍持有展示会话」时才收，不会误收别人的。
+                self._hide_sung_bubble()
             if not track and status == recognizer.STATUS_ABSENT:
                 # 没有曲目也没有在播：保留上一首的歌词，只走宽限。
                 self._on_silence(now, status)
@@ -499,12 +727,12 @@ class MusicRuntime:
         同一首曲目的进度**大幅回退**（尾部→头部）是单曲循环/手动重播的确定信号：
         行号要归零、用已缓存的歌词重新逐行显示（不重新联网取词）。
 
-        **暂停里绝不换歌**：播放器暂停时 SMTC 会话常常掉线，只剩窗口标题源兜底——
-        那条来源没有专辑/时长，艺人也可能解析不出来，曲目身份（``Track.key``）因此
-        变了。旧实现就在这里 ``_begin_track``，把已取到的歌词与取词配额一起清掉，
-        恢复播放后重新联网取词，取不到就冒「歌词获取失败」。现在这种**同名降级身份**
-        只记成当前曲目的别名（``_track_aliases``）：暂停里不动，恢复播放后也认作同一
-        首歌（保留曲目元信息、歌词与取词配额）；只有歌名真的变了才在恢复播放时接管。
+        **同名身份不算换歌，暂停与播放一视同仁**：SMTC 掉线时只剩窗口标题源兜底
+        （没有专辑/时长，艺人也可能解析不出来），元数据也可能晚一拍才到——曲目身份
+        （``Track.key``）因此变了。旧实现按 key 判"换了首歌"，于是把已取到的歌词与
+        取词配额一起清掉、重新联网取词，取不到就冒「歌词获取失败」。现在这种**同名
+        降级身份**只记成当前曲目的别名（``_track_aliases``），保留曲目元信息、歌词与
+        取词配额；只有歌名真的变了才 ``_begin_track``。
         """
         key = track.key()
         if not playing:
@@ -521,6 +749,17 @@ class MusicRuntime:
             if key in self._track_aliases:
                 # 已知的降级身份：同一首歌，保留曲目（含时长）/歌词/取词配额，
                 # 只把时间轴交回播放器（它上报的进度更准）。
+                position = getattr(track, "position", None)
+                if position is not None:
+                    self._anchor_at = now
+                    self._anchor_position = float(position)
+                return
+            if self._track is not None and self._same_song(track, self._track):
+                # 播放中才出现的降级身份（艺人晚一拍到 / SMTC 掉线换窗口源）：
+                # 记成别名就是同一首歌，**不清歌词、不重置取词配额**。
+                # 与暂停分支同一条规则，只是这里还要把时间轴交回播放器。
+                self._track_aliases.add(key)
+                self._title = str(getattr(track, "title", "") or self._title)
                 position = getattr(track, "position", None)
                 if position is not None:
                     self._anchor_at = now
@@ -839,6 +1078,17 @@ class MusicRuntime:
 
     # ---------------------------------------------------------------- 展示会话
 
+    def _hide_sung_bubble(self) -> None:
+        """收起歌词气泡（只在 ``media.music`` 仍持有展示会话时生效）。"""
+        port = self._presentation()
+        hider = getattr(port, "hide", None) if port is not None else None
+        if not callable(hider):
+            return
+        try:
+            hider(SCENE_OWNER)
+        except Exception:  # noqa: BLE001 - 收气泡失败不影响暂停状态机
+            pass
+
     def _sync_scene(self) -> None:
         """歌词/唱歌期间占住气泡：别人的自动气泡被 Core 拒绝（闸门只认 owner）。
 
@@ -894,7 +1144,47 @@ class MusicRuntime:
             return
         if self._lyric_retry_at is not None and now < self._lyric_retry_at:
             return
+        if self._lyric_blocked(self._title, now):
+            # 这首（同标题）刚失败过：曲目身份在抖（艺人晚一拍到 → 新 key → 新曲目）
+            # 也不许在负缓存到期前重新联网。
+            return
         self._start_fetch(self._track)
+
+    # ---------------------------------------------------------------- 取词负缓存
+
+    @staticmethod
+    def _title_key(title: str) -> str:
+        """负缓存键：**只按标题**（大小写/空白归一）。
+
+        按标题而不是 ``Track.key()`` 是刻意的：身份抖动的两种形态都是"标题不变、
+        艺人变了"（SMTC 掉线 → 窗口标题源兜底；元数据晚一拍到）。带上艺人就等于
+        两边都漏。
+        """
+        return str(title or "").strip().casefold()
+
+    def _lyric_blocked(self, title: str, now: float) -> bool:
+        key = self._title_key(title)
+        if not key:
+            return False
+        expires = self._lyric_negative.get(key)
+        if expires is None:
+            return False
+        if now >= expires:
+            self._lyric_negative.pop(key, None)
+            return False
+        return True
+
+    def _remember_lyric_failure(self, title: str, now: float) -> None:
+        key = self._title_key(title)
+        if not key:
+            return
+        # 顺手清过期的，再按上限淘汰最早到期的（一次运行最多记 64 首）。
+        for stale in [name for name, at in self._lyric_negative.items() if now >= at]:
+            self._lyric_negative.pop(stale, None)
+        if len(self._lyric_negative) >= LYRIC_NEGATIVE_LIMIT:
+            oldest = min(self._lyric_negative, key=self._lyric_negative.__getitem__)
+            self._lyric_negative.pop(oldest, None)
+        self._lyric_negative[key] = now + LYRIC_NEGATIVE_TTL
 
     def _start_fetch(self, track) -> None:
         if track is None:
@@ -905,16 +1195,17 @@ class MusicRuntime:
         http = getattr(self.context.ports, "http", None)
         if http is None:
             return
-        cache = self._cache()
-        self._fetch_key = key
-        self._fetch_attempts += 1
         title, artist = track.title, track.artist
         album, duration = track.album, track.duration
         generation = self._generation
+        self._fetch_key = key
+        self._fetch_attempts += 1
 
-        def work() -> None:
+        def work(cancel: threading.Event | None = None) -> None:
+            is_cancelled = cancel.is_set if cancel is not None else _never
             try:
                 # 专辑与时长只用于候选打分（区分原唱/翻唱/现场版），不参与请求。
+                # 磁盘缓存句柄也在**取词线程**上构造（`data_dir` 会建目录）。
                 result = self.fetch_lyrics(
                     http,
                     title,
@@ -922,19 +1213,27 @@ class MusicRuntime:
                     album=album,
                     duration=duration,
                     timeout=lyrics_mod.DEFAULT_TIMEOUT,
-                    cache=cache,
+                    cache=self._cache(),
+                    cancelled=is_cancelled,
                 )
+            except lyrics_mod.LyricsCancelled:
+                return  # 被新一轮顶掉/已停止：不是失败，不冒泡、不记负缓存
             except lyrics_mod.LyricsError as exc:
                 result = exc
             except Exception:
                 result = lyrics_mod.LyricsError("歌词获取失败：未知原因")
-            self._post(lambda: self._apply_lyrics(key, result), generation)
+            if is_cancelled():
+                return
+            self._post_lyrics(lambda: self._apply_lyrics(key, result), generation)
 
         try:
-            self.background(work)
+            accepted = self.background(work)
         except Exception:
             self._fetch_key = None
             return
+        if accepted is False:
+            # 取词线程已停止（运行时正在退出）：别把 _fetch_key 卡在这一轮上。
+            self._fetch_key = None
 
     def _post(self, callback, generation: int) -> None:
         def deliver():
@@ -958,6 +1257,27 @@ class MusicRuntime:
             self._inflight = False
             return
 
+    def _post_lyrics(self, callback, generation: int) -> None:
+        """把取词结果交回 GUI 线程（**不动采样的在飞标志**）。
+
+        取词结果与采样结果走两套线程：旧实现共用一个 ``_post``，一次取词回来会把
+        ``_inflight``（采样在飞）清掉，下一拍于是又发一次采样。
+        """
+        def deliver():
+            if self._stopped or generation != self._generation:
+                return
+            if self._flag("music_enabled", True):
+                callback()
+
+        scheduler = getattr(self.context.ports, "scheduler", None)
+        if scheduler is None:
+            deliver()
+            return
+        try:
+            scheduler.call_later(0, deliver)
+        except Exception:
+            return
+
     def _apply_lyrics(self, key, result) -> None:
         if key != self._track_key:
             return
@@ -969,8 +1289,12 @@ class MusicRuntime:
                 # 照常重试，失败仍按"冷却 + 每曲 3 次 + 首次说清原因"处理。
                 self._fetch_attempts = max(0, self._fetch_attempts - 1)
                 return
+            now = self.clock()
             # 失败不拉黑整首：冷却后重试，第一次失败说清原因（不再静默）。
-            self._lyric_retry_at = self.clock() + LYRIC_RETRY_SECONDS
+            # 同时记进内存负缓存：同一标题在 60 秒内不再重取，哪怕身份抖动把它
+            # 变成"新曲目"（新 key / 新配额）。
+            self._lyric_retry_at = now + LYRIC_RETRY_SECONDS
+            self._remember_lyric_failure(self._title, now)
             if not self._lyric_reported:
                 self._lyric_reported = True
                 self._say_sung(str(result), subtitle=self._subtitle(), duration_ms=5000, force=False)
@@ -1092,7 +1416,7 @@ class MusicRuntime:
             )
 
         try:
-            self.background(work)
+            self.spawn_task(work)
         except Exception:
             self._report_transport(action, False, "系统媒体控制不可用")
 
@@ -1118,6 +1442,9 @@ class MusicRuntime:
         self._started = True
         self._stopped = False
         self._start_worker()
+        # 取词线程按需建（第一次取词时），这里只允许它再次被派发：一首歌最多跑三轮
+        # 取词，每轮都现场开线程既没法取消也没法在 stop() 里收尾（旧实现）。
+        self._fetch_worker.arm()
         scheduler = getattr(self.context.ports, "scheduler", None)
         if scheduler is None or self._timer is not None:
             return
@@ -1134,13 +1461,20 @@ class MusicRuntime:
         self._closing = threading.Event()
         self._wake = threading.Event()
         self._inflight = False
+        self._worker_lost = False
         worker = threading.Thread(
             target=self._worker_loop,
             args=(self._closing, self._wake, self._generation),
             name="music-smtc", daemon=True,
         )
         self._worker = worker
-        worker.start()
+        try:
+            worker.start()
+        except Exception:
+            # 线程起不来（资源耗尽之类）：别让异常冒到 GUI 的定时器回调里；
+            # 下一拍会再试一次，``poll()`` 也会记一条"采样线程不在"的日志。
+            self._worker = None
+            log.warning("could not start the music sampling worker", exc_info=True)
 
     def stop(self) -> None:
         self._stopped = True
@@ -1157,6 +1491,10 @@ class MusicRuntime:
         self._closing.set()
         self._wake.set()
         self._inflight = False
+        if not self._fetch_worker.stop(FETCH_JOIN_SECONDS):
+            # 有界等待：一轮取词最多 8 秒，绝不能让 GUI 线程陪着等。取消位已置，
+            # 线程会在下一跳之前收手（结果也会被 generation 丢掉）。
+            log.warning("lyric fetch worker still running after %.1fs", FETCH_JOIN_SECONDS)
 
     def close(self) -> None:
         self.stop()

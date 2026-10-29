@@ -8,7 +8,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from petcore.config import Config
@@ -69,6 +70,45 @@ def test_squash_geometry_is_bottom_centered() -> None:
     assert height < 360
     assert x + width // 2 == pytest.approx(320, abs=1)
     assert y + height == 360
+
+
+def test_squash_geometry_bounces_add_pulses_without_crossing_top() -> None:
+    single = [squash_geometry(640, 360, 640, 360, p / 20) for p in range(21)]
+    triple = [
+        squash_geometry(640, 360, 640, 360, p / 20, bounces=3)
+        for p in range(21)
+    ]
+    assert max(w for _, _, w, _ in single) == pytest.approx(
+        max(w for _, _, w, _ in triple), abs=8
+    )
+    assert all(y >= 0 and y + h == 360 for _, y, _, h in triple)
+    # 三次弹跳在中段仍会再次压扁，不是一次到底。
+    assert any(h < 360 for _, _, _, h in triple)
+
+
+def test_squash_geometry_strength_scales_amplitude() -> None:
+    _, _, weak_w, weak_h = squash_geometry(640, 360, 640, 360, 0.5, strength=0.5)
+    _, _, base_w, base_h = squash_geometry(640, 360, 640, 360, 0.5)
+    _, _, strong_w, strong_h = squash_geometry(640, 360, 640, 360, 0.5, strength=1.8)
+    assert base_w > weak_w and base_h < weak_h
+    assert strong_w > base_w and strong_h < base_h
+    assert weak_h <= 360 and strong_h >= 1
+
+
+def test_effect_controller_reads_adjustable_squash(window) -> None:
+    window.config.set("click_squash_bounces", 3)
+    window.config.set("click_squash_strength", 160)
+    window.config.set("click_squash_ms", 600)
+    window.effects.start_squash()
+    assert window.effects.squash_active is True
+    assert window.effects._squash_bounces == 3
+    assert window.effects._squash_strength == pytest.approx(1.6)
+    assert window.effects._squash_duration_ms == 600
+
+    window.config.set("click_squash_enabled", False)
+    window.effects.reset()
+    window.effects.start_squash()
+    assert window.effects.squash_active is False
 
 
 def test_spring_and_release_velocity() -> None:
@@ -288,3 +328,81 @@ def test_head_pat_is_suppressed_when_disabled_or_busy(window, monkeypatch):
     window.click_through = True
     window._maybe_head_pat(QPointF(10, 10))
     assert calls == []
+
+
+def test_click_through_left_click_forwards_instead_of_petting(window, monkeypatch):
+    window.click_through = True
+    forwarded: list[object] = []
+    clicks: list[object] = []
+    monkeypatch.setattr(
+        "petcore.ui.pet_window.forward_left_click",
+        lambda target: forwarded.append(target) or True,
+    )
+    monkeypatch.setattr(window, "_on_click", lambda **kwargs: clicks.append(kwargs))
+
+    QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=QPoint(10, 10))
+    QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=QPoint(10, 10))
+
+    assert forwarded == [window]
+    assert clicks == []
+
+
+def test_click_through_right_click_replaces_the_old_left_click(window, monkeypatch):
+    window.click_through = True
+    clicks: list[object] = []
+    monkeypatch.setattr(window, "_on_click", lambda **kwargs: clicks.append(kwargs))
+
+    QTest.mousePress(window, Qt.MouseButton.RightButton, pos=QPoint(10, 10))
+    QTest.mouseRelease(window, Qt.MouseButton.RightButton, pos=QPoint(10, 10))
+
+    assert len(clicks) == 1
+
+
+def test_click_through_right_hold_opens_menu_without_a_click(window, monkeypatch):
+    window.click_through = True
+    menu: list[bool] = []
+    clicks: list[object] = []
+    monkeypatch.setattr(
+        QApplication, "mouseButtons", staticmethod(lambda: Qt.MouseButton.RightButton)
+    )
+    monkeypatch.setattr(window, "_show_context_menu_at_cursor", lambda: menu.append(True))
+    monkeypatch.setattr(window, "_on_click", lambda **kwargs: clicks.append(kwargs))
+    monkeypatch.setattr(window, "mapFromGlobal", lambda _pos: QPoint(10, 10))
+
+    QTest.mousePress(window, Qt.MouseButton.RightButton, pos=QPoint(10, 10))
+    window._on_right_hold()
+    assert menu == [], "菜单等松手再弹（按住时 exec 会把 release 当成选中）"
+    QTest.mouseRelease(window, Qt.MouseButton.RightButton, pos=QPoint(10, 10))
+
+    assert menu == [True]
+    assert clicks == []
+
+
+def test_click_through_left_hold_arms_drag(window, monkeypatch):
+    window.click_through = True
+    monkeypatch.setattr(
+        QApplication, "mouseButtons", staticmethod(lambda: Qt.MouseButton.LeftButton)
+    )
+    monkeypatch.setattr(window, "_play_spec", lambda spec, kind: None)
+
+    QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=QPoint(10, 10))
+    window._on_left_hold()
+
+    assert window._left_drag_armed is True
+    assert window.dragging is True
+
+    window._cancel_left_press()
+    window.dragging = False
+    window.state.dragging = False
+
+
+def test_classic_left_click_still_pets(window, monkeypatch):
+    window.click_through = False
+    clicks: list[object] = []
+    monkeypatch.setattr(window, "_on_click", lambda **kwargs: clicks.append(kwargs))
+    monkeypatch.setattr(window._edge_probe, "on_clicked", lambda: False)
+
+    QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=QPoint(10, 10))
+    QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=QPoint(10, 10))
+
+    assert len(clicks) == 1

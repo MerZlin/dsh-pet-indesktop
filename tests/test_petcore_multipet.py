@@ -78,7 +78,11 @@ def test_spawn_restore_and_close(app, tmp_path: Path) -> None:
         manager.shutdown()
 
 
-def test_spawn_stops_at_limit(app, tmp_path: Path) -> None:
+def test_spawn_stops_at_limit(app, tmp_path: Path, monkeypatch) -> None:
+    """上限是一个常量（99）；这里把它压到 4 来验边界，不真的开 99 个窗口。"""
+    from petcore.ui import pet_manager as pet_manager_mod
+
+    monkeypatch.setattr(pet_manager_mod, "MAX_PETS", 4)
     config = Config(tmp_path)
     config.set("active_pets", [0])
     host = FakeHost([fallback()])
@@ -86,12 +90,22 @@ def test_spawn_stops_at_limit(app, tmp_path: Path) -> None:
     host.pets = manager
     try:
         manager.create_primary(fallback())
-        for _ in range(20):
+        for _ in range(10):
             manager.spawn()
-        assert len(manager.each()) == 16
+        assert manager.active_slots() == [0, 1, 2, 3]
         assert manager.spawn() is None
     finally:
         manager.shutdown()
+
+
+def test_active_pets_normalization_uses_the_same_cap(tmp_path: Path) -> None:
+    """配置归一化与管理器同一口径：slot 98 保留、99 起丢弃（不许各写一个 16）。"""
+    from petcore.config import MAX_PETS
+
+    config = Config(tmp_path)
+    config.set("active_pets", [0, 55, 98, 99, 128, -1])
+    assert config.get("active_pets") == [0, 55, 98]
+    assert MAX_PETS == 99
 
 
 def test_seed_config_inherits_and_overrides_size(app, tmp_path: Path) -> None:
@@ -139,5 +153,22 @@ def test_collision_pair_separates_two_pets(app, tmp_path: Path) -> None:
         before = (primary.x(), child.x())
         manager._collide_pair(primary, child)
         assert (primary.x(), child.x()) != before
+    finally:
+        manager.shutdown()
+
+
+def test_collision_timer_only_runs_with_two_pets(app, tmp_path: Path) -> None:
+    config = Config(tmp_path)
+    config.set("character", "fallback")
+    host = FakeHost([fallback()])
+    manager = PetManager(host, tmp_path, config)
+    host.pets = manager
+    try:
+        manager.create_primary(fallback())
+        assert not manager._collision_timer.isActive(), "单宠不该常驻 62.5Hz 碰撞表"
+        assert manager.spawn() is not None
+        assert manager._collision_timer.isActive()
+        assert manager.close_slot(1) is True
+        assert not manager._collision_timer.isActive()
     finally:
         manager.shutdown()

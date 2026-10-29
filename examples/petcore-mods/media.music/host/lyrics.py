@@ -13,6 +13,9 @@
   ``instrumental``），必须识别出来，否则会被当成唯一一句歌词、还会放起唱歌动画。
 - **缓存**：``storage.data_dir("media.music")/lyrics`` 下按 ``sha1(title|artist)``
   一到一曲一个 JSON，条目数超上限按修改时间淘汰最旧的。
+- **可取消**：``fetch_lyrics(cancelled=...)`` 在**每次发请求之前**问一次回调，
+  切歌/停止时被顶掉的那一轮立刻收手（``LyricsCancelled``），不再把剩下的源和
+  HTTP 跳数跑完。取消不是"这首没有歌词"：调用方不许把它记成失败。
 - **不写日志**：歌词 URL、代理地址、响应体一律不进日志（调用方也没给日志出口）。
 
 ``parse_lrc`` / ``line_at`` / ``looks_instrumental`` 不依赖端口，可独立单测。
@@ -25,6 +28,7 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -101,6 +105,24 @@ class Lyrics:
 
 class LyricsError(RuntimeError):
     """两个源都没取到可用的歌词；``str()`` 是给用户看的原因（点名每个源）。"""
+
+
+class LyricsCancelled(LyricsError):
+    """取词被取消（被新一轮顶掉 / 运行时停止）。
+
+    刻意继承 ``LyricsError``：老的调用方把它当"这次没拿到"也不会炸；但**它不
+    等于"这首没有歌词"**，运行时不许据此记失败、冷却或负缓存。
+    """
+
+
+#: ``cancelled`` 回调的形态：返回 True 表示这一轮不要再发请求了。
+Cancelled = Callable[[], bool]
+
+
+def _abort_if_cancelled(cancelled: "Cancelled | None") -> None:
+    """发请求之前问一次；被取消就抛 :class:`LyricsCancelled`（不吞、不记失败）。"""
+    if cancelled is not None and cancelled():
+        raise LyricsCancelled("取词已取消。")
 
 
 # ---------------------------------------------------------------- LRC 解析
@@ -501,12 +523,17 @@ def _get_json(
     timeout: float,
     referer: str = "",
     prefer_direct: bool = True,
+    cancelled: "Cancelled | None" = None,
 ):
     """GET 一个 JSON 接口；非 2xx / 太大 / 解析失败都抛 ``HttpError``。
 
     ``prefer_direct``：国内曲库（网易云 / 酷狗）直连优先；海外源（lrclib）交回
     系统路由——与 ``docs/NETWORK-PROXY-AND-VPN-2026-09-22.md`` 的分域口径一致。
+
+    ``cancelled``：每发一跳之前问一次（一次取词最多三源、每源两跳，被顶掉的那轮
+    不该再把剩下的跳数跑完）。
     """
+    _abort_if_cancelled(cancelled)
     headers: tuple[tuple[str, str], ...] = (("User-Agent", _UA),)
     if referer:
         headers += (("Referer", referer),)
@@ -532,7 +559,7 @@ def _get_json(
         raise HttpError("protocol", message="歌词响应不是 JSON") from None
 
 
-def _fetch_netease(http, wanted: _Wanted, *, timeout: float) -> Lyrics | None:
+def _fetch_netease(http, wanted: _Wanted, *, timeout: float, cancelled=None) -> Lyrics | None:
     """网易云：搜索（``cloudsearch``）→ 按分挑候选 → 歌词（``song/lyric``）。"""
     query = " ".join(part for part in (wanted.title, wanted.artist) if part)
     search = _get_json(
@@ -541,6 +568,7 @@ def _fetch_netease(http, wanted: _Wanted, *, timeout: float) -> Lyrics | None:
         (("s", query), ("type", "1"), ("offset", "0"), ("limit", "10")),
         timeout=timeout,
         referer="https://music.163.com/",
+        cancelled=cancelled,
     )
     songs = ((search.get("result") or {}).get("songs") or []) if isinstance(search, dict) else []
     candidates = []
@@ -578,6 +606,7 @@ def _fetch_netease(http, wanted: _Wanted, *, timeout: float) -> Lyrics | None:
         (("id", str(song_id)), ("lv", "-1"), ("kv", "-1"), ("tv", "-1")),
         timeout=timeout,
         referer="https://music.163.com/",
+        cancelled=cancelled,
     )
     if not isinstance(payload, dict):
         return None
@@ -586,7 +615,7 @@ def _fetch_netease(http, wanted: _Wanted, *, timeout: float) -> Lyrics | None:
     )
 
 
-def _fetch_kugou(http, wanted: _Wanted, *, timeout: float) -> Lyrics | None:
+def _fetch_kugou(http, wanted: _Wanted, *, timeout: float, cancelled=None) -> Lyrics | None:
     """酷狗：搜索（``krcs/search``）→ 按分挑候选 → 下载（正文 base64）。"""
     keyword = " - ".join(part for part in (wanted.title, wanted.artist) if part)
     search = _get_json(
@@ -600,6 +629,7 @@ def _fetch_kugou(http, wanted: _Wanted, *, timeout: float) -> Lyrics | None:
         ),
         timeout=timeout,
         referer="https://www.kugou.com/",
+        cancelled=cancelled,
     )
     raw = search.get("candidates") if isinstance(search, dict) else None
     candidates = []
@@ -640,6 +670,7 @@ def _fetch_kugou(http, wanted: _Wanted, *, timeout: float) -> Lyrics | None:
         ),
         timeout=timeout,
         referer="https://www.kugou.com/",
+        cancelled=cancelled,
     )
     content = str((payload or {}).get("content") or "") if isinstance(payload, dict) else ""
     if not content:
@@ -651,7 +682,7 @@ def _fetch_kugou(http, wanted: _Wanted, *, timeout: float) -> Lyrics | None:
     return _lyrics_from_text(body, "酷狗", score=score)
 
 
-def _fetch_lrclib(http, wanted: _Wanted, *, timeout: float) -> Lyrics | None:
+def _fetch_lrclib(http, wanted: _Wanted, *, timeout: float, cancelled=None) -> Lyrics | None:
     """lrclib：按「歌手 + 歌名」精确查；海外曲目覆盖好，也是唯一给纯音乐标记的源。"""
     if not wanted.title:
         return None
@@ -664,6 +695,7 @@ def _fetch_lrclib(http, wanted: _Wanted, *, timeout: float) -> Lyrics | None:
         ),
         timeout=timeout,
         prefer_direct=False,
+        cancelled=cancelled,
     )
     if not isinstance(payload, dict):
         return None
@@ -692,12 +724,17 @@ def fetch_lyrics(
     duration: float = 0.0,
     timeout: float = DEFAULT_TIMEOUT,
     cache: LyricsCache | None = None,
+    cancelled: "Cancelled | None" = None,
 ) -> Lyrics:
     """取一首歌的歌词：清洗查询词 → 缓存 → 网易云 → 酷狗 → lrclib。
 
     一首歌最多一轮（**失败不重试**：重试策略在运行时按冷却做，避免后台重复流量）。
     ``timeout`` 是整次取词的预算，各源共享同一份截止时刻：每个源只拿到剩余部分，
     因此源切换不会把总耗时翻倍。``duration``（秒）只用于候选打分，不参与请求。
+
+    ``cancelled`` 是"这一轮还要不要"的回调（切歌/停止时由运行时置位）：每次发请求
+    之前问一次，被取消就抛 :class:`LyricsCancelled`。取消**不算失败**——不写缓存、
+    不冷却，调用方也不该弹"歌词获取失败"。
     """
     title, artist = _clean_query(title, artist)
     if not title and not artist:
@@ -717,12 +754,17 @@ def fetch_lyrics(
     deadline = time.monotonic() + max(1.0, float(timeout))
     reasons: list[str] = []
     for name, fetcher in SOURCES:
+        _abort_if_cancelled(cancelled)
         remaining = deadline - time.monotonic()
         if remaining < MIN_ATTEMPT_BUDGET:
             reasons.append(f"{name}：时间预算不足")
             break
         try:
-            found = fetcher(http, wanted, timeout=remaining)  # type: ignore[operator]
+            found = fetcher(  # type: ignore[operator]
+                http, wanted, timeout=remaining, cancelled=cancelled
+            )
+        except LyricsCancelled:
+            raise
         except HttpError as exc:
             reasons.append(f"{name}：{describe_error(exc)}")
             continue

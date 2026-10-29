@@ -120,3 +120,22 @@ def test_proactive_whitelist_caps_at_fifty_rules(tmp_path: Path) -> None:
     config = Config(tmp_path)
     config.set("ai_proactive_whitelist", [f"app{index}.exe" for index in range(80)])
     assert len(config.get("ai_proactive_whitelist")) == 50
+
+
+def test_squash_elasticity_keys_are_per_pet_and_clamped(tmp_path: Path) -> None:
+    global_config = Config(tmp_path)
+    pet_config = Config(tmp_path, {"character": "child"}, filename="config-pet-1.json")
+    scoped = ScopedConfig(global_config, pet_config)
+
+    assert scoped.get("click_squash_bounces") == 1
+    assert scoped.get("click_squash_strength") == 100
+    assert scoped.get("click_squash_ms") == 220
+
+    scoped.set("click_squash_bounces", 99)
+    scoped.set("click_squash_strength", 5)
+    scoped.set("click_squash_ms", 5000)
+
+    assert global_config.get("click_squash_bounces") == 1, "本宠键不写全局面"
+    assert pet_config.get("click_squash_bounces") == 5
+    assert pet_config.get("click_squash_strength") == 30
+    assert pet_config.get("click_squash_ms") == 1000

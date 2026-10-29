@@ -11,6 +11,7 @@ import base64
 import io
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -403,6 +404,8 @@ def _probe(tmp_path, fake: _FakePopen, **overrides) -> fps.FpsProbe:
         "target_name": "game.exe",
         "backend": backend,
         "platform_supported": lambda: True,
+        # 残留会话清扫会起真 logman 子进程：单测一律换成空实现（离线纪律）。
+        "sweep_starter": lambda: None,
         "session_factory": lambda pid, path, name: fps.FpsSession(
             pid=pid,
             name="game.exe",
@@ -542,3 +545,197 @@ def test_shared_probe_is_a_process_singleton(tmp_path, monkeypatch):
     third = fps.shared_probe(frozen=False, bundle_root=tmp_path, target_pid=PID)
     assert third is not first
     fps.reset_shared_probe(close=False)
+
+
+# ---------------------------------------------------------------- 目标生命周期
+def test_target_exit_is_remembered_and_never_reopened(tmp_path):
+    """目标正常退出（``--terminate_on_proc_exit`` → 退出码 0）后不许再对同一个死 pid 开会话。"""
+    fake = _FakePopen(stdout_text=_csv(60.0))
+    probe = _probe(tmp_path, fake)
+    try:
+        assert probe.start() is True
+        assert _wait_until(lambda: probe.snapshot().state == fps.STATE_OK)
+        fake.procs[0].returncode = 0  # 目标进程退出，采集进程随之收尾
+        assert _wait_until(
+            lambda: probe.snapshot().detail.get("target_gone") is True
+        ), "目标退出必须作为机器可读的结论发布（hub 靠它决定何时重新解析前台）"
+        calls = len(fake.calls)
+        time.sleep(0.3)
+        assert len(fake.calls) == calls, "同一个死 pid 不重开会话"
+        probe.set_target(PID + 1, "other.exe")  # 只有显式换目标才解除
+        assert _wait_until(lambda: len(fake.calls) > calls)
+    finally:
+        probe.close()
+
+
+def test_set_target_is_idempotent_for_the_same_pid(tmp_path):
+    """同一个 pid 反复 set_target（名字可能被重新解析）不许重置重试代次或去抖。"""
+    fake = _FakePopen(stdout_text=_csv(60.0))
+    probe = _probe(tmp_path, fake)
+    try:
+        epoch = probe._retry_epoch  # noqa: SLF001 - 显式验证「不重置代次」
+        requested = probe._target_requested_at  # noqa: SLF001
+        probe.set_target(PID, "renamed.exe")
+        assert probe._retry_epoch == epoch  # noqa: SLF001
+        assert probe._target_requested_at == requested  # noqa: SLF001
+        assert probe.target_name == "renamed.exe"
+        assert probe.start() is True
+        assert _wait_until(lambda: len(fake.calls) == 1)
+    finally:
+        probe.close()
+
+
+def test_target_change_waits_for_the_minimum_session_age(tmp_path):
+    """焦点在窗口间跳来跳去时不许每秒开/关一场会话。"""
+    fake = _FakePopen(stdout_text=_csv(60.0))
+    probe = _probe(
+        tmp_path,
+        fake,
+        min_session_seconds=1.0,
+        target_stable_seconds=0.0,
+        target_change_debounce=0.0,
+    )
+    try:
+        assert probe.start() is True
+        assert _wait_until(lambda: len(fake.calls) == 1)
+        probe.set_target(PID + 1, "other.exe")
+        time.sleep(0.2)  # 远小于 MIN_SESSION_SECONDS，慢 runner 也不会误判
+        assert len(fake.calls) == 1, "会话没活满 MIN_SESSION_SECONDS：不许换会话"
+        assert _wait_until(lambda: len(fake.calls) == 2, timeout=5.0)
+    finally:
+        probe.close()
+
+
+def test_shutdown_waits_for_the_worker_within_a_bound(tmp_path):
+    """退出路径有界等待 worker 收口（默认 <=1s），不留竞速的守护线程。"""
+    fake = _FakePopen(stdout_text=_csv(60.0), stubborn=True)
+    probe = _probe(tmp_path, fake)
+    try:
+        assert probe.start() is True
+        assert _wait_until(lambda: len(fake.calls) == 1)
+        started = time.monotonic()
+        probe.shutdown(1.0)
+        assert time.monotonic() - started <= 1.5
+        assert probe.running() is False
+    finally:
+        probe.close()
+
+
+# ---------------------------------------------------------------- 残留会话清扫
+LOGMAN_OUTPUT = """\
+Data Collector Set                      Type                          Status
+-------------------------------------------------------------------------------
+dsh-pet-fps-8000-1-deadbeef             Trace                         Running
+dsh-pet-fps-4321-2-deadbeef             Trace                         Running
+dsh-pet-fps-9000-3-deadbeef             Trace                         Running
+NT Kernel Logger                        Trace                         Running
+"""
+
+
+def _logman_runner(*, stopped: list[list[str]], output: str = LOGMAN_OUTPUT, code: int = 0):
+    def runner(args, timeout):
+        if args and args[0] == "query":
+            return SimpleNamespace(returncode=code, stdout=output, stderr="")
+        stopped.append(list(args))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    return runner
+
+
+def test_logman_output_parsing_is_a_pure_function():
+    """解析是纯函数：测试喂假输出，真机才起 logman。"""
+    names = fps.parse_logman_sessions(LOGMAN_OUTPUT)
+    assert names == [
+        "dsh-pet-fps-8000-1-deadbeef",
+        "dsh-pet-fps-4321-2-deadbeef",
+        "dsh-pet-fps-9000-3-deadbeef",
+    ]
+    assert "NT Kernel Logger" not in names
+    assert fps.parse_logman_sessions("") == []
+    assert fps.parse_logman_sessions(None) == []
+    assert fps.session_owner_pid("dsh-pet-fps-8000-1-deadbeef") == 8000
+    assert fps.session_owner_pid("NT Kernel Logger") is None
+    assert fps.session_owner_pid("dsh-pet-fps-bogus-1-x") is None
+
+
+def test_sweep_stops_only_sessions_of_dead_owners():
+    stopped: list[list[str]] = []
+    count = fps.sweep_residual_sessions(
+        runner=_logman_runner(stopped=stopped),
+        alive=lambda pid: pid in (4321, 9000),  # 4321 = 本进程（活着），9000 也活着
+        own_pid=4321,
+    )
+    assert count == 1
+    assert stopped == [["stop", "dsh-pet-fps-8000-1-deadbeef", "-ets"]]
+
+
+def test_sweep_skips_quietly_when_logman_is_unavailable(caplog):
+    def runner(args, timeout):
+        raise FileNotFoundError("logman.exe")
+
+    caplog.set_level("INFO", logger="petcore.platform.fps")
+    # None = 这次没查成（闸门重开，下次真起采集再试），不是「查到 0 个」。
+    assert fps.sweep_residual_sessions(runner=runner, alive=lambda pid: False) is None
+    assert "logman" in caplog.text
+
+
+def test_sweep_gate_reopens_when_the_query_fails(monkeypatch):
+    monkeypatch.setattr(fps, "sweep_supported", lambda: True)
+    fps.reset_residual_sweep()
+    attempts: list[int] = []
+
+    def failing():
+        attempts.append(1)
+        return None
+
+    try:
+        assert fps.start_residual_sweep_once(sweeper=failing) is True
+        assert _wait_until(lambda: fps._sweep_started is False)  # noqa: SLF001
+        assert fps.start_residual_sweep_once(sweeper=failing) is True
+        assert _wait_until(lambda: len(attempts) == 2)
+    finally:
+        fps.reset_residual_sweep()
+
+
+def test_sweep_runs_once_per_process(monkeypatch):
+    monkeypatch.setattr(fps, "sweep_supported", lambda: True)
+    fps.reset_residual_sweep()
+    done = threading.Event()
+    calls: list[int] = []
+
+    def sweeper():
+        calls.append(1)
+        done.set()
+        return 0
+
+    try:
+        assert fps.start_residual_sweep_once(sweeper=sweeper) is True
+        assert done.wait(2.0)
+        assert fps.start_residual_sweep_once(sweeper=sweeper) is False
+        assert calls == [1]
+    finally:
+        fps.reset_residual_sweep()
+
+
+def test_sweep_is_skipped_off_windows(monkeypatch):
+    monkeypatch.setattr(fps, "sweep_supported", lambda: False)
+    fps.reset_residual_sweep()
+    started: list[int] = []
+    try:
+        assert fps.start_residual_sweep_once(sweeper=lambda: started.append(1)) is False
+        assert started == []
+    finally:
+        fps.reset_residual_sweep()
+
+
+def test_probe_start_triggers_the_sweep_once(tmp_path):
+    fake = _FakePopen(stdout_text=_csv(60.0))
+    started: list[int] = []
+    probe = _probe(tmp_path, fake, sweep_starter=lambda: started.append(1))
+    try:
+        assert probe.start() is True
+        assert _wait_until(lambda: len(fake.calls) == 1)
+        assert probe.start() is True  # 幂等：不重复触发
+        assert started == [1]
+    finally:
+        probe.close()

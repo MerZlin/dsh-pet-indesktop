@@ -350,7 +350,13 @@ class FrameSeqClip(QObject):
     #: 兄弟库必须覆盖，那笔重复由 ``webm_clip`` 的跨库首帧共享表消掉。
     FIRST_FRAME_WARM_TRIVIAL = True
 
-    def __init__(self, frames_dir: Path | str, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        frames_dir: Path | str,
+        parent: QObject | None = None,
+        *,
+        timer_type: Qt.TimerType = Qt.TimerType.PreciseTimer,
+    ) -> None:
         super().__init__(parent)
         # 强钉入进程级存活表（与 ``_LIVE_WORKERS`` 同族防线）：worker 经 queued
         # 信号交付 ``loaded`` 到本 clip 的 ``_on_loaded``（Python 槽）；clip 被
@@ -391,7 +397,7 @@ class FrameSeqClip(QObject):
         # 下一帧），播放位置/在途帧/显示图原地保留，恢复时从暂停处续播。
         self._paused = False
         self._timer = QTimer(self)
-        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.setTimerType(timer_type)
         self._timer.timeout.connect(self._advance)
         # 待落地的帧表间隔（见 _apply_interval）：运行中真变速排到下一次
         # _advance 落地，避免重设 QTimer 截断当拍倒计时
@@ -519,6 +525,11 @@ class FrameSeqClip(QObject):
             self._set_interval_now(self._interval_ms())
             self._timer.start()
         return True
+
+    def rearm_same(self) -> None:
+        """同一段 clip 的续圈：已经在跑就不重开（否则会被拉回第 0 帧）。"""
+        if not self._running:
+            self.start()
 
     def stop(self) -> None:
         self._running = False

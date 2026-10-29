@@ -64,7 +64,7 @@ class ApiPort(Protocol):
         *,
         model: str = "",
         temperature: float | None = None,
-        timeout: float = 60.0,
+        timeout: float | None = None,
         on_delta: Callable[[str], None] | None = None,
         on_reasoning: Callable[[str], None] | None = None,
         on_status: Callable[[str], None] | None = None,

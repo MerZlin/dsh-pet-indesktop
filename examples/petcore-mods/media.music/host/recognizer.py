@@ -268,7 +268,13 @@ def decide(
             reasons=reasons,
             evidence=evidence,
         )
-        if windowed is not None and windowed.status == STATUS_PLAYING:
+        # **同一台播放器**不算「另一台的证据」：它暂停后 WASAPI 会话常仍挂
+        # ``active``（音频会话只报事实，不判时间上下文），接受它翻盘就会让暂停
+        # 变成「继续在播」——本地时钟照走，歌词每两秒继续换一句。
+        paused_exe = normalized_exe(exe_name(getattr(playback, "app_id", "")))
+        window_exe = normalized_exe(str(getattr(windowed, "exe", "") or ""))
+        same_player = bool(paused_exe) and window_exe == paused_exe
+        if windowed is not None and windowed.status == STATUS_PLAYING and not same_player:
             return Decision(
                 status=windowed.status,
                 source=windowed.source,
@@ -282,6 +288,12 @@ def decide(
                     *windowed.reasons,
                 ),
                 evidence=windowed.evidence,
+            )
+        if windowed is not None and windowed.status == STATUS_PLAYING:
+            _note(
+                reasons,
+                f"{window_exe or '该播放器'} 与暂停中的系统媒体会话是同一台播放器："
+                "残留的 Active 会话不算在播",
             )
 
     if playback is not None:

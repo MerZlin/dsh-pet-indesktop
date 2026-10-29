@@ -421,6 +421,11 @@ ports.presentation.release_loop()                          # 当前这圈播完�
   `music_lyric_enabled`（歌词）、`music_browser_media_enabled`（浏览器会话参与）。
   音频会话与窗口标题源**没有独立开关**：它们是可由应用稳定推断的实现参数，
   不可用（非 Windows / 缺组件）时自动降级为只看 SMTC。
+- **取词与采样节拍**（2026-10-29）：取词只有一条常驻 `lyric-fetch` 线程（单槽队列，
+  新请求取消在飞请求，并发 ≤1），失败按**歌名**记 60s 负缓存；SMTC 管理器与会话列表
+  按线程缓存（列表 2s 刷新一次），暂停时整桌面窗口枚举 ≥2s 一次；`music_enabled`
+  关闭时不唤醒采样线程。改采样/取词路径前先看 `host/runtime.py` 的
+  `LyricFetchWorker` 与 `host/now_playing.py` 的 `_ThreadCache`。
 
 
 ## 14. P4-c1 端口扩展：窗口采样与配置写入（2026-10-23）

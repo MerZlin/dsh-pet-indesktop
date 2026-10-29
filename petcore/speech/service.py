@@ -163,7 +163,12 @@ class SpeechService:
         cached = self._cache.hit(provider, flavor, text, suffix=suffix)
         if cached is not None:
             return SpeechResult(
-                path=cached, provider=provider, voice=voice, cached=True, text=text
+                path=cached,
+                provider=provider,
+                voice=voice,
+                cached=True,
+                text=text,
+                volume=self._volume_value(request.volume),
             )
 
         default_voice = net_tts.DEFAULT_VOICES.get(provider, "")
@@ -188,6 +193,7 @@ class SpeechService:
                         voice=candidate,
                         cached=True,
                         text=text,
+                        volume=self._volume_value(request.volume),
                     )
             tries = RETRY_ATTEMPTS if index == 0 else FALLBACK_ATTEMPTS
             for attempt in range(tries):
@@ -212,6 +218,7 @@ class SpeechService:
                         voice=candidate,
                         cached=False,
                         text=text,
+                        volume=self._volume_value(request.volume),
                     )
                 finally:
                     self._cache.discard(temp)

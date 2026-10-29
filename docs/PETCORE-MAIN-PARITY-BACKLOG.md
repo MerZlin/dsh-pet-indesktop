@@ -23,7 +23,7 @@
 | 拖拽物理 | 弹簧跟随、松手按轨迹甩出、静止放手下落、甩出力度四档 | `engine/physics.py`、`test_petcore_interaction.py` |
 | Q 弹 / 回旋 / 弹弓 / 投掷 | Q 弹、黄金回旋（含“跳过点击动画”子项）、弹弓瞄准发射、飞行弹跳逐次反馈 | `ui/effects.py`、`ui/motion.py`、`ui/slingshot.py` |
 | 边缘探头 | 贴边 45° 探头、点击拉直、5 秒回探头、探头期只播 idle/转向、拖出甩飞授权击飞旋转 | `ui/edge_probe.py`、`tests/test_petcore_edge_probe.py` |
-| 多宠 | 单进程多宠（最多 16）、独立配置 `config-pet-N.json`、落座避让、碰撞冲量、轻碰推动、探头宠不可被轻碰推走 | `ui/pet_manager.py`、`tests/test_petcore_pet_push.py` |
+| 多宠 | 单进程多宠（上限 `MAX_PETS = 99`，含主宠）、独立配置 `config-pet-N.json`、落座避让、碰撞冲量、轻碰推动、探头宠不可被轻碰推走 | `ui/pet_manager.py`、`tests/test_petcore_pet_push.py` |
 | 动画节拍 | 待机一圈掷骰、四项行为权重可调、动作间隔、播放速率、手动播放入口、事件动画 `play_event()` | `engine/behavior.py`、`tests/test_petcore_animation.py` |
 | 气泡 | 头部锚点、跟随桌宠移动、文本/图片两种内容、彩蛋图片可进气泡；气泡与彩蛋窗跟随宿主置顶（同图层） | `ui/bubble.py`、`tests/test_petcore_bubble.py` |
 | 大小 | 10%–300%、滑条 + 手输 + 四档预设；右键默认隐藏大小 | `engine/geometry.py`、设置「外观与交互」 |
@@ -148,7 +148,7 @@
 - **账户**：API 设置已存在，`petcore/account/`、余额缓存和额度服务未实现。
 - **默认安装**：5 个 example mod 仍不能按“示例存在”计为默认功能；安装向导里它们是可选安装，默认不勾选。
 
-有意差异：播放速率维持 `0.5–2.0x`；不支持 VPet LPS/PNG；首轮最多 16 只桌宠。
+有意差异：播放速率维持 `0.5–2.0x`；不支持 VPet LPS/PNG；桌宠身份上限 `MAX_PETS = 99`（含主宠，L126 起由 16 放宽）。
 
 ## 8. P1 基础作用域收口（2026-10-22）
 

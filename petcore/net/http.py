@@ -5,8 +5,11 @@
 这里的口径与主分支逐条一致：
 
 - 先按系统代理试一次（尊重用户的加速器/VPN）；
-- 只在**传输失败**时改直连重试，并把结论固化在进程内；
-- 服务器明确答复（`HTTPError` 4xx/5xx）不重试也不换路——链路本来就是通的。
+- 传输失败时改直连重试，并把结论固化在进程内（有期限）；
+- 4xx/429 与带 `Retry-After` 的答复不重试也不换路——那是服务端对这次请求的
+  明确答复；
+- **5xx 网关错误换一条路由再问一次**：代理/VPN 在链路正常时也会吐 502/503，
+  只凭它判定「API 不可用」正是「网络不可达」误报的来源。
 """
 
 from __future__ import annotations
@@ -38,6 +41,9 @@ logger = logging.getLogger("petcore.net.http")
 DEFAULT_TIMEOUT = 10.0
 DEFAULT_MAX_BYTES = 4_000_000
 DEFAULT_FALLBACK_STATUSES = (500, 502, 504)
+#: :func:`urlopen` 换路由重试的状态码。比 :func:`fetch_url` 多一个 503：代理/VPN
+#: 网关在链路正常、API 健在时也会回 503，这一条答复不足以判定「这台 API 不可用」。
+ROUTE_RETRY_STATUSES = (500, 502, 503, 504)
 DEFAULT_ALLOWED_SCHEMES = ("http", "https")
 DEFAULT_MAX_REDIRECTS = 3
 _READ_CHUNK = 65_536
@@ -190,6 +196,10 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         return new
 
 _force_direct = False
+#: 「固定直连」结论的有效期终点（``time.monotonic()``）：一次代理抖动不该钉死整个进程。
+_force_direct_until = 0.0
+#: 钉子只活 45 秒：加速器/VPN 抖一下是常态，而重试代理的代价只是一次多出来的往返。
+DEFAULT_DIRECT_PIN_SECONDS = 45.0
 _direct_opener: urllib.request.OpenerDirector | None = None
 
 OpenerFactory = Callable[[bool, Any], urllib.request.OpenerDirector]
@@ -211,14 +221,15 @@ def _opener(use_proxy: bool, context=None) -> urllib.request.OpenerDirector:
 
 
 def force_direct() -> bool:
-    """本进程是否已确定「系统代理不可用、固定直连」（诊断/测试用）。"""
-    return _force_direct
+    """本进程此刻是否固定直连（诊断/测试用）。钉子过期即回到「重新试代理」。"""
+    return bool(_force_direct) and time.monotonic() < _force_direct_until
 
 
 def reset_transport() -> None:
     """复位传输层结论（测试隔离；网络环境变化后可显式重试代理）。"""
-    global _force_direct, _direct_opener
+    global _force_direct, _force_direct_until, _direct_opener
     _force_direct = False
+    _force_direct_until = 0.0
     _direct_opener = None
 
 
@@ -229,6 +240,7 @@ def urlopen(
     context=None,
     opener: OpenerFactory | None = None,
     pollute: bool = True,
+    routes: tuple[bool, ...] | None = None,
     **kwargs,
 ):
     """同 :func:`urllib.request.urlopen`，但代理连不上时自动改直连重试一次。
@@ -238,30 +250,137 @@ def urlopen(
     不代表整个进程可以固定直连，**不得**改写进程级「固定直连」结论。
     ``HTTPError`` 原样抛出；两种方式都失败时抛最后一次的传输异常。
 
+    ``routes`` 是**本次调用**的路由计划：``True`` 走系统代理、``False`` 只直连，
+    例如 ``(False,)`` = 只直连、``(True,)`` = 只走代理；``None`` 用默认计划
+    （代理优先，传输失败改直连）。显式计划**不改写**进程级「固定直连」结论——
+    那是「这台 API 能不能走代理」的进程级判断，一次按调用方要求的路由代表不了它。
+
+    **5xx 换一条路由再问一次**：网关（尤其是代理/VPN）返回 500/502/503/504 时
+    链路是通的、API 可能完全正常，拿它判定「网络不可达」会让用户去检查路由。
+    4xx/429 与带 ``Retry-After`` 的答复不换路（那是服务端对这次请求的明确答复）。
+
     **每次尝试都重建请求对象**：``ProxyHandler`` 会把 ``req.host`` 改成代理地址、
     ``req.selector`` 改成绝对 URL，复用同一个对象「重试直连」等于再拨一次代理。
+
+    **「固定直连」是有期限的**（``DEFAULT_DIRECT_PIN_SECONDS``）：加速器/VPN 抖动
+    十秒不该让进程此后一辈子不再试代理——那会让「过一会儿又能用了」的网络变成
+    永久「网络不可达」，只有重启才恢复。钉着直连时直连再失败会把代理还回去试一次；
+    直连也没通就**清掉结论**，下一次调用重新按代理优先试。
     """
-    global _force_direct
-    attempts = (False,) if _force_direct else (True, False)
+    global _force_direct, _force_direct_until
+    pinned = force_direct()
+    if _force_direct and not pinned:
+        _force_direct = False
+        _force_direct_until = 0.0
+    if routes is not None:
+        attempts = tuple(bool(item) for item in routes) or (False,)
+    elif pinned:
+        # 钉着直连：直连哪怕只抖一下，用户也已经多等了一个往返，把代理还给他。
+        attempts = (False, True)
+    else:
+        attempts = (True, False)
     build = opener or _opener
     last_exc: Exception | None = None
-    for use_proxy in attempts:
+    for index, use_proxy in enumerate(attempts):
         attempt = clone_request(request)
         try:
             response = build(use_proxy, context).open(attempt, timeout=timeout, **kwargs)
-        except urllib.error.HTTPError:
+        except urllib.error.HTTPError as exc:
+            # 还有别的路由、且这次答复可能是网关自己的错：换一条路再问一次。
+            # 不换路的那几类（4xx/429/带 Retry-After）保持原样抛出：调用方
+            # （`api/probe.py` 的状态码、`net/market.py` 的 304）认的就是 HTTPError。
+            if (
+                index + 1 < len(attempts)
+                and _route_retryable(exc)
+                and _has_other_route(request, opener)
+            ):
+                logger.info("HTTP %s：换路由重试一次", int(getattr(exc, "code", 0) or 0))
+                _discard_response(exc)
+                last_exc = exc
+                continue
             raise
         except Exception as exc:  # noqa: BLE001 - 传输失败：换下一种方式再试
             last_exc = exc
             continue
-        if opener is None and pollute and not use_proxy and not _force_direct:
-            _force_direct = True
-            logger.info(
-                "网络请求改走直连：系统代理不可用（%s）", type(last_exc).__name__
-            )
+        if opener is None and pollute and routes is None:
+            if use_proxy and _force_direct:
+                # 代理又能用了：立刻解除「固定直连」，别让一次抖动钉死整个进程。
+                _force_direct = False
+                _force_direct_until = 0.0
+                logger.info("系统代理已恢复：不再固定直连")
+            elif not use_proxy and not _force_direct:
+                _force_direct = True
+                _force_direct_until = time.monotonic() + DEFAULT_DIRECT_PIN_SECONDS
+                logger.info(
+                    "网络请求改走直连：系统代理不可用（%s）",
+                    type(last_exc).__name__ if last_exc is not None else "-",
+                )
         return response
+    # 每条路由都没通：钉子（「直连能用」）的前提已经不成立，下次重新试代理。
+    if opener is None and pollute and _force_direct:
+        _force_direct = False
+        _force_direct_until = 0.0
+        logger.info("直连也没通：清除「固定直连」结论，下次重新试代理")
     assert last_exc is not None
     raise last_exc
+
+
+def _has_other_route(request, opener: OpenerFactory | None) -> bool:
+    """这次 5xx 之后还有没有**另一条真不一样**的路。
+
+    没有系统代理、或 ``no_proxy`` 把目标主机排除了，``ProxyHandler`` 会直接放行：
+    「代理」与「直连」其实是同一条路，再问一次只会把同一个 5xx 拿回来（聊天请求
+    还要多花一次额度）。给了自定义 ``opener`` 时按「有两条路」处理——那是调用方
+    自己建模的路由，本模块无从（也不该）推断。
+    """
+    if opener is not None:
+        return True
+    try:
+        proxies = {
+            key: value
+            for key, value in urllib.request.getproxies().items()
+            if str(key).lower() != "no_proxy"
+        }
+    except Exception:  # noqa: BLE001 - 读不到代理配置就按「有代理」处理
+        return True
+    if not any(str(value or "").strip() for value in proxies.values()):
+        return False
+    try:
+        host = str(getattr(request, "host", "") or "")
+        return not host or not urllib.request.proxy_bypass(host)
+    except Exception:  # noqa: BLE001 - 判断不了就多问一次（宁可多也不误判）
+        return True
+
+
+def _route_retryable(exc: urllib.error.HTTPError) -> bool:
+    """这次 HTTPError 值不值得换一条路由再问一次。
+
+    只有 5xx 网关错误值得：4xx/429 是服务端对这次请求的答复（换路只会把限流
+    当链路故障），带 ``Retry-After`` 时更是服务端明确要求等待。
+    """
+    try:
+        status = int(getattr(exc, "code", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    if status not in ROUTE_RETRY_STATUSES:
+        return False
+    try:
+        raw = exc.headers.get("Retry-After") if exc.headers is not None else None
+    except (AttributeError, TypeError, ValueError):
+        raw = None
+    return not str(raw or "").strip()
+
+
+def _discard_response(exc: BaseException) -> None:
+    """放弃一个不打算交给调用方的响应：关掉它，别把连接晾在那儿。"""
+    close = getattr(exc, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:  # noqa: BLE001 - 关闭失败不影响换路
+        pass
+
 
 
 def build_request(

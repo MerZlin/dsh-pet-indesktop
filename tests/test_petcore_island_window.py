@@ -265,6 +265,47 @@ def test_hidden_island_stops_sampling(make_island):
     assert island.net_monitor.running() is False
 
 
+def _record_probe_sync(island):
+    wanted: list[frozenset[str]] = []
+    island.set_probe_sync_callback(lambda ids: wanted.append(frozenset(ids)))
+    return wanted
+
+
+def test_stop_reports_no_wanted_probes(make_island):
+    """隐藏/停用必须让宿主收到空集：否则 GPU/FPS 在岛看不见时继续采（白烧电）。"""
+    island = make_island({"island_metrics": ["cpu", "gpu", "fps"]})
+    wanted = _record_probe_sync(island)
+    island.show()
+    app.processEvents()
+    island.start()
+    assert wanted[-1] == frozenset({isl.GPU, isl.FPS})
+    island.stop()
+    assert wanted[-1] == frozenset(), "stop() 必须自己收口采样，不能等下一次 1Hz 心跳"
+
+
+def test_hide_reports_no_wanted_probes(make_island):
+    island = make_island({"island_metrics": ["gpu"]})
+    wanted = _record_probe_sync(island)
+    island.show()
+    app.processEvents()
+    assert wanted[-1] == frozenset({isl.GPU})
+    island.hide()
+    app.processEvents()
+    assert wanted[-1] == frozenset()
+
+
+def test_set_visible_false_reports_no_wanted_probes(make_island):
+    island = make_island({"island_metrics": ["fps"]})
+    wanted = _record_probe_sync(island)
+    island.set_visible(True)
+    app.processEvents()
+    assert wanted[-1] == frozenset({isl.FPS})
+    island.set_visible(False)
+    assert wanted[-1] == frozenset()
+    island.set_visible(False)  # 已经隐藏：仍必须是空集（幂等，不重新拉起采样）
+    assert wanted[-1] == frozenset()
+
+
 def test_hover_pauses_auto_collapse(make_island):
     island = make_island()
     island.expand_card()

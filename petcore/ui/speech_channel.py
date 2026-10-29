@@ -161,13 +161,17 @@ class CoreSpeechPort:
             return
         self._active = job.token
         tracked = getattr(self.audio, 'play_tracked', None)
+        # 播放音量必须取**合成结果里的有效值**：``SpeechRequest.volume`` 留空是
+        # 「沿用语音页配置」，把它（None）交给音频层会让 float() 抛 TypeError，
+        # 整句语音在 on_error 为 None 时静默消失。
+        volume = float(getattr(result, 'volume', 1.0) or 0.0)
         try:
             if tracked:
-                played = tracked(result.path, volume=job.request.volume,
+                played = tracked(result.path, volume=volume,
                     on_finished=lambda: self._finish(job, job.on_finished, result),
                     on_error=lambda error: self._finish(job, job.on_error, error))
             else:
-                played = self.audio.play(result.path)
+                played = self.audio.play(result.path, volume=volume)
             if played is False:
                 raise SpeechError('unavailable', 'audio channel unavailable')
         except Exception as exc:

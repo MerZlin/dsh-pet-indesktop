@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import logging
 import os
+import time
 
 from PySide6.QtCore import QObject, QRect, Qt, QTimer
 from PySide6.QtGui import QCursor
@@ -16,7 +18,16 @@ _WS_EX_TOOLWINDOW = 0x00000080
 
 
 def _user32():
-    return ctypes.windll.user32
+    """取 user32 并声明 64 位安全的 argtypes（HWND 是指针，默认 int32 会截断）。"""
+    user32 = ctypes.windll.user32
+    try:
+        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetWindowLongW.restype = ctypes.c_long
+        user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+        user32.SetWindowLongW.restype = ctypes.c_long
+    except Exception:
+        logger.debug("configure user32 failed", exc_info=True)
+    return user32
 
 
 def set_click_through(hwnd: int, enabled: bool) -> bool:
@@ -73,6 +84,100 @@ def apply_click_through(window, enabled: bool) -> None:
         window.show()
 
 
+#: SendInput 的鼠标事件常量。
+_MOUSEEVENTF_LEFTDOWN = 0x0002
+_MOUSEEVENTF_LEFTUP = 0x0004
+
+
+class _MouseInput(ctypes.Structure):
+    _fields_ = (
+        ("dx", ctypes.c_long),
+        ("dy", ctypes.c_long),
+        ("mouseData", ctypes.c_ulong),
+        ("dwFlags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ctypes.c_void_p),
+    )
+
+
+class _Input(ctypes.Structure):
+    _fields_ = (("type", ctypes.c_ulong), ("mi", _MouseInput))
+
+
+def _send_left_click(user32=None) -> bool:
+    """在当前光标位置注入一次真实的左键 down+up；非 Windows/失败返回 False。"""
+    if os.name != "nt":
+        return False
+    try:
+        user32 = user32 or _user32()
+        try:
+            user32.SendInput.argtypes = [
+                wintypes.UINT,
+                ctypes.POINTER(_Input),
+                ctypes.c_int,
+            ]
+            user32.SendInput.restype = wintypes.UINT
+        except Exception:
+            pass
+        events = (_Input * 2)()
+        events[0].type = 0  # INPUT_MOUSE
+        events[0].mi.dwFlags = _MOUSEEVENTF_LEFTDOWN
+        events[1].type = 0
+        events[1].mi.dwFlags = _MOUSEEVENTF_LEFTUP
+        sent = user32.SendInput(2, events, ctypes.sizeof(_Input))
+        return int(sent) == 2
+    except Exception:
+        logger.debug("SendInput left click failed", exc_info=True)
+        return False
+
+
+def forward_left_click(
+    window,
+    *,
+    hold_ms: int = 80,
+    user32=None,
+    send_input=None,
+) -> bool:
+    """把一次左键单击转发给桌宠下面的窗口。
+
+    穿透模式不能一直挂着 ``WS_EX_TRANSPARENT``（那样右键也会被放走），所以
+    在松手时临时置穿透位、注入真实左键、再恢复。注入前先把窗口变透明，系统
+    命中测试才会跳过桌宠、落到下面的窗口；恢复留到输入处理之后（``hold_ms``）。
+    """
+    if os.name != "nt":
+        return False
+    user32 = user32 or _user32()
+    hwnd = int(window.winId())
+    try:
+        style = int(user32.GetWindowLongW(hwnd, _GWL_EXSTYLE))
+        user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, style | _WS_EX_TRANSPARENT)
+    except Exception:
+        logger.debug("forward click: set transparent failed", exc_info=True)
+        return False
+    hold_ms = max(20, int(hold_ms))
+    window._through_hold_until = time.monotonic() + hold_ms / 1000.0
+
+    def restore() -> None:
+        try:
+            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, style)
+        except Exception:
+            logger.debug("forward click: restore style failed", exc_info=True)
+        finally:
+            window._through_hold_until = 0.0
+
+    click = send_input or _send_left_click
+    try:
+        ok = bool(click(user32))
+    except Exception:
+        logger.debug("forward click: SendInput raised", exc_info=True)
+        ok = False
+    if not ok:
+        restore()
+        return False
+    QTimer.singleShot(hold_ms, window, restore)
+    return True
+
+
 class PerPixelInputController(QObject):
     NORMAL_INTERVAL_MS = 10
     IDLE_INTERVAL_MS = 50
@@ -88,7 +193,18 @@ class PerPixelInputController(QObject):
         self._timer.start()
 
     def stop(self) -> None:
+        """隐藏/关闭时停表并清穿透位；显示时由 ``resume()`` 重新收敛。"""
         self._timer.stop()
+        try:
+            self._apply(False)
+        except (RuntimeError, AttributeError):
+            pass
+
+    def resume(self) -> None:
+        """显示/恢复：作废缓存，同步收敛一次再重开轮询。"""
+        self._applied = None
+        self.refresh()
+        self._timer.start()
 
     def refresh(self) -> None:
         if os.name != "nt":
@@ -98,15 +214,29 @@ class PerPixelInputController(QObject):
             if not window.isVisible():
                 self._apply(False)
                 return
+            # 转发点击期间窗口必须保持透明（让系统命中下面的窗口），由
+            # forward_left_click 的恢复计时独占样式，轮询不得抢先写回。
+            if time.monotonic() < float(getattr(window, "_through_hold_until", 0.0) or 0.0):
+                return
             position = QCursor.pos()
             local = window.mapFromGlobal(position)
             inside = QRect(0, 0, window.width(), window.height()).contains(local)
-            dragging = bool(getattr(window, "dragging", False))
-            interval = self.IDLE_INTERVAL_MS if dragging or not inside else self.NORMAL_INTERVAL_MS
+            press_active = bool(
+                getattr(window, "dragging", False)
+                or getattr(window, "_left_press_active", False)
+                or getattr(window, "_right_press_active", False)
+            )
+            interval = (
+                self.IDLE_INTERVAL_MS
+                if press_active or not inside
+                else self.NORMAL_INTERVAL_MS
+            )
             if self._timer.interval() != interval:
                 self._timer.setInterval(interval)
-            enabled = bool(getattr(window, "click_through", False))
-            if not enabled and inside and not dragging:
+            # 穿透模式不再整窗挂 WS_EX_TRANSPARENT（否则右键也被放走）：
+            # 只有光标落在透明像素上才真正穿透，左键穿透由窗口在松手时转发。
+            enabled = False
+            if inside and not press_active:
                 enabled = bool(self._is_transparent(local))
             self._apply(enabled)
         except (RuntimeError, AttributeError):

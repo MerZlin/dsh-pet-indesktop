@@ -77,17 +77,34 @@ class FakeAudio:
     def __init__(self, result=True) -> None:
         self.result = result
         self.paths: list[Path] = []
+        self.volumes: list[float | None] = []
         self._lock = threading.Lock()
 
     def play(self, path, volume=None) -> bool:
         with self._lock:
             self.paths.append(Path(path))
+            self.volumes.append(volume)
         if isinstance(self.result, BaseException):
             raise self.result
         return self.result
 
     def set_volume(self, volume: float) -> None:
         pass
+
+
+class TrackedAudio:
+    """与 ``AudioAdapter.play_tracked`` 同款：``float(volume)`` 遇到 None 会抛。"""
+
+    def __init__(self) -> None:
+        self.volumes: list[float] = []
+        self.finished = threading.Event()
+
+    def play_tracked(self, path, *, volume=1.0, on_finished, on_error):
+        value = max(0.0, min(1.0, float(volume)))  # None → TypeError（真机静默的根因）
+        self.volumes.append(value)
+        on_finished()
+        self.finished.set()
+        return True
 
 
 def _make_service(
@@ -336,6 +353,41 @@ def test_core_speech_port_speaks_through_shared_audio(tmp_path, monkeypatch) -> 
     assert captured and captured[0].path.exists()
     assert audio.paths == [captured[0].path]
     assert port.playing() is False
+
+
+def test_core_speech_port_passes_a_real_volume_to_tracked_playback(
+    tmp_path, monkeypatch
+) -> None:
+    """请求留空 volume 时也必须给音频层一个真实浮点：None 会让整句静默丢失。"""
+    monkeypatch.setattr(speech_service, "RETRY_DELAY_S", 0.0)
+    assert _application() is not None
+    service = _make_service(tmp_path, synth=RecordingSynth(b"mp3-bytes"))
+    audio = TrackedAudio()
+    port = _port(service, audio)
+    errors: list[SpeechError] = []
+
+    port.speak(SpeechRequest(text="点击台词"), on_error=errors.append)
+
+    assert audio.finished.wait(5.0)
+    assert errors == []
+    assert audio.volumes == [1.0]
+
+
+def test_core_speech_port_playback_volume_follows_config(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(speech_service, "RETRY_DELAY_S", 0.0)
+    assert _application() is not None
+    service = _make_service(
+        tmp_path,
+        synth=RecordingSynth(b"mp3-bytes"),
+        config=FakeConfig(speech_volume=0.4),
+    )
+    audio = TrackedAudio()
+    port = _port(service, audio)
+
+    port.speak(SpeechRequest(text="小声一点"))
+
+    assert audio.finished.wait(5.0)
+    assert audio.volumes == [0.4]
 
 
 def test_core_speech_port_stop_blocks_pending_playback(tmp_path, monkeypatch) -> None:

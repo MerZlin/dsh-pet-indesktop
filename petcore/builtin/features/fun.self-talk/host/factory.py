@@ -29,6 +29,19 @@ CHAMPION_LINES: tuple[tuple[str, str, int], ...] = (
 CHAMPION_OWNER = "fun.self-talk"
 
 
+def _log_speech_failure(tag: str):
+    """语音失败不能静默：只记稳定分类，不记台词/URL。"""
+
+    def failed(error) -> None:
+        logger.warning(
+            "%s speech failed: reason=%s",
+            tag,
+            getattr(error, "reason", type(error).__name__),
+        )
+
+    return failed
+
+
 class SelfTalkRuntime:
     def __init__(self, context):
         self.context = context
@@ -215,6 +228,7 @@ class SelfTalkRuntime:
                 owner=CHAMPION_OWNER,
                 slot=slot,
                 guard=valid,
+                on_error=_log_speech_failure("self-talk"),
             )
         except Exception:  # noqa: BLE001 - 语音失败不能影响气泡与下次排期
             logger.debug("self-talk speech failed", exc_info=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QWidget
 
+from ...config import MAX_PETS
 from ...engine.geometry import SCALE_MAX, SCALE_MIN
 from .base import SettingsPage, make_button, make_checkbox, make_slider, make_spin
 
@@ -111,7 +112,9 @@ class PetsPage(SettingsPage):
             item.setData(Qt.ItemDataRole.UserRole, window.slot)
             self.list_widget.addItem(item)
         count = len(manager.each())
-        self.status_label.setText(f"当前 {count} 只（最多 16 只）。生小肥鱼会沿用主宠设置生成新的子宠。")
+        self.status_label.setText(
+            f"当前 {count} 只（最多 {MAX_PETS} 只）。生小肥鱼会沿用主宠设置生成新的子宠。"
+        )
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

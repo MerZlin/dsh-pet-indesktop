@@ -21,6 +21,16 @@
 **线程纪律**：一条守护线程（:data:`THREAD_NAME`）负责开会话、读行、发布快照；
 每场会话另有两条读线程（stdout / stderr）。``stop()`` 只取消、不 join；收口在
 worker 里做（有界等退 → terminate → kill），所以 GUI 线程不会被采集链路吊住。
+``shutdown(wait_seconds)`` 是**退出路径**：取消后最多等这么久让 worker 把官方终止
+命令发出去，别让守护线程和解释器抢着收尾。
+
+**目标生命周期**：目标正常退出（``--terminate_on_proc_exit`` → 退出码 0）会被记成
+``target_gone``，同一个死 pid 不再重开会话（只有 ``set_target(新 pid)`` 解除）；
+换目标要过 ``MIN_SESSION_SECONDS`` 与会话去抖，焦点抖动不会每秒开关一场 ETW 会话。
+
+**开会话前先打扫**：进程内第一次真正起采集时，守护线程跑一次 ``logman query -ets``，
+只停属主进程已退出的 ``dsh-pet-fps-*`` 残留会话——被强杀的进程走不到官方终止命令，
+残留攒满后新会话会报 ``error 1450``。读不到、起不来只记原因，绝不编数字。
 
 **一次只开一场会话**：进程级单例宿主 :func:`shared_probe` 让多宠共用同一个探针；
 :meth:`FpsProbe.start` 幂等，已有活动会话时直接复用。
@@ -146,6 +156,11 @@ _HEADER_SHAPE = ("Application", "ProcessID")
 # ---------------------------------------------------------------- 生命周期
 #: 目标变化后稳定这么久才换会话（避免 Alt-Tab 掠过一堆窗口时反复重开会话）。
 TARGET_STABLE_SECONDS = 0.75
+#: 一场会话至少活这么久才允许因换目标换掉它。焦点在「游戏 ↔ 桌宠/浏览器」之间抖动
+#: 时，换目标只会把一场 ETW 会话每秒开关一次（每次都是子进程 + 终止命令）。
+MIN_SESSION_SECONDS = 3.0
+#: 新目标要稳定这么久才换会话（与 :data:`TARGET_STABLE_SECONDS` 取较大者）。
+TARGET_CHANGE_DEBOUNCE = 2.0
 #: 超过这么久没有新的 Present 帧、或数据落后现实这么久 → 读数过期（不冒称实时）。
 STALE_SECONDS = 3.0
 #: 主循环节拍（10Hz 足够及时发现子进程退出与目标变化）。
@@ -312,6 +327,14 @@ def build_terminate_args(session_name: str) -> list[str]:
 def _bounded_reason(text: Any) -> str:
     flat = " ".join(str(text or "").split())
     return flat[:MAX_REASON_CHARS]
+
+
+def _normal_exit(exit_code: Any) -> bool:
+    """采集进程是不是**正常结束**（退出码 0 = ``--terminate_on_proc_exit`` 下目标退出）。"""
+    try:
+        return int(exit_code) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 def is_terminal_failure(exit_code: Any, stderr_text: str = "") -> bool:
@@ -993,6 +1016,184 @@ def _adopt_into_job(proc: Any) -> bool:
                 pass
 
 
+# ---------------------------------------------------------------- 残留会话清扫（Windows）
+#: 清残留用系统自带的 ``logman``：不新增依赖、不提权、不装服务。**只碰我们自己的
+#: 命名空间**（``dsh-pet-fps-*``）且有明确证据属于已退出进程的会话——别人的采集
+#: 一行都不碰，判活拿不到结论时按"活着"处理。
+LOGMAN_EXE = "logman.exe"
+SWEEP_QUERY_TIMEOUT_SECONDS = 8.0
+SWEEP_STOP_TIMEOUT_SECONDS = 5.0
+SWEEP_THREAD_NAME = "petcore-fps-sweep"
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_STILL_ACTIVE = 259
+_ERROR_ACCESS_DENIED = 5
+
+
+def sweep_supported() -> bool:
+    """这台机器有没有 ETW（残留会话只可能在 Windows 上存在）。"""
+    return os.name == "nt"
+
+
+def parse_logman_sessions(text: Any) -> list[str]:
+    """``logman query -ets`` 输出 → 我们命名空间里的会话名（去重、保序）。
+
+    按**行首 token** 认，不依赖表头语言（中文 Windows 的表头是「数据收集器集」）：
+    我们自己起的会话名固定以 :data:`SESSION_NAME_PREFIX` 开头，别的会话不会命中。
+    """
+    names: list[str] = []
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        token = line.split()[0].strip('"')
+        if token.startswith(SESSION_NAME_PREFIX) and token not in names:
+            names.append(token)
+    return names
+
+
+def session_owner_pid(name: Any) -> int | None:
+    """``dsh-pet-fps-<pid>-<seq>-<rand>`` → 起它的进程 pid；解析不了返回 ``None``。"""
+    text = str(name or "")
+    if not text.startswith(SESSION_NAME_PREFIX):
+        return None
+    head = text[len(SESSION_NAME_PREFIX):].split("-", 1)[0]
+    try:
+        pid = int(head)
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def pid_alive(pid: int) -> bool:
+    """进程是否还活着；**取不到结论按"活着"处理**（宁可漏清，不误停别人的会话）。"""
+    if not sweep_supported():
+        return True
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    except Exception:  # noqa: BLE001 - 接口/权限问题一律保守
+        return True
+    if not handle:
+        # 打不开：别人的进程（ACCESS_DENIED）可能活着；其余（含 pid 不存在）算退出。
+        return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
+    try:
+        code = ctypes.c_ulong(0)
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == _STILL_ACTIVE
+    finally:
+        try:
+            kernel32.CloseHandle(handle)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _run_logman(args: list[str], timeout: float):
+    """跑一次 logman（有界；隐藏控制台窗口）。"""
+    return subprocess.run(
+        [LOGMAN_EXE, *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        creationflags=_creation_flags(),
+        check=False,
+    )
+
+
+def sweep_residual_sessions(*, runner=None, alive=None, own_pid=None, log=None) -> int | None:
+    """停掉属主进程已退出的 ``dsh-pet-fps-*`` 会话；返回**实际停掉的条数**。
+
+    返回 ``None`` = 这次没查成（找不到 logman / 调用失败 / query 退出码非 0），
+    调用方据此决定下次要不要再试；其余情况一律返回真实条数（读不到就 0，不编数字）。
+    会起子进程并阻塞，调用方必须放到后台线程。
+    """
+    runner_fn = runner or (lambda args, timeout: _run_logman(args, timeout))
+    alive_fn = alive or pid_alive
+    log_fn = log or logger
+    me = os.getpid() if own_pid is None else int(own_pid)
+    try:
+        result = runner_fn(["query", "-ets"], SWEEP_QUERY_TIMEOUT_SECONDS)
+    except FileNotFoundError:
+        log_fn.info("帧率探针：跳过残留会话清扫（找不到 %s）", LOGMAN_EXE)
+        return None
+    except (OSError, subprocess.SubprocessError) as exc:
+        log_fn.info(
+            "帧率探针：跳过残留会话清扫（%s 调用失败：%s）",
+            LOGMAN_EXE,
+            type(exc).__name__,
+        )
+        return None
+    code = getattr(result, "returncode", 0)
+    if code not in (0, None):
+        log_fn.info("帧率探针：跳过残留会话清扫（%s query 退出码 %s）", LOGMAN_EXE, code)
+        return None
+    stopped = 0
+    for name in parse_logman_sessions(getattr(result, "stdout", "")):
+        owner = session_owner_pid(name)
+        if owner is None or owner == me:
+            continue
+        try:
+            if alive_fn(owner):
+                continue
+        except Exception:  # noqa: BLE001 - 判活失败按活着处理
+            continue
+        try:
+            runner_fn(["stop", name, "-ets"], SWEEP_STOP_TIMEOUT_SECONDS)
+        except (OSError, subprocess.SubprocessError) as exc:
+            log_fn.info("帧率探针：残留会话 %s 停不掉（%s）", name, type(exc).__name__)
+            continue
+        stopped += 1
+    if stopped:
+        log_fn.info("帧率探针：清掉 %d 个残留采集会话", stopped)
+    return stopped
+
+
+_sweep_lock = threading.Lock()
+_sweep_started = False
+
+
+def reset_residual_sweep() -> None:
+    """忘掉「本进程已经扫过」（退出钩子/测试用；正式路径每进程只扫一次）。"""
+    global _sweep_started
+    with _sweep_lock:
+        _sweep_started = False
+
+
+def start_residual_sweep_once(*, sweeper=None) -> bool:
+    """本进程第一次真正起采集时扫一次残留会话；返回这次是否真的起了线程。
+
+    **守护线程 + 每进程一次**：打扫是顺手的事，不许阻塞起步、不许每场会话都扫。
+    查询失败（``sweep()`` 返回 ``None``）时闸门重新打开，下一次真起采集再试——
+    与主分支 ``sweep_stale_sessions`` 的「查询失败不关闸」同一口径。
+    """
+    global _sweep_started
+    if not sweep_supported():
+        return False
+    with _sweep_lock:
+        if _sweep_started:
+            return False
+        _sweep_started = True
+    sweep = sweeper or sweep_residual_sessions
+
+    def worker() -> None:
+        global _sweep_started
+        try:
+            outcome = sweep()
+        except Exception:  # noqa: BLE001 - 打扫失败不影响采集
+            logger.debug("帧率探针：残留会话清扫异常", exc_info=True)
+            outcome = None
+        if outcome is None:
+            with _sweep_lock:
+                _sweep_started = False
+
+    threading.Thread(target=worker, name=SWEEP_THREAD_NAME, daemon=True).start()
+    return True
+
+
 # ---------------------------------------------------------------- 会话（子进程）
 def _creation_flags() -> int:
     """Windows：隐藏控制台窗口（缺了它每次开会话都闪一个终端）。"""
@@ -1268,6 +1469,10 @@ class _Runtime:
     error: str = ""
     terminal: str = ""
     blocked: tuple[str, str] = ("", "")
+    #: 目标进程已正常退出（``--terminate_on_proc_exit``）：不重开同一个死 pid。
+    target_gone: bool = False
+    #: 已退出的目标 pid（``set_target`` 换掉目标才解除）。
+    gone_pid: int | None = None
     failures: int = 0
     next_attempt_at: float = 0.0
     last_publish_at: float = 0.0
@@ -1300,11 +1505,14 @@ class FpsProbe:
         publish_interval: float = PUBLISH_INTERVAL_SECONDS,
         stale_seconds: float = STALE_SECONDS,
         target_stable_seconds: float = TARGET_STABLE_SECONDS,
+        min_session_seconds: float = MIN_SESSION_SECONDS,
+        target_change_debounce: float = TARGET_CHANGE_DEBOUNCE,
         max_failures: int = MAX_CONSECUTIVE_FAILURES,
         retry_backoff_seconds: float = RETRY_BACKOFF_SECONDS,
         stop_timeout: float = STOP_TIMEOUT_SECONDS,
         terminate_timeout: float = TERMINATE_TIMEOUT_SECONDS,
         on_sample: Callable[[FpsSample], None] | None = None,
+        sweep_starter: Callable[[], object] | None = None,
     ):
         self._clock = clock
         self._platform_supported_fn = platform_supported or _default_platform_supported
@@ -1323,11 +1531,14 @@ class FpsProbe:
         self._publish_interval = max(0.0, float(publish_interval))
         self._stale_seconds = max(0.0, float(stale_seconds))
         self._target_stable_seconds = max(0.0, float(target_stable_seconds))
+        self._min_session_seconds = max(0.0, float(min_session_seconds))
+        self._target_change_debounce = max(0.0, float(target_change_debounce))
         self._max_failures = max(1, int(max_failures))
         self._retry_backoff_seconds = max(0.0, float(retry_backoff_seconds))
         self._stop_timeout = float(stop_timeout)
         self._terminate_timeout = float(terminate_timeout)
         self._on_sample = on_sample
+        self._sweep_starter = sweep_starter or start_residual_sweep_once
 
         self._lock = threading.Lock()
         self._target_pid = self._normalize_pid(target_pid)
@@ -1499,15 +1710,20 @@ class FpsProbe:
         """设置采集目标（显式传入 pid；目标解析由调用方决定）。
 
         换目标会清掉终态错误（用户显式换了目标 = 一次显式重试）。会话已开时按
-        :data:`TARGET_STABLE_SECONDS` 去抖，避免前台掠过一堆窗口就反复重开会话。
+        :data:`TARGET_STABLE_SECONDS` / :data:`MIN_SESSION_SECONDS` 去抖，避免前台
+        掠过一堆窗口就反复重开会话。
+
+        **同一个 pid 幂等**：名字被重新解析、或每秒都拿同一份目标调一次，都不算
+        "换目标"——不重置重试代次、不重置去抖（否则等于每次都重新开始等一遍）。
         """
         value = self._normalize_pid(pid)
+        label = str(name or "")
         with self._lock:
-            changed = (value, str(name or "")) != (self._target_pid, self._target_name)
+            changed = value != self._target_pid
             self._target_pid = value
-            self._target_name = str(name or "")
-            self._target_requested_at = self._clock() if changed else None
+            self._target_name = label
             if changed:
+                self._target_requested_at = self._clock()
                 self._retry_epoch += 1
 
     # ------------------------------------------------------------ 起停
@@ -1547,7 +1763,18 @@ class FpsProbe:
         if started is None:
             return active
         started.start()
+        # 每进程一次的残留会话打扫：只在这里（真的起了一场采集）触发。
+        self._start_sweep_once()
         return True
+
+    def _start_sweep_once(self) -> None:
+        starter = self._sweep_starter
+        if starter is None:
+            return
+        try:
+            starter()
+        except Exception:  # noqa: BLE001 - 打扫失败不影响采集
+            logger.debug("帧率探针：残留会话清扫启动失败", exc_info=True)
 
     def _waiting_sample_locked(self) -> FpsSample:
         # 调用方持有 self._lock：只用已读字段，不再加锁。
@@ -1575,6 +1802,16 @@ class FpsProbe:
         """最终收口（退出路径）：停采集并**有界** join，幂等。"""
         self.stop()
         self.wait_stopped(timeout)
+
+    def shutdown(self, wait_seconds: float = 1.0) -> None:
+        """退出路径：取消采集并**有界**等 worker 收口（默认 1 秒）。
+
+        与 :meth:`stop` 的区别只在"等"：隐藏/停用只取消（GUI 线程不许被子进程的
+        收口吊住）；进程要退出时必须给 worker 一点时间把官方终止命令发出去，
+        否则守护线程会和解释器抢着收尾。
+        """
+        self.stop()
+        self.wait_stopped(max(0.0, float(wait_seconds)))
 
     def _set_snapshot(self, sample: FpsSample) -> None:
         with self._lock:
@@ -1614,6 +1851,8 @@ class FpsProbe:
             runtime.notice = ""
             runtime.failures = 0
             runtime.next_attempt_at = 0.0
+            runtime.target_gone = False
+            runtime.gone_pid = None
         runtime.blocked = self._blocked()
         if runtime.blocked[0]:
             if runtime.session is not None:
@@ -1631,12 +1870,21 @@ class FpsProbe:
                 return
             with self._lock:
                 requested_at = self._target_requested_at
-            if (
-                requested_at is not None
-                and now - requested_at < self._target_stable_seconds
-            ):
+            # 两道闸：这场会话至少活满 MIN_SESSION_SECONDS，且新目标已稳定
+            # TARGET_CHANGE_DEBOUNCE。焦点在游戏/桌宠之间每秒抖一次时，这里保证
+            # 最多每 ~3 秒换一次会话，而不是每秒开关一场 ETW 采集。
+            ready_at = runtime.session_started_at + self._min_session_seconds
+            if requested_at is not None:
+                ready_at = max(
+                    ready_at,
+                    requested_at + max(self._target_stable_seconds, self._target_change_debounce),
+                )
+            if now < ready_at:
                 return
             self._close_session(runtime)
+            return
+        if runtime.gone_pid is not None and runtime.gone_pid == pid:
+            # 目标已正常退出：同一个死 pid 不再重开会话（只有 set_target 换目标才解除）。
             return
         if runtime.terminal:
             return
@@ -1657,6 +1905,8 @@ class FpsProbe:
         runtime.exit_code = None
         runtime.notice = ""
         runtime.error = ""
+        runtime.target_gone = False
+        runtime.gone_pid = None
         backend = self.backend
         session_name = new_session_name()
         try:
@@ -1761,11 +2011,19 @@ class FpsProbe:
             runtime.exit_code = int(code)
         except (TypeError, ValueError):
             runtime.exit_code = None
+        # 会话目标在 `_close_session` 里会被清空：先记下它，退出结论按这个 pid 记。
+        target_pid = runtime.pid
         self._close_session(runtime)
         if state == STATE_OK:
             runtime.failures = 0
-            runtime.notice = "目标进程已退出采集"
-            # 目标没了就别每拍重开：给一个短退避，等调用方换目标。
+            if _normal_exit(code):
+                # ``--terminate_on_proc_exit`` 下目标退出 = 退出码 0：这是「目标没了」，
+                # 不是「临时失败」。记住这个死 pid，别再每拍对它重开会话。
+                runtime.target_gone = True
+                runtime.gone_pid = target_pid
+                runtime.notice = "目标进程已退出采集"
+            else:
+                runtime.notice = "采集会话已结束"
             runtime.next_attempt_at = now + self._retry_backoff_seconds
             return
         raw = " ".join(str(stderr or "").split())[:MAX_STDERR_TEXT_CHARS]
@@ -1843,7 +2101,12 @@ class FpsProbe:
                 "没有可采集的目标" if pid is None else "采集会话尚未就绪"
             )
             return self._make_sample(
-                state=STATE_UNKNOWN, reason=reason, pid=target_pid, name=name
+                state=STATE_UNKNOWN,
+                reason=reason,
+                pid=target_pid,
+                name=name,
+                # 机器可读的结论：宿主据此决定「退避 30 秒再找前台」而不是每秒重设目标。
+                extra={"target_gone": True} if runtime.target_gone else None,
             )
 
         reading = runtime.window.reading()

@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from petcore.config import Config
+from petcore.config import Config, DEFAULTS
 from petcore.contracts.content import AnimationSpec, CharacterSpec
 from petcore.contracts.contributions import SettingsPageSpec
 from petcore.contracts.host import HostPorts
@@ -954,3 +954,112 @@ def test_interaction_page_does_not_revert_external_menu_changes(app, tmp_path) -
         assert host.config.get("golden_spin_on_click") is True, "未触碰的键被旧控件值覆盖了"
     finally:
         dialog.close()
+
+
+# ---------------------------------------------------------------- 重置（命令）
+
+
+def test_reset_buttons_sit_in_the_sidebar(app, tmp_path) -> None:
+    host = _host(Path(tmp_path))
+    dialog = SettingsDialog(host)
+    try:
+        assert dialog.reset_pet_button.text() == "重置本宠设置…"
+        assert dialog.reset_global_button.text() == "重置全局设置…"
+        assert dialog.reset_pet_button.accessibleName() == "重置本宠设置"
+        assert dialog.reset_global_button.accessibleName() == "重置全局设置"
+        # 命令类控件不进页面列表/搜索索引（SETTINGS-CHANGE-GATES 2026-10-17 条）。
+        assert "重置" not in [entry.title for entry in dialog._pages]  # noqa: SLF001
+    finally:
+        dialog.close()
+
+
+def test_reset_cancel_changes_nothing(app, tmp_path) -> None:
+    host = _host(Path(tmp_path))
+    host.config.set("ui_font_size", 17)
+    dialog = SettingsDialog(host)
+    try:
+        dialog._confirm_reset = lambda scope: False  # noqa: SLF001
+        dialog.reset_global_button.click()
+        assert host.config.get("ui_font_size") == 17
+        assert dialog.result() != QDialog.DialogCode.Accepted
+    finally:
+        dialog.deleteLater()
+
+
+def test_reset_global_closes_without_committing_stale_widgets(app, tmp_path) -> None:
+    host = _host(Path(tmp_path))
+    host.config.set("ui_font_size", 17)
+    dialog = SettingsDialog(host)
+    commits: list[int] = []
+    try:
+        dialog._confirm_reset = lambda scope: True  # noqa: SLF001
+        dialog._commit = lambda: commits.append(1) or True  # noqa: SLF001
+        dialog.reset_global_button.click()
+        assert commits == [], "重置后关闭不能再 _commit（旧控件值会把默认值写回去）"
+        assert host.config.get("ui_font_size") == DEFAULTS["ui_font_size"]
+        assert dialog.result() == QDialog.DialogCode.Accepted
+        assert dialog.isVisible() is False
+    finally:
+        dialog.deleteLater()
+
+
+def test_reset_pet_keeps_identity_and_global_keys(app, tmp_path) -> None:
+    host = _host(Path(tmp_path))
+    host.config.set("character", "fallback")
+    host.config.set("scale", 1.4)
+    host.config.set("ui_font_size", 17)
+    dialog = SettingsDialog(host)
+    try:
+        dialog._confirm_reset = lambda scope: True  # noqa: SLF001
+        dialog.reset_pet_button.click()
+        assert host.config.get("scale") == DEFAULTS["scale"]
+        assert host.config.get("character") == "fallback"
+        assert host.config.get("ui_font_size") == 17
+    finally:
+        dialog.deleteLater()
+
+
+@pytest.mark.parametrize("font_size", [13, 18])
+def test_reset_buttons_fit_the_sidebar_at_the_minimum_size(
+    app, tmp_path, font_size
+) -> None:
+    """侧栏底部多了两枚按钮：最小窗口 + 最大字号下不许被挤出视口。"""
+    host = _host(Path(tmp_path))
+    host.config.set("ui_font_size", font_size)
+    dialog = SettingsDialog(host)
+    try:
+        dialog.resize(720, 500)
+        dialog.show()
+        QApplication.processEvents()
+        sidebar = dialog.reset_pet_button.parentWidget()
+        for button in (dialog.reset_pet_button, dialog.reset_global_button):
+            top_left = button.mapTo(sidebar, QPoint(0, 0))
+            rect = QRect(top_left, button.size())
+            assert button.isVisible(), "重置按钮在最小窗口下不可见"
+            assert sidebar.rect().contains(rect), "重置按钮被挤出侧栏视口"
+        # 导航仍在上面正常占位（按钮只吃底部那一块）。
+        assert dialog.nav.height() > 0
+    finally:
+        dialog.deleteLater()
+
+
+def test_interaction_page_exposes_squash_elasticity(app, tmp_path: Path) -> None:
+    host = _host(tmp_path)
+    dialog = SettingsDialog(host)
+    page = _page(dialog, "互动与物理")
+    assert page.squash_bounces.value() == 1
+    assert page.squash_strength.value() == 100
+    assert page.squash_ms.value() == 220
+
+    page.squash_bounces.setValue(3)
+    page.squash_strength.setValue(150)
+    page.squash_ms.setValue(600)
+    assert host.config.get("click_squash_bounces") == 3
+    assert host.config.get("click_squash_strength") == 150
+    assert host.config.get("click_squash_ms") == 600
+
+    page.discard_changes()
+    assert page.squash_bounces.value() == 1
+    assert page.squash_strength.value() == 100
+    assert page.squash_ms.value() == 220
+    dialog.deleteLater()

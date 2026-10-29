@@ -18,7 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 from petcore.config import Config
-from petcore.contracts.host import HostPorts
+from petcore.contracts.host import AnimationState, HostPorts
 
 MOD_DIR = Path(__file__).resolve().parents[1] / "examples" / "petcore-mods" / "ai.agent"
 HOST_PKG = "petcore_agent_test_host"
@@ -91,10 +91,12 @@ class FakeScheduler:
 
 
 class FakeBridge:
-    def __init__(self, prefs=None, *, visible=True, animations=None) -> None:
+    def __init__(self, prefs=None, *, visible=True, animations=None, state=None) -> None:
         self._prefs = prefs or links_mod.LinkPrefs()
         self._visible = visible
         self._animations = tuple(animations or ("写代码", "吃Token", "轻快记录", "漂浮踏步"))
+        self.state = state
+        self.state_queries = 0
         self.animations_played: list[str] = []
         self.bubbles: list[tuple[str, bool]] = []
         self.sounds: list[str] = []
@@ -109,6 +111,10 @@ class FakeBridge:
     def animations(self):
         return self._animations
 
+    def animation_state(self):
+        self.state_queries += 1
+        return self.state
+
     def play_animation(self, name: str) -> None:
         self.animations_played.append(name)
 
@@ -122,10 +128,19 @@ class FakeBridge:
         self.sounds.append(kind)
 
 
-def _engine(prefs=None, *, visible=True, animations=None):
+class LegacyBridge(FakeBridge):
+    """旧 Core 的桥：没有 ``animation_state()``（调用方 ``getattr`` 得到非可调用）。
+
+    状态机必须按「未知」退回旧节流口径，不许因此不切动作或抛异常。
+    """
+
+    animation_state = None
+
+
+def _engine(prefs=None, *, visible=True, animations=None, state=None, bridge_cls=FakeBridge):
     clock = FakeClock()
     scheduler = FakeScheduler(clock)
-    bridge = FakeBridge(prefs, visible=visible, animations=animations)
+    bridge = bridge_cls(prefs, visible=visible, animations=animations, state=state)
     engine = links_mod.LinkEngine(
         bridge, schedule=scheduler.schedule, cancel=scheduler.cancel, clock=clock
     )
@@ -336,6 +351,89 @@ def test_animation_pool_falls_back_to_any_act() -> None:
     engine, bridge, _scheduler, _clock = _engine(animations=("伸个懒腰",))
     engine.handle(_event("working"))
     assert bridge.animations_played == ["伸个懒腰"]
+
+
+# ------------------------------------- 「还在播就别重发」与旋转地板
+
+
+def test_busy_keeps_a_still_playing_animation() -> None:
+    """状态说我请求的那段还在播 → 后续每一拍 busy 都不许重发。
+
+    真机上 DSH 一轮思考每 1.5–2 秒写一条 busy 事件；重发 ``play_animation``
+    会让 WebM 终止+重开 / FrameSeq 回到第 0 帧，整轮都在烧 CPU。
+    """
+    engine, bridge, _scheduler, clock = _engine(state=AnimationState(name="写代码"))
+    engine.handle(_event("working"))
+    assert bridge.animations_played == ["写代码"]
+    for _ in range(6):  # 12 秒的忙碌尾巴，跨过 8 秒旋转地板
+        clock.advance(2.0)
+        bridge.state = AnimationState(name="写代码")
+        engine.handle(_event("working"))
+    assert bridge.animations_played == ["写代码"]
+    assert bridge.state_queries > 1  # 每一拍都真的问了 Core，不是碰巧没请求
+
+
+def test_busy_requests_again_after_the_clip_finished() -> None:
+    engine, bridge, _scheduler, clock = _engine(state=AnimationState(name="写代码"))
+    engine.handle(_event("working"))
+    clock.advance(9.0)
+    bridge.state = AnimationState(name="待机")  # 片段播完，行为链换了素材
+    engine.handle(_event("working"))
+    assert bridge.animations_played == ["写代码", "吃Token"]
+
+
+def test_busy_holds_the_rotation_floor_even_when_the_name_changed() -> None:
+    engine, bridge, _scheduler, clock = _engine(state=AnimationState(name="写代码"))
+    engine.handle(_event("working"))
+    clock.advance(3.0)
+    bridge.state = AnimationState(name="待机")
+    engine.handle(_event("working"))
+    assert bridge.animations_played == ["写代码"]
+    clock.advance(6.0)  # 离上次请求 9 秒，过地板
+    engine.handle(_event("working"))
+    assert bridge.animations_played == ["写代码", "吃Token"]
+
+
+def test_busy_requests_again_when_the_pet_is_locked() -> None:
+    """接管态（探头/击飞/拖拽）名字未必变，但这段已经不是我们的循环了。"""
+    engine, bridge, _scheduler, clock = _engine(
+        state=AnimationState(name="写代码", locked=True)
+    )
+    engine.handle(_event("working"))
+    clock.advance(9.0)
+    bridge.state = AnimationState(name="写代码", locked=True)
+    engine.handle(_event("working"))
+    assert bridge.animations_played == ["写代码", "吃Token"]
+
+
+def test_locked_animation_still_respects_the_rotation_floor() -> None:
+    engine, bridge, _scheduler, clock = _engine(
+        state=AnimationState(name="写代码", locked=True)
+    )
+    engine.handle(_event("working"))
+    clock.advance(2.0)
+    engine.handle(_event("working"))
+    assert bridge.animations_played == ["写代码"]
+
+
+def test_missing_animation_state_keeps_the_old_throttle() -> None:
+    """旧 Core 没有 ``animation_state()``：退回每 ``min_interval`` 一拍。"""
+    engine, bridge, _scheduler, clock = _engine(bridge_cls=LegacyBridge)
+    engine.handle(_event("working"))
+    clock.advance(2.5)
+    engine.handle(_event("working"))
+    assert bridge.animations_played == ["写代码", "吃Token"]
+
+
+def test_animation_state_errors_count_as_unknown() -> None:
+    engine, bridge, _scheduler, _clock = _engine()
+
+    def boom():
+        raise RuntimeError("port gone")
+
+    bridge.animation_state = boom
+    engine.handle(_event("working"))
+    assert bridge.animations_played == ["写代码"]
 
 
 def test_no_animation_when_hidden_or_disabled() -> None:
@@ -556,6 +654,9 @@ class FakePresentation:
         self.said: list[tuple[str, bool]] = []
         self.animations: list[str] = []
         self.visible_flag = True
+        self.current_name = ""
+        self.loop_active = False
+        self.released_loops = 0
 
     def say(self, text, *, duration_ms=4000, force=False, subtitle="") -> None:
         self.said.append((text, force))
@@ -563,12 +664,22 @@ class FakePresentation:
     def show_image(self, *args, **kwargs) -> bool:
         return True
 
+    def animation_state(self):
+        return AnimationState(
+            name=self.current_name, loop=bool(self.loop_active), locked=False
+        )
+
     def play_animation(self, name, *, loop=False) -> bool:
         self.animations.append(name)
+        self.current_name = name
+        self.loop_active = bool(loop)
         return True
 
     def release_loop(self) -> bool:
-        return True
+        self.released_loops += 1
+        was = self.loop_active
+        self.loop_active = False
+        return was
 
     def play_event(self, group, variant=None) -> bool:
         return True
@@ -676,6 +787,63 @@ def test_runtime_drains_unified_events(tmp_path: Path) -> None:
     scheduler.run()
     assert presentation.said[-1][0] == "正在跑命令"
     assert presentation.animations == ["写代码"]
+
+
+def test_runtime_forwards_animation_state(tmp_path: Path) -> None:
+    runtime, _config, presentation, _audio, _scheduler = _runtime(tmp_path)
+    presentation.current_name = "写代码"
+    state = runtime.animation_state()
+    assert state == AnimationState(name="写代码", loop=False, locked=False)
+    assert runtime.engine._bridge.animation_state() == state
+
+
+def test_runtime_animation_state_is_none_without_the_port_method(tmp_path: Path) -> None:
+    runtime, *_rest = _runtime(tmp_path)
+    runtime.ports.presentation = SimpleNamespace(visible=lambda: True)
+    assert runtime.animation_state() is None
+    assert runtime.engine._bridge.animation_state() is None  # 不抛
+
+
+def test_runtime_animation_state_errors_are_none(tmp_path: Path) -> None:
+    runtime, *_rest = _runtime(tmp_path)
+
+    def boom():
+        raise RuntimeError("window gone")
+
+    runtime.ports.presentation.animation_state = boom
+    assert runtime.animation_state() is None
+
+
+def test_done_path_does_not_release_a_one_shot_animation(tmp_path: Path) -> None:
+    runtime, _config, presentation, _audio, scheduler = _runtime(tmp_path)
+    runtime._drain_once()
+    events = _events_file(tmp_path)
+    _append(events, {"event": "PreToolUse", "tool": "Bash", "agent": "demo"})
+    runtime._drain_once()
+    scheduler.run()
+    assert presentation.animations == ["写代码"]
+    assert presentation.loop_active is False  # 本 mod 只请求一次性动作
+    _append(events, {"event": "Stop", "agent": "demo"})
+    runtime._drain_once()
+    scheduler.run()  # 应用事件期间才排上完成确认
+    scheduler.run()
+    assert presentation.said[-1] == (links_mod.DONE_TEXT, True)
+    assert presentation.released_loops == 0
+
+
+def test_reset_idle_releases_a_loop_only_when_we_requested_one(tmp_path: Path) -> None:
+    runtime, _config, presentation, _audio, _scheduler = _runtime(tmp_path)
+    # 别人（唱歌/报时）的循环在跑：本 mod 没请求过 loop，绝不许 release。
+    presentation.loop_active = True
+    runtime.reset_idle()
+    assert presentation.released_loops == 0
+
+    runtime.play_animation("写代码", loop=True)
+    assert presentation.loop_active is True
+    runtime.reset_idle()
+    assert presentation.released_loops == 1
+    runtime.reset_idle()
+    assert presentation.released_loops == 1
 
 
 def test_runtime_reads_dsh_bridge_records(tmp_path: Path) -> None:

@@ -476,7 +476,8 @@ class AppearancePage(SettingsPage):
         card.add_row(
             "点击穿透",
             self.click_through_check,
-            "影响所有桌宠：鼠标点击穿过桌宠，不再响应拖动与互动；开启后右键菜单点不到，可从托盘菜单关闭。",
+            "仅左键穿透：左键单击点下层，左键长按拖动；右键单击互动、右键长按菜单。"
+            "关闭后恢复左键点击。影响所有桌宠，可从托盘菜单关闭。",
         )
 
         self.stream_capture_check = make_checkbox(self)

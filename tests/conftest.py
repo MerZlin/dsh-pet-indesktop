@@ -69,6 +69,41 @@ def _mute_winmm_audio(monkeypatch):
     monkeypatch.setattr(sound_winmm, "default_api", lambda: None)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_tts_synthesis():
+    """测试里不许真的联网合成语音（edge-tts / 本地 OpenAI 兼容端点）。
+
+    背景（2026-10-29 实测）：每个 `CoreHost` 都带真实 `SpeechService`，点击台词会在
+    播报线程里触发合成。全量套件三次跑崩两次，栈都是**多个播报线程同时首次 import
+    edge_tts**（模块级 `ssl.create_default_context`）+ importlib 等锁 → Windows 原生
+    access violation。测试也不该依赖网络与合成耗时。
+
+    **必须是 session 级**：函数级的 monkeypatch 在用例结束时就会还原，而播报线程常常
+    活到用例之后——那时它会拿着真实实现去联网（这正是崩溃残留线程的形态）。
+
+    需要真实合成的用例走 `SpeechService(synthesizer=...)` 这条路（自身带桩），
+    不受这里影响；需要验证「网络失败分类」的用例自己注入会抛的 synthesizer。
+    """
+    from unittest.mock import patch
+
+    try:
+        from petcore.net import tts as net_tts
+        from petcore.net.errors import NETWORK, NetworkError
+        from petcore.speech import service as speech_service
+    except Exception:  # noqa: BLE001 - 依赖缺失时不影响其它测试
+        yield
+        return
+
+    def _blocked(*_args, **_kwargs):
+        raise NetworkError(reason=NETWORK)
+
+    # 重试间隔 1.5s 在测试里只会拖慢；重试语义由各自用例显式控制。
+    with patch.object(net_tts, "synthesize", _blocked), patch.object(
+        speech_service, "RETRY_DELAY_S", 0.0
+    ):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _no_modal_message_boxes(monkeypatch):
     from PySide6.QtWidgets import QMessageBox

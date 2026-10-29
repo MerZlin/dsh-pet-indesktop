@@ -54,8 +54,10 @@ _SKIP_CLASSES = frozenset({
 })
 
 #: 已知覆盖层工具进程（截图/取色工具的全屏监听层不是「全屏应用」）。实测
-#: PixPin 打字时热键监听闪现全屏覆盖层曾致桌宠误隐藏频闪。
-_SKIP_PROCESSES = frozenset({"pixpin.exe", "snipaste.exe"})
+#: PixPin 打字时热键监听闪现全屏覆盖层曾致桌宠误隐藏频闪。任务管理器同理：
+#: 「置于顶层 + 最大化」正好铺满一块屏，但它不是全屏应用——用户查占用时桌宠
+#: 整只消失，关掉又整只回来，看起来就是每秒闪一次。
+_SKIP_PROCESSES = frozenset({"pixpin.exe", "snipaste.exe", "taskmgr.exe"})
 
 
 class _WinRect(ctypes.Structure):

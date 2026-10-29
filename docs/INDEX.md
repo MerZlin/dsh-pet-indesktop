@@ -144,6 +144,10 @@
 
 ## PR 报告存档
 
+- [桌宠身份上限 16 → 99 + 碰撞粗筛（2026-10-29 第五批）](PR-REPORT-PETCORE-MAX-PETS-2026-10-29.md)：`config.MAX_PETS = 99` 成为单一真值（`active_pets` 归一化、旧 slot 迁移、`PetManager`、设置页共用），`collide()` 入口加 `rects_may_touch()` 轴对齐粗筛、`PetManager` 按拍缓存身体矩形——99 只的碰撞拍从 **28.4ms 降到 1.2ms**。**改身份上限、`engine/collision.py` 的几何入口或 `_tick_collision` 前必读**。
+
+- [对话网络重试 + 音乐暂停收词 + 重置设置移植 + 语音出声（2026-10-29 第四批）](PR-REPORT-PETCORE-NETWORK-MUSIC-RESET-TTS-2026-10-29.md)：对话传输在「正文/思维链都还没吐」的 `network`/`tls` 抖动上自动重发一次（`HTTPError`/超时/协议错误从不重试），进程级「固定直连」改成 300s 过期，对话超时改取 `api.json`，`ai.chat` 的 reason 文案补全中文；音乐暂停时窗口源只认另一台播放器并立刻收掉歌词气泡（新增 `PresentationPort.hide(owner)`）；移植「重置本宠设置 / 重置全局设置」两枚侧栏按钮（`petcore/settings_reset.py`，按键作用域、保身份与位置、失败回滚）；修 TTS 整句静默（播放音量取 `SpeechResult.volume`，不再把 `None` 交给 `float()`）。**改 `api/chat.py` 的重试/超时、`net/http.py` 路由口径、音乐暂停判定、设置重置作用域或语音播放前必读**。
+
 - [联网失败不再谎报「网络不可达」 + 音乐暂停语义（2026-10-28 第三批）](PR-REPORT-AI-STARTUP-MUSIC-PAUSE-2026-10-28.md)：`ai.chat` 四类失败改走统一分类（未知异常 → 新分类 `internal`，只留一条可定位日志，无服务不发请求），真机探针排除「启动期路由污染」并把市场/更新也改成 `pollute=False` + 源码守卫；音乐侧「暂停立即停唱、暂停不取词不清歌词不报错、降级身份按同一首」。**改错误分类、`urlopen` 路由或音乐暂停/取词状态机前必读**。
 
 - [窗口层级修复 + 全屏自动隐藏 + 音乐三修 + 角色重命名（2026-10-28 第二批）](PR-REPORT-WINDOW-LAYERS-FULLSCREEN-MUSIC-RENAME-2026-10-28.md)：气泡/桌宠/右键菜单的 z 序修复（非置顶不抢前台、菜单会话期间不许 raise，含真机 `GW_HWNDPREV` 前后对照）、全屏自动隐藏（零 Qt 探测 + 唯一 1Hz 状态机 + 常规页开关）、音乐 mod 三修（唱歌循环重建、展示会话挡住自语气泡、单曲循环继续出词）、角色重命名（两个入口 + 全局别名键）。**改气泡层级、菜单弹出、全屏显隐、音乐/歌词状态机或角色显示名前必读**。
@@ -440,3 +444,5 @@
 - [灵动岛视觉动效收尾（2026-10-26）](PR-REPORT-PETCORE-ISLAND-VISUALS-2026-10-26.md)：状态点五态（含 4s 完成瞬态与感叹矢量）、工作态声纳环、回复后 5s 呼吸、130ms 内容淡化 + 内容位图缓存（命中 0.0044ms vs 重建 0.151ms）、三层投影/sheen/软陶 bevel/glass 渐变/竖线渐变/头标内环/单位 α；chat/截图/显隐/余额四处真实状态来源。**改 `ui/island.py`、`island/layout.py` 或排查「岛闪烁/变糊/动效不触发」前必读**。（头标内环已在 L101 随头标退役）
 - [菜单图标 DPR 修复与灵动岛去头标（2026-10-26）](PR-REPORT-PETCORE-ICON-DPR-2026-10-26.md)：非 100% 屏上「图标比槽位大、右下角缺一块」的真根因是 `icons._pixmap()` 把 DPR 乘了两次（150% 下 play/screen/quit 包围盒 (14,8,26,26)），改为只乘逻辑缩放并对齐主分支；勾选标记挪到行尾（`MenuCheckLayer`）让勾选项恢复图标、补齐 8 枚缺失字形、子菜单图标回退链；灵动岛删除头标与 `island_show_icon`，新增默认关闭的 `island_show_messages`。**改 `ui/icons.py`、`ui/menu_style.py`、`ui/menu_model.py` 或排查「图标被裁/勾选项没图标/岛上有圆点/卡片冒出历史消息」前必读**。
 - [灵动岛 × 桌宠碰撞回归 + C 盘剩余段（2026-10-26）](PR-REPORT-PETCORE-ISLAND-COLLISION-2026-10-26.md)：把主分支的「撞岛被弹 / 拖岛拍飞」重做成 petcore 的一套实现——几何在 `engine/island_field.py`（胶囊体育场 + 矩形径向半径 + 冲量），接线在 `ui/island_collision.py`（`host.island_field`，零定时器），墙挂 `PetWindow._clamp_position`、抛掷在 `_tick_throw` 反射、岛动时经同一出口推出被压住的桌宠；新增默认开的 `island_collision`。另加默认关的 C 盘剩余段（`platform/diskmon.py`，5s 一拍、33µs/次、折叠或隐藏即停采）。**改 `ui/island.py`、`ui/island_collision.py`、`engine/island_field.py`、`ui/motion.py` 的抛掷路径，或排查「桌宠穿岛/抽搐/被岛拍不动/落岛卡在飞行帧/C 盘段不显示」前必读**。
+
+- [性能热点修复 + 仅左键穿透/右键交互 + 可调 Q 弹（2026-10-29）](PR-REPORT-PERF-INTERACTION-2026-10-29.md)：FPS/ETW 探针隐藏即停采、停采定宽占位、目标退出不重开死 pid、残留会话清扫；QQ 音乐取词单飞/身份别名/60s 负缓存/采样降频；DSH 联动动画不再每 2s 重启；全屏连拍确认；对话 5xx 换路 + 钉直连 45s + 联网工具失败 system 提示；Windows 仅左键穿透（松手 SendInput 转发、左键长按拖动、右键单击反馈/长按菜单）+ `click_squash_bounces/strength/ms` 可调 Q 弹；单宠碰撞表停转、帧路径去每帧中间 pixmap、锁屏停播。**改穿透/鼠标交互、Q 弹、探针、音乐取词、对话网络或桌宠帧渲染前必读**。

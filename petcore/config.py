@@ -22,6 +22,11 @@ SCHEMA_VERSION = 1
 #: 角色自定义显示名上限（按**字符**数，不是字节）：中文名字与界面下拉的宽度都按这个口径。
 ALIAS_MAX_CHARS = 24
 
+#: 桌宠身份上限（含主宠 slot 0）：身份是 0..MAX_PETS-1，配置落在 `config-pet-N.json`。
+#: 「无上限」在这里没有意义——每个身份背后是一个真实窗口、一份独立配置与一对碰撞结算，
+#: 99 是能保证「身份空间足够大」又让碰撞拍仍能守住 16ms 的实测上限（见 L126）。
+MAX_PETS = 99
+
 MIGRATION_STATUSES = frozenset({
     "not_needed",
     "migrated",
@@ -302,6 +307,8 @@ DEFAULTS: dict[str, Any] = {
     "chat_accent": "",
     "click_squash_enabled": True,
     "click_squash_ms": 220,
+    "click_squash_bounces": 1,
+    "click_squash_strength": 100,
     "drag_physics_enabled": False,
     "drop_gravity_enabled": False,
     "throw_strength": "standard",
@@ -849,7 +856,7 @@ def _pets(value: Any) -> list[int]:
             slot = int(item)
         except (TypeError, ValueError, OverflowError):
             continue
-        if 0 <= slot < 16 and slot not in slots:
+        if 0 <= slot < MAX_PETS and slot not in slots:
             slots.append(slot)
     if 0 not in slots:
         slots.insert(0, 0)
@@ -1055,7 +1062,7 @@ class Config:
         ):
             stem = candidate.stem
             suffix = stem.removeprefix("config-slot-").removeprefix("config-pet-")
-            if not suffix.isdigit() or not 0 < int(suffix) < 16:
+            if not suffix.isdigit() or not 0 < int(suffix) < MAX_PETS:
                 self._record_migration(
                     "skipped_invalid", source=str(candidate), stage="validate-slot-name", error="invalid-slot"
                 )
@@ -1175,6 +1182,12 @@ class Config:
         )
         normalized["click_squash_enabled"] = _bool(normalized.get("click_squash_enabled"), True)
         normalized["click_squash_ms"] = _number(normalized.get("click_squash_ms"), 220.0, 80.0, 1000.0)
+        normalized["click_squash_bounces"] = int(
+            round(_number(normalized.get("click_squash_bounces"), 1.0, 1.0, 5.0))
+        )
+        normalized["click_squash_strength"] = int(
+            round(_number(normalized.get("click_squash_strength"), 100.0, 30.0, 200.0))
+        )
         normalized["drag_physics_enabled"] = _bool(normalized.get("drag_physics_enabled"), False)
         normalized["drop_gravity_enabled"] = _bool(normalized.get("drop_gravity_enabled"), False)
         strength = str(normalized.get("throw_strength") or "standard")

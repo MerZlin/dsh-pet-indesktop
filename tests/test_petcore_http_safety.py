@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import email.message
+import time
 import urllib.error
 import urllib.request
 
@@ -23,6 +24,14 @@ from petcore.net.http import (
     is_private_host,
     validate_target,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_transport():
+    """每个用例都从「没有固定直连结论」开始：钉子、直连 opener 全是进程级状态。"""
+    http.reset_transport()
+    yield
+    http.reset_transport()
 
 
 class _Response:
@@ -128,6 +137,184 @@ def test_urlopen_rebuilds_the_request_between_attempts() -> None:
     request = urllib.request.Request("http://example.com/x")
     assert http.urlopen(request, timeout=1.0, opener=lambda use_proxy, context=None: _Opener(use_proxy)) == "response"
     assert seen == [(True, "example.com"), (False, "example.com")]
+
+
+def test_direct_pin_expires_so_proxy_is_probed_again(monkeypatch) -> None:
+    """一次代理抖动不该把整个进程钉在直连上：钉子有期限，过期重新试代理。"""
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(http.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(http, "_force_direct", True)
+    monkeypatch.setattr(http, "_force_direct_until", clock["now"] + 10.0)
+    attempts: list[bool] = []
+
+    class _Opener:
+        def __init__(self, use_proxy: bool) -> None:
+            self.use_proxy = use_proxy
+
+        def open(self, request, timeout=None, **kwargs):  # noqa: ANN001
+            attempts.append(self.use_proxy)
+            return "response"
+
+    def build(use_proxy: bool, context=None):  # noqa: ANN001
+        return _Opener(use_proxy)
+
+    request = urllib.request.Request("http://example.com/x")
+    assert http.urlopen(request, timeout=1.0, opener=build) == "response"
+    assert attempts == [False]  # 钉子有效期内不再碰代理
+    assert http.force_direct() is True
+
+    clock["now"] += 11.0
+    attempts.clear()
+    assert http.urlopen(request, timeout=1.0, opener=build) == "response"
+    assert attempts == [True]  # 过期后重新试代理（代理通就用代理）
+    assert http.force_direct() is False
+
+
+def _http_error(status: int, *, retry_after: str | None = None) -> urllib.error.HTTPError:
+    headers = email.message.Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError("https://api.example/v1/chat", status, "boom", headers, None)
+
+
+def _routing(routes: dict[bool, object]):
+    """按路由返回「抛异常 / 返回响应」的 opener 工厂，并记下用过的路由。"""
+    seen: list[bool] = []
+
+    def factory(use_proxy: bool, context=None):  # noqa: ANN001 - OpenerFactory
+        seen.append(use_proxy)
+        outcome = routes[use_proxy]
+        if isinstance(outcome, BaseException):
+            return _Raiser(outcome)
+        return _Returns(outcome)  # type: ignore[arg-type]
+
+    return factory, seen
+
+
+def test_urlopen_switches_route_on_502_from_the_proxy() -> None:
+    """代理/VPN 网关回 502 时换直连再问一次：API 正常就不该报「网络不可达」。"""
+    headers = email.message.Message()
+    seen: list[bool] = []
+    hosts: list[str] = []
+
+    class _Gateway502:
+        def open(self, request, timeout=None, **kwargs):  # noqa: ANN001 - opener 接缝
+            seen.append(True)
+            # 复刻 ProxyHandler.proxy_open 的就地改写：换路必须用重建的请求对象。
+            hosts.append(request.host)
+            request.host = "127.0.0.1:1"
+            request.selector = request.full_url
+            raise urllib.error.HTTPError(request.full_url, 502, "bad gateway", headers, None)
+
+    class _DirectOk:
+        def open(self, request, timeout=None, **kwargs):  # noqa: ANN001
+            seen.append(False)
+            hosts.append(request.host)
+            return _Response(chunks=[b"ok"])
+
+    def factory(use_proxy: bool, context=None):  # noqa: ANN001 - OpenerFactory
+        return _Gateway502() if use_proxy else _DirectOk()
+
+    request = urllib.request.Request("https://api.example/v1/chat")
+    response = http.urlopen(request, timeout=1.0, opener=factory)
+
+    assert isinstance(response, _Response)
+    assert seen == [True, False]
+    assert hosts == ["api.example", "api.example"], "换路必须用重建的请求，不能复用被改写的对象"
+    assert request.host == "api.example", "原请求对象不许被就地改写"
+
+
+def test_urlopen_raises_the_last_error_when_both_routes_answer_5xx() -> None:
+    """两条路由都 5xx：抛**最后一条**的答复，不是第一条的。"""
+    factory, seen = _routing({True: _http_error(502), False: _http_error(500)})
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        http.urlopen(urllib.request.Request("https://api.example/v1/chat"), timeout=1.0, opener=factory)
+    assert caught.value.code == 500
+    assert seen == [True, False]
+
+
+def test_urlopen_does_not_switch_route_when_retry_after_is_present() -> None:
+    """带 ``Retry-After`` 的 502 是服务端明确要求等待：换路等于把限流当链路故障。"""
+    factory, seen = _routing(
+        {True: _http_error(502, retry_after="2"), False: _Response(chunks=[b"ok"])}
+    )
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        http.urlopen(urllib.request.Request("https://api.example/v1/chat"), timeout=1.0, opener=factory)
+    assert caught.value.code == 502
+    assert seen == [True]
+
+
+@pytest.mark.parametrize("status", [401, 403, 429])
+def test_urlopen_does_not_switch_route_on_definitive_answers(status: int) -> None:
+    """401/403/429 是服务端对这次请求的答复，换一条路只会得到同一句话。"""
+    factory, seen = _routing({True: _http_error(status), False: _Response(chunks=[b"ok"])})
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        http.urlopen(urllib.request.Request("https://api.example/v1/chat"), timeout=1.0, opener=factory)
+    assert caught.value.code == status
+    assert seen == [True]
+
+
+def test_urlopen_route_plan_can_force_direct_only(monkeypatch) -> None:
+    """显式路由计划只影响这一次调用：只直连成功不代表整个进程该固定直连。"""
+    seen: list[bool] = []
+
+    def factory(use_proxy: bool, context=None):  # noqa: ANN001
+        seen.append(use_proxy)
+        return _Returns(_Response(chunks=[b"ok"]))
+
+    monkeypatch.setattr(http, "_opener", factory)
+    response = http.urlopen(
+        urllib.request.Request("https://api.example/v1/chat"),
+        timeout=1.0,
+        routes=(False,),
+    )
+    assert isinstance(response, _Response)
+    assert seen == [False]
+    assert http._force_direct is False  # noqa: SLF001 - 断言「没有写进程级结论」
+    assert http._force_direct_until == 0.0  # noqa: SLF001
+
+
+def test_a_new_pin_is_short_lived(monkeypatch) -> None:
+    """钉子只活几十秒：一次抖动不该让进程此后一小时都不再试代理。"""
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(http.time, "monotonic", lambda: clock["now"])
+    factory, seen = _routing({True: OSError("proxy down"), False: _Response(chunks=[b"ok"])})
+    monkeypatch.setattr(http, "_opener", factory)
+
+    http.urlopen(urllib.request.Request("https://api.example/v1/chat"), timeout=1.0)
+
+    assert seen == [True, False]
+    assert http.force_direct() is True
+    assert http._force_direct_until - clock["now"] == http.DEFAULT_DIRECT_PIN_SECONDS  # noqa: SLF001
+    assert 30.0 <= http.DEFAULT_DIRECT_PIN_SECONDS <= 60.0
+
+
+def test_pinned_direct_failure_falls_back_to_the_proxy_and_clears_the_pin(monkeypatch) -> None:
+    """钉着直连时直连失败：把代理还回去试一次，成功就解除钉子。"""
+    monkeypatch.setattr(http, "_force_direct", True)
+    monkeypatch.setattr(http, "_force_direct_until", time.monotonic() + 30.0)
+    factory, seen = _routing({False: OSError("direct down"), True: _Response(chunks=[b"ok"])})
+    monkeypatch.setattr(http, "_opener", factory)
+
+    response = http.urlopen(urllib.request.Request("https://api.example/v1/chat"), timeout=1.0)
+
+    assert isinstance(response, _Response)
+    assert seen == [False, True]
+    assert http.force_direct() is False
+
+
+def test_pinned_failure_on_both_routes_clears_the_pin(monkeypatch) -> None:
+    """直连和代理都不通：钉子（「直连能用」）的前提没了，下次重新按代理优先试。"""
+    monkeypatch.setattr(http, "_force_direct", True)
+    monkeypatch.setattr(http, "_force_direct_until", time.monotonic() + 30.0)
+    factory, seen = _routing({False: OSError("direct down"), True: OSError("proxy down")})
+    monkeypatch.setattr(http, "_opener", factory)
+
+    with pytest.raises(OSError):
+        http.urlopen(urllib.request.Request("https://api.example/v1/chat"), timeout=1.0)
+
+    assert seen == [False, True]
+    assert http.force_direct() is False
 
 
 def test_fetch_url_does_not_switch_route_when_retry_after_is_present() -> None:

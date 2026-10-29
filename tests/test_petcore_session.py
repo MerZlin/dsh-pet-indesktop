@@ -35,3 +35,25 @@ def test_handle_high_bits_are_not_a_session_message():
     message.message = 0x0200
     watcher.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(message))
     assert calls == []
+
+
+def test_lock_and_power_messages_pause_and_resume_once():
+    calls = []
+    watcher = SessionWatcher(
+        lambda: calls.append("end"),
+        on_lock=lambda: calls.append("lock"),
+        on_unlock=lambda: calls.append("unlock"),
+    )
+    message = wintypes.MSG()
+    message.message = 0x02B1  # WM_WTSSESSION_CHANGE
+    message.wParam = 0x7
+    watcher.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(message))
+    watcher.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(message))
+    message.wParam = 0x8
+    watcher.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(message))
+    message.message = 0x0218  # WM_POWERBROADCAST
+    message.wParam = 0x0004
+    watcher.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(message))
+    message.wParam = 0x0012
+    watcher.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(message))
+    assert calls == ["lock", "unlock", "lock", "unlock"]

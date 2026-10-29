@@ -138,9 +138,13 @@ class _Window:
         self.state = SimpleNamespace(current=SimpleNamespace(name="悠闲哼歌"))
         self.motion = SimpleNamespace(thrown=False)
         self.effects = SimpleNamespace(throw_egg_active=False)
+        self.hides = 0
 
     def isVisible(self) -> bool:
         return True
+
+    def hide_bubble(self) -> None:
+        self.hides += 1
 
     def say(self, text, duration_ms=4000, *, subtitle=""):
         self.calls.append(text)
@@ -217,6 +221,20 @@ def test_adapter_blocks_sequences_from_other_owners():
     assert len(window.sequences) == 1
     assert adapter.say_sequence([("champion", "冠军", 1200)], force=True) is True
     assert len(window.sequences) == 2
+
+
+def test_adapter_hide_only_touches_its_own_scene():
+    window = _Window()
+    adapter = _adapter(window)
+
+    assert adapter.begin_scene("media.music") is True
+    adapter.hide("click-talk")  # 别人的会话：一动不动
+    assert window.hides == 0
+    adapter.hide("media.music")  # 自己持有：收起自己的气泡
+    assert window.hides == 1
+    adapter.hide()  # 匿名（不校验 owner）
+    assert window.hides == 2
+    adapter.end_scene("media.music")
 
 
 def test_adapter_blocks_foreign_images_during_a_scene():

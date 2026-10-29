@@ -12,6 +12,8 @@ import importlib.util
 import json
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -111,10 +113,14 @@ class _Presentation:
         self.said: list[str] = []
         self.animations: list[tuple[str, bool]] = []
         self.released = 0
+        self.hidden: list[str] = []
         self.start = start
 
     def say(self, text, *, duration_ms=4000, force=False):
         self.said.append(text)
+
+    def hide(self, owner: str = "") -> None:
+        self.hidden.append(owner)
 
     def play_animation(self, name, *, loop=False):
         self.animations.append((name, loop))
@@ -164,7 +170,15 @@ def _playback(
 class _Harness:
     """运行时 + 可推进的时钟 + 可替换的采样/网络。"""
 
-    def __init__(self, config=None, *, presentation=None, http=None, playback=None):
+    def __init__(
+        self,
+        config=None,
+        *,
+        presentation=None,
+        http=None,
+        playback=None,
+        threaded_fetch: bool = False,
+    ):
         self.presentation = presentation or _Presentation()
         self.ports = HostPorts(
             presentation=self.presentation,
@@ -181,8 +195,13 @@ class _Harness:
         self.runtime.sample_smtc = self._read
         self.runtime.sample_audio = lambda: ()
         self.runtime.sample_windows = lambda _targets: ()
-        # 后台取词同步执行：结果在 poll() 里就位，测试不必等线程。
-        self.runtime.background = lambda work: work()
+        # 后台接缝默认同步：取词与传输命令都在 poll()/命令调用里就地完成，测试不必等线程。
+        # ``background`` 是**取词**派发缝（生产默认是常驻 ``lyric-fetch`` 单槽队列），
+        # ``spawn_task`` 是一次性任务（传输命令）。线程相关的用例传
+        # ``threaded_fetch=True``，走生产那条真线程路径，并在 finally 里 ``stop()``。
+        if not threaded_fetch:
+            self.runtime.background = lambda work: work()
+        self.runtime.spawn_task = lambda work: work()
 
     def _read(self, **_kwargs):
         self.reads += 1
@@ -1168,6 +1187,8 @@ def test_paused_singing_stops_and_lyrics_are_kept():
     # 宽限设成 30 秒也不许再唱（旧实现要等满宽限才解除）。
     _paused(harness, position=1.0)
     assert harness.presentation.released == 1
+    # 暂停的边沿立刻收歌词气泡：最后一句不该再挂 2–6 秒。
+    assert harness.presentation.hidden == ["media.music"]
     assert harness.runtime.singing is False
     assert harness.runtime._lines == lines
     assert harness.runtime._lyric_index == index
@@ -1423,3 +1444,284 @@ def test_scene_stays_held_while_a_rearm_is_pending():
     assert presentation.loop is True
     assert presentation.scene_calls.count(("begin", "media.music")) == 1
     assert ("end", "media.music") not in presentation.scene_calls
+
+
+# ---------------------------------------------------------------- 取词线程 / 身份抖动 / 负缓存
+#
+# 三组实机现象，一组一个接缝：
+#
+# 1. **取词线程 churn**：旧实现每次取词都 ``Thread(...).start()``（一首歌三拨、每拨
+#    三源六跳），切歌快的时候十几条线程同时在跑，``stop()`` 既取消不了也 join 不到。
+#    现在一条常驻 ``lyric-fetch`` 线程 + 单槽队列：新的替换排队的，取消在飞的。
+# 2. **身份抖动被当成换歌**：艺人字段晚一拍到 / SMTC 掉线换窗口标题源，``Track.key``
+#    变了但歌名没变；旧实现（播放分支）``_begin_track`` 清歌词、把取词配额归零。
+# 3. **失败不记账**：身份一抖就新一轮，于是同一首歌每 60 秒重打三拨、六跳。
+
+
+def _blocking_fetch(*, raise_on_release: bool = False):
+    """取词替身：一直"在飞"，直到被取消（或测试放行）。统计并发峰值。"""
+    state = SimpleNamespace(
+        lock=threading.Lock(),
+        active=0,
+        peak=0,
+        calls=[],
+        release=threading.Event(),
+        raise_on_release=raise_on_release,
+    )
+
+    def fetch(_http, title, _artist, *, cancelled=None, **_kwargs):
+        with state.lock:
+            state.active += 1
+            state.peak = max(state.peak, state.active)
+            state.calls.append(title)
+        try:
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if cancelled is not None and cancelled():
+                    raise lyrics_mod.LyricsCancelled("取词已取消")
+                if state.release.is_set():
+                    raise lyrics_mod.LyricsError("歌词获取失败：测试")
+                time.sleep(0.001)
+            raise lyrics_mod.LyricsError("歌词获取失败：测试超时")
+        finally:
+            with state.lock:
+                state.active -= 1
+
+    return state, fetch
+
+
+def _thread_names_since(before: set[int]) -> list[str]:
+    """本用例期间新出现的线程名（别的用例可能留着活线程，不能按全局数）。"""
+    return [thread.name for thread in threading.enumerate() if id(thread) not in before]
+
+
+def test_rapid_track_changes_never_run_two_lyric_fetches_at_once():
+    """100 次快速切歌：只有一条取词线程、最多一个请求在飞、排队只有一个槽。"""
+    state, fetch = _blocking_fetch()
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        http=FakeHttpPort(_lyric_handler(POSITION_LYRIC)),
+        playback=_playback(position=0.0),
+        threaded_fetch=True,
+    )
+    harness.runtime.fetch_lyrics = fetch
+    worker = harness.runtime._fetch_worker
+    before = {id(thread) for thread in threading.enumerate()}
+    try:
+        for index in range(100):
+            harness.sample = _playback(title=f"第{index}首", position=0.0)
+            harness.now += 1
+            harness.poll()
+            # 让取词线程真的跑起来：否则这 100 次只是"队列被替换了 100 次"，
+            # 证明不了"同时只有一个请求在飞"。
+            time.sleep(0.001)
+            assert worker.pending() <= 1
+
+        deadline = time.monotonic() + 5.0
+        while not state.calls and time.monotonic() < deadline:
+            time.sleep(0.005)
+        with state.lock:
+            assert state.peak == 1, state.peak
+        assert state.calls  # 真的跑过（不是"一个都没开始"）
+        fresh = _thread_names_since(before)
+        assert fresh.count(runtime_mod.FETCH_THREAD_NAME) == 1
+        assert "music-runtime" not in fresh  # 没有为每次取词开线程
+        assert worker.alive() is True
+
+        # 放行后队列排空，线程还是同一条（没有"用完就重开"）。
+        state.release.set()
+        deadline = time.monotonic() + 5.0
+        while worker.busy() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert worker.busy() is False
+        assert _thread_names_since(before).count(runtime_mod.FETCH_THREAD_NAME) == 1
+    finally:
+        state.release.set()
+        harness.runtime.stop()
+    assert worker.alive() is False
+
+
+def test_stop_joins_the_lyric_fetch_worker_and_it_exits():
+    state, fetch = _blocking_fetch()
+    started = threading.Event()
+
+    def tracking_fetch(http, title, artist, **kwargs):
+        started.set()
+        return fetch(http, title, artist, **kwargs)
+
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        http=FakeHttpPort(_lyric_handler(POSITION_LYRIC)),
+        playback=_playback(position=0.0),
+        threaded_fetch=True,
+    )
+    harness.runtime.fetch_lyrics = tracking_fetch
+    worker = harness.runtime._fetch_worker
+    before = {id(thread) for thread in threading.enumerate()}
+    try:
+        harness.poll()
+        assert started.wait(5.0), "取词线程没有跑起来"
+        assert worker.alive() is True
+        assert worker.busy() is True
+        assert _thread_names_since(before).count(runtime_mod.FETCH_THREAD_NAME) == 1
+
+        begin = time.monotonic()
+        harness.runtime.stop()
+        elapsed = time.monotonic() - begin
+
+        # 有界等待：取消位一到，线程在几毫秒内收手（不是等满一次 8 秒的 HTTP）。
+        assert elapsed < 1.5, elapsed
+        assert worker.alive() is False
+        assert _thread_names_since(before).count(runtime_mod.FETCH_THREAD_NAME) == 0
+        # 取消不是失败：不冒「歌词获取失败」，也不记负缓存。
+        assert not [text for text in harness.presentation.said if "歌词获取失败" in text]
+        assert harness.runtime._lyric_negative == {}
+    finally:
+        state.release.set()
+        harness.runtime.stop()
+
+
+def test_fetch_lyrics_stops_between_http_attempts_when_cancelled():
+    """被顶掉的那一轮在**下一跳之前**就收手（不再把三源六跳跑完）。"""
+    port = FakeHttpPort(lambda request: HttpError("timeout"))
+    with pytest.raises(lyrics_mod.LyricsCancelled):
+        lyrics_mod.fetch_lyrics(
+            port, "蝴蝶", "陶喆", cancelled=lambda: bool(port.requests)
+        )
+    assert len(port.requests) == 1
+
+    # 一开始就不要：一个请求都不发，也不算"失败"。
+    port = FakeHttpPort(lambda request: HttpError("timeout"))
+    with pytest.raises(lyrics_mod.LyricsCancelled):
+        lyrics_mod.fetch_lyrics(port, "蝴蝶", "陶喆", cancelled=lambda: True)
+    assert port.requests == []
+
+
+def test_playing_identity_degradation_keeps_lyrics_and_attempt_quota():
+    """播放中艺人字段丢了（SMTC 掉线 → 窗口标题源）不是换歌：不改曲目、不清歌词。"""
+    port = FakeHttpPort(_lyric_handler(POSITION_LYRIC))
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        http=port,
+        playback=_playback(position=0.0),
+    )
+    harness.poll()
+    assert harness.presentation.said == ["第一句"]
+    runtime = harness.runtime
+    key, lines, index = runtime._track_key, runtime._lines, runtime._lyric_index
+    requests = len(port.requests)
+    begun: list = []
+    original = runtime._begin_track
+    runtime._begin_track = lambda track, now: (begun.append(track.key()), original(track, now))
+
+    # 标题不变、艺人没了：这就是"同一首歌的降级身份"。
+    harness.sample = _playback(artist="", position=1.0)
+    for _ in range(3):
+        harness.now += 1
+        harness.poll()
+        assert runtime._track_key == key
+        assert runtime._lines == lines
+        assert len(port.requests) == requests
+
+    assert begun == []  # 一次都没重建曲目
+    assert runtime._fetch_attempts == 0
+    assert runtime._lyric_index == index
+    assert ("蝴蝶", "") in runtime._track_aliases
+    # 已显示的那句不会重冒（歌词没被清空后重放），也没有取词失败。
+    assert harness.presentation.said == ["第一句"]
+    assert not [text for text in harness.presentation.said if "歌词获取失败" in text]
+
+
+def test_lyric_failure_is_not_refetched_for_the_same_title_within_60s():
+    """失败记进内存负缓存：同标题 60 秒内不再联网（哪怕已经"换了歌又换回来"）。"""
+    calls: list[str] = []
+    harness = _Harness(
+        {"music_lyric_enabled": True, "music_sing_enabled": False},
+        http=FakeHttpPort(_lyric_handler(POSITION_LYRIC)),
+        playback=_playback(position=0.0),
+    )
+    harness.runtime.fetch_lyrics = _failing_fetch(calls)
+    harness.poll()
+    assert calls == ["蝴蝶"]
+    assert harness.runtime._lines == ()
+
+    # 真换歌：新曲目拿到新配额（这本该让"蝴蝶"可以立刻再来一轮）。
+    harness.sample = _playback(title="普通朋友", position=0.0)
+    harness.now += 1
+    harness.poll()
+    assert calls == ["蝴蝶", "普通朋友"]
+
+    # 换回"蝴蝶"：负缓存还没到期 → 不联网，也不消耗新曲目的配额。
+    harness.sample = _playback(title="蝴蝶", position=0.0)
+    for _ in range(3):
+        harness.now += 1
+        harness.poll()
+    assert calls == ["蝴蝶", "普通朋友"]
+    assert harness.runtime._fetch_attempts == 0
+    # 到期后恢复正常重试（每曲 3 次、首次说清原因的口径不变）。
+    harness.now += runtime_mod.LYRIC_NEGATIVE_TTL
+    harness.poll()
+    assert calls == ["蝴蝶", "普通朋友", "蝴蝶"]
+
+
+def test_lyric_negative_cache_is_capped_and_expires():
+    harness = _Harness({"music_lyric_enabled": False})
+    runtime = harness.runtime
+    for index in range(runtime_mod.LYRIC_NEGATIVE_LIMIT + 40):
+        runtime._remember_lyric_failure(f"歌{index}", 100.0)
+    assert len(runtime._lyric_negative) == runtime_mod.LYRIC_NEGATIVE_LIMIT
+
+    runtime._remember_lyric_failure("蝴蝶", 100.0)
+    assert runtime._lyric_blocked("蝴蝶", 100.0 + runtime_mod.LYRIC_NEGATIVE_TTL - 1)
+    assert not runtime._lyric_blocked("蝴蝶", 100.0 + runtime_mod.LYRIC_NEGATIVE_TTL)
+    assert "蝴蝶" not in runtime._lyric_negative  # 过期即清掉，不攒着
+    assert len(runtime._lyric_negative) <= runtime_mod.LYRIC_NEGATIVE_LIMIT
+
+
+def test_music_disabled_returns_before_waking_the_sampling_worker():
+    harness = _Harness({"music_enabled": False}, playback=_playback())
+    runtime = harness.runtime
+    runtime.start()
+    worker = runtime._worker
+    try:
+        assert worker is not None and worker.is_alive()
+        harness.poll()
+        harness.poll()
+        assert harness.reads == 0  # 一次 SMTC 都没采
+        assert runtime._wake.is_set() is False  # 连唤醒都没有
+        assert runtime._pending is None
+        assert runtime._fetch_worker.busy() is False
+    finally:
+        runtime.stop()
+        if worker is not None:
+            worker.join(5.0)
+
+
+def test_a_dead_sampling_worker_is_never_replaced_by_a_gui_thread_sample(caplog):
+    """采样线程没了：记日志 + 下一拍重拉，**绝不在 GUI 线程补采一次**。"""
+    import logging
+
+    harness = _Harness({"music_lyric_enabled": False}, playback=_playback())
+    runtime = harness.runtime
+    runtime.start()
+    orphan = runtime._worker
+    restarts: list[int] = []
+    runtime._start_worker = lambda: restarts.append(1)  # 再也拉不起来
+    runtime._worker = None
+    try:
+        with caplog.at_level(logging.WARNING, logger="media.music"):
+            runtime.poll()
+            runtime.poll()
+        assert harness.reads == 0
+        assert restarts == [1, 1]  # 每拍都尝试重拉
+        warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if "sampling worker" in record.getMessage()
+        ]
+        assert len(warnings) == 1  # 只记一次，不每拍刷屏
+    finally:
+        runtime.stop()
+        if orphan is not None:
+            orphan.join(5.0)
+    assert orphan is None or not orphan.is_alive()
