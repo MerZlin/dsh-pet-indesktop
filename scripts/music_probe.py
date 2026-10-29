@@ -83,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     recognizer = importlib.import_module(f"{HOST_PKG}.recognizer")
     diagnostics = importlib.import_module(f"{HOST_PKG}.diagnostics")
     players = importlib.import_module(f"{HOST_PKG}.players")
+    now_playing = importlib.import_module(f"{HOST_PKG}.now_playing")
 
     allowed = _parse_ids(args.allow)
     targets = frozenset(players.recognition_targets({}, args.targets))
@@ -94,28 +95,34 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[probe] 平台={sys.platform} 间隔={interval:g}s 时长={args.seconds:g}s")
     print(f"[probe] 识别范围={sorted(allowed) or '（不过滤）'} 窗口源允许={len(targets)} 个可执行名")
-    while time.monotonic() < deadline:
-        started = time.perf_counter()
-        sample = sampling.collect(
-            allowed_ids=allowed or None,
-            targets=targets,
-        )
-        decision = recognizer.decide(
-            sample,
-            allowed_ids=allowed,
-            title_format=args.title_format,
-        )
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
-        timings.append(elapsed_ms)
-        ticks += 1
+    # SMTC 走有界读取：系统媒体服务卡死时探针要给"读取超时（已降级）"，不是跟着挂死。
+    reader = now_playing.SmtcReader()
+    try:
+        while time.monotonic() < deadline:
+            started = time.perf_counter()
+            sample = sampling.collect(
+                allowed_ids=allowed or None,
+                targets=targets,
+                smtc=reader.read,
+            )
+            decision = recognizer.decide(
+                sample,
+                allowed_ids=allowed,
+                title_format=args.title_format,
+            )
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            timings.append(elapsed_ms)
+            ticks += 1
 
-        key = (decision.status, decision.source, decision.app_id, decision.track.key() if decision.track else None)
-        if args.all or key != last_key:
-            stamp = time.strftime("%H:%M:%S")
-            print(f"\n===== {stamp} 第 {ticks} 拍（采样 {elapsed_ms:.1f}ms）=====")
-            print(diagnostics.render(sample, decision))
-            last_key = key
-        time.sleep(interval)
+            key = (decision.status, decision.source, decision.app_id, decision.track.key() if decision.track else None)
+            if args.all or key != last_key:
+                stamp = time.strftime("%H:%M:%S")
+                print(f"\n===== {stamp} 第 {ticks} 拍（采样 {elapsed_ms:.1f}ms）=====")
+                print(diagnostics.render(sample, decision))
+                last_key = key
+            time.sleep(interval)
+    finally:
+        reader.stop(1.0)
 
     if args.profile and timings:
         print(

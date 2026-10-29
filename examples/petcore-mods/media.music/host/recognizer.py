@@ -50,6 +50,11 @@ SOURCE_NONE = "none"
 CONFIDENCE_CONFIRMED = "confirmed"
 CONFIDENCE_ASSUMED = "assumed"
 
+#: 「真在出声」的峰值下限（WASAPI ``GetPeakValue``，0..1）。播放器暂停后会话常
+#: 仍挂 ``active``，此时峰值恒为 0；用它把"残留 Active"与"SMTC 状态落后但真在放"
+#: 分开。定得足够低：极安静段落里只要有一点波形就算在放，宁可漏判一拍，下一拍自愈。
+AUDIBLE_PEAK = 0.005
+
 
 @dataclass(frozen=True, slots=True)
 class Track:
@@ -85,6 +90,9 @@ class Decision:
     confidence: str = CONFIDENCE_ASSUMED
     reasons: tuple[str, ...] = ()
     evidence: tuple[str, ...] = ()
+    #: 这次「暂停」来自**峰值门限**（同播放器窗口源说在播、但这一拍没声音）。
+    #: 调用方可以按迟滞保留上一拍：单拍静音不该立刻收掉播放（淡出/间奏）。
+    soft_paused: bool = False
 
     @property
     def playing(self) -> bool:
@@ -161,6 +169,27 @@ def _note(reasons: list[str], message: str) -> None:
     """去重地记一条理由：多台播放器被同一条规则挡下时别刷屏。"""
     if message not in reasons:
         reasons.append(message)
+
+
+def _audible(rows, exe: str) -> bool:
+    """该可执行名的音频会话是否**真在出声**（Active + 未静音 + peak ≥ 阈值）。
+
+    这是"残留 Active"与"SMTC 状态落后但真在放"之间唯一的客观区别：暂停的播放器
+    会话峰值恒为 0。读不到峰值时按"没在出声"处理（宁可少判一拍，也不凭一个认不出
+    的证据让桌宠唱起来）。
+    """
+    audio = _audio_for(rows, exe)
+    if audio is None:
+        return False
+    if str(getattr(audio, "state", "") or "") != "active":
+        return False
+    if bool(getattr(audio, "muted", False)):
+        return False
+    try:
+        peak = float(getattr(audio, "peak", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return peak >= AUDIBLE_PEAK
 
 
 def _window_decision(
@@ -246,11 +275,16 @@ def decide(
     """
     reasons: list[str] = []
     evidence: list[str] = []
+    soft_pause = False
     allowed = frozenset(allowed_ids or ())
     parse = parse_window or _default_parse
 
-    if bool(getattr(sample, "smtc_error", False)):
+    if bool(getattr(sample, "smtc_error", False)) and not bool(
+        getattr(sample, "smtc_degraded", False)
+    ):
         # 读失败 ≠ 没在放：调用方必须保留上一拍的状态（歌词/动画都不许动）。
+        # **持续**读不到（``smtc_degraded``：读取超时/媒体服务卡死）不在此列——那种
+        # 情况要退到窗口标题源，否则一次卡死就把识别永久钉在最后一首歌上。
         reason = str(getattr(sample, "smtc_reason", "") or "读取系统媒体信息失败。")
         return Decision(status=STATUS_ERROR, reasons=(reason,))
 
@@ -268,33 +302,52 @@ def decide(
             reasons=reasons,
             evidence=evidence,
         )
-        # **同一台播放器**不算「另一台的证据」：它暂停后 WASAPI 会话常仍挂
-        # ``active``（音频会话只报事实，不判时间上下文），接受它翻盘就会让暂停
-        # 变成「继续在播」——本地时钟照走，歌词每两秒继续换一句。
+        # **同一台播放器**的窗口源要额外一条证据才翻盘：暂停后 WASAPI 会话常仍挂
+        # ``active``（音频会话只报事实、不判时间上下文），只看状态会把「暂停」翻成
+        # 「在播」——本地时钟照走、歌词每两秒继续换一句。反过来，网易云的 SMTC 状态
+        # 会落后于实际播放（停在 paused 而音频在响）：只认状态又会把「在播」永久判成
+        # 「暂停」= 识别不到。两者唯一的客观区别是**有没有声音**（peak）。
         paused_exe = normalized_exe(exe_name(getattr(playback, "app_id", "")))
         window_exe = normalized_exe(str(getattr(windowed, "exe", "") or ""))
         same_player = bool(paused_exe) and window_exe == paused_exe
-        if windowed is not None and windowed.status == STATUS_PLAYING and not same_player:
-            return Decision(
-                status=windowed.status,
-                source=windowed.source,
-                track=windowed.track,
-                app_id=windowed.app_id,
-                exe=windowed.exe,
-                confidence=windowed.confidence,
-                reasons=(
-                    f"系统媒体会话处于暂停（{getattr(playback, 'app_id', '') or '未知播放器'}）；"
-                    "以窗口标题源为准",
-                    *windowed.reasons,
-                ),
-                evidence=windowed.evidence,
-            )
         if windowed is not None and windowed.status == STATUS_PLAYING:
+            if not same_player:
+                return Decision(
+                    status=windowed.status,
+                    source=windowed.source,
+                    track=windowed.track,
+                    app_id=windowed.app_id,
+                    exe=windowed.exe,
+                    confidence=windowed.confidence,
+                    reasons=(
+                        f"系统媒体会话处于暂停（{getattr(playback, 'app_id', '') or '未知播放器'}）；"
+                        "以窗口标题源为准",
+                        *windowed.reasons,
+                    ),
+                    evidence=windowed.evidence,
+                )
+            if _audible(getattr(sample, "audio", ()) or (), windowed.exe):
+                return Decision(
+                    status=windowed.status,
+                    source=windowed.source,
+                    track=windowed.track,
+                    app_id=windowed.app_id,
+                    exe=windowed.exe,
+                    confidence=windowed.confidence,
+                    reasons=(
+                        f"{window_exe or '该播放器'} 的系统媒体会话停在暂停，但音频会话仍在出声"
+                        "（peak 高于静音门限）；以窗口标题源为准",
+                        *windowed.reasons,
+                    ),
+                    evidence=windowed.evidence,
+                )
             _note(
                 reasons,
-                f"{window_exe or '该播放器'} 与暂停中的系统媒体会话是同一台播放器："
-                "残留的 Active 会话不算在播",
+                f"{window_exe or '该播放器'} 与暂停中的系统媒体会话是同一台播放器，"
+                "且音频会话没有声音（peak 低于静音门限）：残留的 Active 会话不算在播",
             )
+            # 这条「暂停」只值一拍：调用方按迟滞保留上一拍（见 SOFT_PAUSE_CONFIRM_TICKS）。
+            soft_pause = True
 
     if playback is not None:
         exe = exe_name(getattr(playback, "app_id", ""))
@@ -337,6 +390,7 @@ def decide(
             confidence=CONFIDENCE_CONFIRMED if audio is not None else CONFIDENCE_ASSUMED,
             reasons=tuple(reasons),
             evidence=tuple(evidence),
+            soft_paused=soft_pause and not playing,
         )
 
     smtc_reason = str(getattr(sample, "smtc_reason", "") or "")

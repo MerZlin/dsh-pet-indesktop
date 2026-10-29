@@ -143,6 +143,9 @@ class SmtcSample:
     playback: "Playback | None" = None
     reason: str = ""
     failed: bool = False
+    #: **持续**读不到（超时/系统媒体服务无响应）：与 ``failed``（这一拍抖动，
+    #: 调用方保持上一拍）不同，退化要求判定层改走窗口标题源，不许整拍作废。
+    degraded: bool = False
 
 
 def normalized_app_id(app_id: str | None) -> str:
@@ -560,6 +563,263 @@ def read_sample(
             allowed_ids=allowed_ids,
         )
     )
+
+
+#: 单次 SMTC 读取的**硬**超时（秒）。正常读取实测 ~5ms 级；这个值只用来挡住
+#: "系统媒体服务卡死"——那种情况下 COM 调用永不返回（实机 >20s；本机
+#: PowerShell 5.1 的 .NET WinRT 投影同样超时），``asyncio.wait_for`` 也拦不住。
+SMTC_READ_TIMEOUT = 0.5
+#: 第一次读取的宽限（秒）：winrt 惰性 import + 建管理器 + 首次枚举是这条链路最贵
+#: 的一步，别让"冷启动"被当成"媒体服务卡死"（会误报一次降级日志）。
+SMTC_FIRST_READ_TIMEOUT = 2.0
+#: 读取超时后的降级窗口（秒）：窗内立即返回退化样例，不再派发读取。
+SMTC_DEGRADED_SECONDS = 30.0
+#: 卡死线程的重试上限：每跨过一次降级窗就退役一条卡住的读取线程、另起一条探测
+#: （Python 不能杀线程，只能不 join 地留着）。超过上限就不再探测（进程重启才恢复）。
+SMTC_MAX_STUCK_THREADS = 2
+#: 退化样例的理由（给"识别诊断"与 probe 看；不含进程路径/曲名）。
+SMTC_TIMEOUT_REASON = (
+    "读取系统媒体会话超时（Windows 媒体服务无响应），已暂时改用播放器窗口标题识别。"
+)
+#: 重试上限耗尽后的理由（不再探测，直到进程重启）。
+SMTC_GIVEUP_REASON = (
+    "系统媒体服务持续无响应（已停止重试）；重启播放器或电脑后可恢复，"
+    "期间用播放器窗口标题识别。"
+)
+#: 收口后（``stop()``）的样例理由。
+SMTC_CLOSED_REASON = "读取系统媒体信息已收口。"
+
+
+class _SmtcRequest:
+    """一次读取请求（单槽队列的元素）：结果由读取线程填、``done`` 唤醒等待者。"""
+
+    __slots__ = ("kwargs", "done", "result")
+
+    def __init__(self, kwargs: dict) -> None:
+        self.kwargs = kwargs
+        self.done = threading.Event()
+        self.result: SmtcSample | None = None
+
+
+class SmtcReader:
+    """把 SMTC 读取挪到**自己的线程**上，并按硬超时退化成"读不到"。
+
+    为什么不能只靠 ``asyncio.wait_for``：卡死的是**同步 COM 调用**，事件循环根本
+    轮不上。这条调用一旦跑在采样线程上，采样线程、在飞标志与整条识别链路会一起
+    永久停摆（现场：``RequestAsync`` 不返回 → 每秒一拍全部被 ``_inflight`` 挡掉）。
+
+    契约：
+
+    - ``read()`` 有界：最多等 ``timeout``（首读用 ``SMTC_FIRST_READ_TIMEOUT``），
+      超时返回 ``SmtcSample(degraded=True)``；
+    - 卡住的那一次只允许一个：超时后进入 ``degraded_seconds`` 降级窗，窗内**立即**
+      返回退化样例、不派发（不排队、不刷屏）；
+    - 窗到期仍在卡：退役那条线程、另起一条探测（``SMTC_MAX_STUCK_THREADS`` 次上限），
+      读取线程一旦空出来也自动解除降级——不需要重启程序/播放器；
+    - ``stop()`` 有界；收口后不再建线程，迟到的结果丢弃。
+    """
+
+    def __init__(
+        self,
+        *,
+        reader=None,
+        timeout: float = SMTC_READ_TIMEOUT,
+        degraded_seconds: float = SMTC_DEGRADED_SECONDS,
+        clock=None,
+        name: str = "music-smtc-reader",
+    ) -> None:
+        self._reader = reader
+        self._timeout = max(0.01, float(timeout))
+        #: 首读宽限：冷启动（winrt 惰性 import + 建管理器 + 首次枚举）是这条链路最贵
+        #: 的一步，别让一次正常的慢被当成"媒体服务卡死"（会误报一条降级日志）。
+        self._first_timeout = max(
+            self._timeout, min(SMTC_FIRST_READ_TIMEOUT, self._timeout * 4.0)
+        )
+        self._degraded_seconds = max(0.0, float(degraded_seconds))
+        self._clock = clock or time.monotonic
+        self._name = name
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._closing = threading.Event()
+        self._request: _SmtcRequest | None = None
+        self._thread: threading.Thread | None = None
+        #: 卡死后被退役的线程（不 join：Python 不能杀线程；只留引用便于诊断）
+        self._retired: list[threading.Thread] = []
+        self._stuck_threads = 0
+        self._reads = 0
+        self._stopped = False
+        self._stuck = False
+        self._degraded_until = 0.0
+        self._reason = ""
+        self._dispatched = 0
+
+    # ---------------------------------------------------------------- 查询
+
+    @property
+    def degraded(self) -> bool:
+        """当前是否处于降级（读取超时未恢复）。"""
+        with self._lock:
+            return bool(self._stuck or self._clock() < self._degraded_until)
+
+    @property
+    def dispatched(self) -> int:
+        """派发过的读取次数（诊断/测试用）。"""
+        with self._lock:
+            return int(self._dispatched)
+
+    def alive(self) -> bool:
+        thread = self._thread
+        if thread is None:
+            return False
+        try:
+            return bool(thread.is_alive())
+        except RuntimeError:
+            return False
+
+    # ---------------------------------------------------------------- 读取
+
+    def read(self, **kwargs) -> SmtcSample:
+        """有界读取一次；卡死时返回退化样例（绝不是 ``failed``）。"""
+        now = self._clock()
+        with self._lock:
+            if self._stopped:
+                return closed_sample()
+            if self._stuck:
+                if now < self._degraded_until:
+                    return self._degraded_sample()
+                if not self._retire_stuck_thread_locked():
+                    return self._giveup_sample()
+            elif now < self._degraded_until:
+                return self._degraded_sample()
+            timeout = self._first_timeout if self._reads == 0 else self._timeout
+            self._reads += 1
+        request = _SmtcRequest(kwargs)
+        with self._lock:
+            if self._stopped:
+                return closed_sample()
+            self._request = request
+            self._dispatched += 1
+            self._ensure_thread_locked()
+        self._wake.set()
+        if request.done.wait(timeout) and request.result is not None:
+            return request.result
+        with self._lock:
+            if self._stopped:
+                return closed_sample()
+            if request.done.is_set() and request.result is not None:
+                # 刚好赶在超时边沿拿到结果：以真结果为准，不进降级窗。
+                return request.result
+            # 这一拍等不到：把读取线程标记成"卡住"，进入降级窗。它恢复时会自己
+            # 清掉标记（见 ``_loop``）；窗到期仍卡则由 ``read()`` 退役并重试。
+            self._stuck = True
+            self._degraded_until = self._clock() + self._degraded_seconds
+            self._reason = SMTC_TIMEOUT_REASON
+        return self._degraded_sample()
+
+    def stop(self, timeout: float = 1.0) -> bool:
+        """收口：唤醒并等待读取线程（有界）；返回线程是否已退出。"""
+        with self._lock:
+            self._stopped = True
+            request, self._request = self._request, None
+        if request is not None:
+            request.done.set()          # 唤醒可能还在等的调用方（结果缺失即按超时处理）
+        self._closing.set()
+        self._wake.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout)
+        return not self.alive()
+
+    # ---------------------------------------------------------------- 内部
+
+    def _degraded_sample(self) -> SmtcSample:
+        reason = self._reason or SMTC_TIMEOUT_REASON
+        return SmtcSample(reason=reason, degraded=True)
+
+    def _giveup_sample(self) -> SmtcSample:
+        """重试上限耗尽：继续降级，但理由写清"已停止重试"。"""
+        return SmtcSample(reason=SMTC_GIVEUP_REASON, degraded=True)
+
+    def _retire_stuck_thread_locked(self) -> bool:
+        """退役卡住的读取线程并允许重试；达到上限返回 ``False``。
+
+        只解绑、``closing.set()``，**不 join**：那条线程还卡在同步 COM 调用里，
+        Python 没有安全的办法打断它。它返回后会看到 ``closing`` 已置位而自行退出；
+        期间它手里的请求一并作废（``request`` 单槽被清空）。
+        """
+        if self._stuck_threads >= SMTC_MAX_STUCK_THREADS:
+            return False
+        thread, self._thread = self._thread, None
+        if thread is not None:
+            self._retired.append(thread)
+        closing, self._closing = self._closing, threading.Event()
+        self._wake = threading.Event()
+        self._request = None
+        closing.set()
+        self._stuck_threads += 1
+        self._stuck = False
+        self._degraded_until = 0.0
+        self._reason = ""
+        return True
+
+    def _ensure_thread_locked(self) -> None:
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            return
+        # 每条线程一对独立的事件：退役的旧线程还持有旧 ``closing``，绝不能让它
+        # 和新线程共享 ``wake``（两个消费者会抢同一个单槽请求）。
+        closing = threading.Event()
+        wake = threading.Event()
+        self._closing = closing
+        self._wake = wake
+        thread = threading.Thread(
+            target=self._loop,
+            args=(closing, wake),
+            name=self._name,
+            daemon=True,
+        )
+        self._thread = thread
+        thread.start()
+
+    def _loop(self, closing: threading.Event, wake: threading.Event) -> None:
+        try:
+            while not closing.is_set():
+                if not wake.wait(0.25):
+                    continue
+                wake.clear()
+                while not closing.is_set():
+                    with self._lock:
+                        request, self._request = self._request, None
+                    if request is None:
+                        break
+                    result = self._run(request)
+                    with self._lock:
+                        # 读取线程空出来了：卡死/降级一律解除（失败样例也算"能读到"，
+                        # 那说明 COM 是活的，只是这一次没数据）。
+                        self._stuck = False
+                        self._degraded_until = 0.0
+                        self._reason = ""
+                    request.result = result
+                    request.done.set()
+        finally:
+            # 本线程的常驻事件循环与线程缓存要在这里收（COM 是线程亲和的）。
+            close_thread_loop()
+            reset_thread_cache()
+
+    def _run(self, request: _SmtcRequest) -> SmtcSample:
+        reader = self._reader or read_sample
+        try:
+            return reader(**request.kwargs)
+        except Exception:
+            return SmtcSample(reason="读取系统媒体信息失败。", failed=True)
+
+
+def closed_sample(**_kwargs) -> SmtcSample:
+    """收口后的 SMTC 采样入口：运行时 ``stop()`` 期间残留的一拍直接用这个。
+
+    ``sampling.collect`` 会按同一组关键字调用采样缝，所以这里收 ``**kwargs``。
+    """
+    return SmtcSample(reason=SMTC_CLOSED_REASON, failed=True)
 
 
 def read_playback_with_reason(

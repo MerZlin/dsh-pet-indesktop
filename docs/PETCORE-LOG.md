@@ -4799,3 +4799,89 @@ ffmpeg + 新起一个，FrameSeq 被 `start()` 拉回第 0 帧，整轮思考都
 - 锁屏停播只覆盖宠物播放/碰撞/输入轮询；灵动岛探针、音乐采样仍按各自节拍运行。
 - 真机鼠标端到端（下层按钮/右键菜单/长按拖动）需本机实机验收；本机微基准不能代表
   弱机独显/DWM 合成路径。
+
+## L135 — 2026-10-29 — 帧表节拍回到 PreciseTimer（"2 倍速仍偏慢"）
+
+**主题**：用户报「新版本动画播放看着有点慢，开到 2 倍速还是慢」。定位为 L134 把
+帧表定时器改成 `CoarseTimer` 的回归。
+
+**实现**
+- `petcore/media/clip.py`：`create_frame_clip()` 改回 `FrameSeqClip(frames_dir)`
+  （默认 `PreciseTimer`），删掉"Precise 会把系统计时器精度钉在 1ms"的注释——该理由
+  经 A/B 实测站不住（`timeBeginPeriod(1)` 前后 QTimer 均值 41.8 / 42.1ms 相同；
+  能观测到的是节拍均值，不是系统分辨率）。
+- 新增 `tests/test_petcore_frame_pacing.py`（+2）：实现用的必须是 `PreciseTimer`、
+  间隔 24fps 1x=42ms / 2x=21ms。
+
+**验证**
+- 真素材（`shenshen/frameseq/click/…`，241 帧 / 24fps，4 秒窗口，offscreen）：
+  Precise 1x **23.84fps**、2x **47.62fps**；Coarse（改前）1x **21.33fps**、
+  2x **32.00fps**。QTimer 基准：Windows 颗粒 15.625ms，Coarse 21ms→31.3ms、
+  Coarse 42ms→47.2ms。
+- `tests/test_petcore_frame_pacing.py`、`test_frameseq_clip.py`、`test_frame_path_waste.py`
+  全绿；`ruff check` 干净。
+
+**未覆盖 / 风险**
+- Precise 的到达抖动仍在（mean 41.8ms，单拍 31/47ms 交替），与旧版主分支逐位一致；
+  没有引入"按截止时间追帧"的调度器（会改变"未到货不跳帧"的既有语义）。
+- 帧率是 offscreen 计时器统计，不含 DWM 合成与真实桌面负载；真机观感需用户确认。
+
+## L136 — 2026-10-29 — SMTC 硬超时降级（音乐识别卡死自愈）+ peak 判据
+
+**主题**：用户报「音乐播放识别不到了」。实机取证：Windows SMTC 服务的
+`GlobalSystemMediaTransportControlsSessionManager.RequestAsync()` **永不返回**
+（纯 Python 与 PowerShell 5.1 的 .NET WinRT 投影都超时 → 系统级），而我们的"超时"
+是 `asyncio.wait_for(_run_sync(...))`——卡的却是同步 COM 调用，`wait_for` 不会触发。
+后果链：采样线程卡在 `_collect()` → `_inflight` 永远 True → 此后每一拍 `poll()` 直接
+return → 识别永久停摆；设置页「识别诊断」也一直转圈。
+
+**实现**
+- `now_playing.py`：`SmtcSample.degraded`；新增 `SmtcReader`（常驻
+  `music-smtc-reader` 线程 + 单槽请求 + `SMTC_READ_TIMEOUT=0.5s` 硬超时（首读 ×4，
+  `SMTC_FIRST_READ_TIMEOUT=2s`，避免把冷启动误报成卡死）+ `SMTC_DEGRADED_SECONDS=30s`
+  降级窗 + 窗到期仍卡则退役旧线程重探一次（`SMTC_MAX_STUCK_THREADS=2` 次上限，
+  之后 `SMTC_GIVEUP_REASON` 明说"已停止重试"）+ 读取线程空出来即自动解除 +
+  `stop()` 有界、线程内 `close_thread_loop()`）。每条线程一对独立事件，退役线程
+  不会和新线程抢请求。
+- `sampling.py`：`Sample.smtc_degraded`；退化不短路 audio/window 两源。
+- `recognizer.py`：`smtc_degraded` 不走 `STATUS_ERROR`（那是"本拍抖动、保留上一拍"），
+  直接判窗口标题源；新增 `AUDIBLE_PEAK=0.005`——同播放器 paused 证据要看 peak：
+  有声音（SMTC 状态落后）→ 认在播；peak≈0（残留 Active）→ 判暂停并标
+  `Decision.soft_paused`。
+- `runtime.py`：`start()` 建 `SmtcReader`、`_collect()` 在**采集时**解析接缝
+  （`_smtc_callable()`：有 reader 走有界读取，否则用测试替身/同步接缝），`stop()` 先
+  停采样线程再收 reader；`poll()` 的 `INFLIGHT_LIMIT_SECONDS=3` 看门狗命中时把
+  "采样线程无响应"的退化样例**直接交给判定层**（只放开标志的话，worker 真卡死时
+  状态机会永远停在最后一拍）；`_collect_safely()` 由 worker 与同步路径共用；
+  退化日志开始/恢复各一条。
+- `runtime.py` 的 `SOFT_PAUSE_CONFIRM_TICKS=2`：peak 判据的迟滞——PAUSED 的缺席
+  宽限是 0，单拍静音（淡出/间奏）不许立刻 release + 藏气泡（否则 1Hz 释放—重播）。
+- `settings_page.py` 的识别诊断改用**模块级共用**的一条 reader（每次点击新建会在
+  卡死机器上每次漏一条卡在 COM 里的线程）；`scripts/music_probe.py` 也走
+  `SmtcReader`；`diagnostics.py` 在退化时显示「SMTC：读取超时（已降级…）」。
+- 测试：新增 `test_petcore_music_smtc_timeout.py`（8，含窗到期重探与重试上限）、
+  `test_petcore_music_sampling_watchdog.py`（6，含 reader 接管链与 soft-pause 迟滞）；
+  `test_petcore_music_sources.py` 新增降级 2 条 + 同播放器 peak 2 条（原「残留 Active」
+  用例改为 peak=0.0）。
+
+**验证**
+- 本机 SMTC 卡死现状下 `scripts/music_probe.py --all --seconds 4`：第 1 拍
+  2155.9ms（首读宽限 2s）返回并在诊断里写「读取超时（已降级：用播放器窗口标题 +
+  音频会话识别）」，第 2 拍 6.2ms（降级窗内立即返回），**不再挂死**。
+- 同一现场下 `MusicRuntime` 全链路（`.scratch/verify_music_runtime.py`）：第 1 拍
+  2000ms 等满首读宽限并降级，第 2–7 拍 15–31ms 全部 `absent / degraded=True`；
+  退出时 `stop()` 对卡死 reader 记一条 "still stuck"（有界等待 0.2s），不阻塞 GUI。
+- 全量 `pytest tests/test_petcore_*.py tests/test_architecture.py
+  tests/test_pr_report_discipline.py tests/test_petcore_docs.py -q` → **2826 passed,
+  1 skipped（199.95s，最终代码）**；`ruff check` 干净；
+  `python -m petcore --check --strict` → `strict.problems=[]`。
+
+**未覆盖 / 风险**
+- SMTC 卡死是系统级的：代码只能绕过去并自愈，不能修 Windows 媒体服务本身。窗到期
+  会重探（最多 2 条卡死线程），但"服务恢复后能否切回"只由单元测试证明，未在真机
+  （重启播放器/电脑后）复验。
+- 降级期只有窗口标题 + WASAPI 两源：浏览器内播放/标题无歌名的场景识别弱于 SMTC。
+- `peak ≥ 0.005` 是经验门限；迟滞只给"同播放器 + 窗口源在播"这一条路径（2 拍），
+  真静音 2 秒后仍会判暂停。
+- 卡死的 reader daemon 线程无法回收（Python 不能杀线程）；重试上限内最多 2 条，
+  进程退出即释放。

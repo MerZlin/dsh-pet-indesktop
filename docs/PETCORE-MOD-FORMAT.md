@@ -398,8 +398,22 @@ ports.presentation.release_loop()                          # 当前这圈播完�
 | SMTC 无被接受会话 + 已登记播放器窗口标题可由进程但音频不活跃 | 暂停（开着没在放时标题停在上一首，不许当在播） |
 | SMTC 无被接受会话 + 已登记播放器进程音频 Active、标题解析不出歌名 | 在播但无曲目（只唱歌、不取词；气泡对**同一台播放器**只说明一次「这首歌我认不出来」） |
 | 只有任意进程（游戏 / 语音 / 未知应用）音频 Active | **不在播**（不猜） |
-| SMTC 采样抛错 / 超时 | 读失败：保留上一拍状态，不清歌词、不计缺席 |
+| SMTC 采样抛错（本拍抖动） | 读失败：保留上一拍状态，不清歌词、不计缺席 |
+| SMTC **读取超时 / 媒体服务无响应**（`smtc_degraded`） | 不按读失败处理：跳过 SMTC 直接判窗口标题源；窗口源也没有 → 不在播（歌词冻结、宽限后停），理由里写「读取超时…已降级」 |
+| SMTC 处于暂停 + **同一台播放器**窗口可解析且其音频 Active | 看 `peak`：≥ `AUDIBLE_PEAK`（0.005）→ 在播（来源=窗口标题，SMTC 状态落后）；peak≈0 → 暂停（残留 Active 会话） |
 
+- **SMTC 读取必须有界**：`host/now_playing.py:SmtcReader` 把 SMTC 读取挪到常驻的
+  `music-smtc-reader` 线程，硬超时 0.5s（首读 ×4）；超时后进入 30s 降级窗（窗内立即
+  返回 `degraded=True`，不排队、不刷屏），窗到期仍卡就退役旧线程重探一次
+  （`SMTC_MAX_STUCK_THREADS=2` 次上限，耗尽后理由改成"已停止重试"），读取线程一空
+  出来也自动解除。**不许在采样线程上直接调 WinRT**：`RequestAsync` 在系统媒体服务
+  无响应时会永不返回，而 `asyncio.wait_for` 拦不住同步 COM 调用——采样线程、
+  `_inflight` 与整条识别会一起永久停摆（2026-10-29 现场）。
+- **「残留 Active」与「SMTC 状态落后」用 peak 分开**：同一个播放器暂停后音频会话常
+  仍挂 `active`，此时峰值恒为 0；`peak ≥ AUDIBLE_PEAK`（0.005）+ Active + 未静音
+  才认"真在出声"。只看 `state` 会在两种相反的情况下各错一次。这种"peak 判暂停"要带
+  `Decision.soft_paused`，运行时按 `SOFT_PAUSE_CONFIRM_TICKS=2` 迟滞（PAUSED 的缺席
+  宽限是 0，单拍静音不许立刻收掉播放）。
 - **识别范围**（`music_filter_enabled`，默认 false）：开启后只放行识别名命中集合的
   会话，**对三个来源统一生效**；识别名来源是 `music_player_paths` 的 exe 文件名
   （去 `.exe`、小写）+ `music_filter_extra_ids`（逗号/顿号分隔，AUMID 与 exe 名

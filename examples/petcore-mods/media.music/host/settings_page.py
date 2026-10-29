@@ -32,6 +32,18 @@ from petcore.ui.settings.base import SettingsPage, make_checkbox
 from . import audio_sessions, diagnostics, now_playing, players, recognizer, sampling
 from .runtime import DEFAULTS
 
+#: 「识别诊断」共用的一条有界 SMTC 读取线程。
+#: 每次点击都新建 reader 的话，在媒体服务卡死的机器上每点一次就漏一条卡在 COM
+#: 里的 daemon 线程（类文档只承诺"每次生命周期最多 1 条"）；共用一条就没有累积。
+_DETECT_READER: "now_playing.SmtcReader | None" = None
+
+
+def _detect_reader() -> "now_playing.SmtcReader":
+    global _DETECT_READER
+    if _DETECT_READER is None:
+        _DETECT_READER = now_playing.SmtcReader(name="music-smtc-detect")
+    return _DETECT_READER
+
 
 class MusicPage(SettingsPage):
     title = "音乐"
@@ -487,11 +499,15 @@ class MusicPage(SettingsPage):
         title_format = self.title_format.text().strip()
 
         def work() -> None:
+            # SMTC 走有界读取线程：系统媒体服务卡死时，诊断按钮不许永远转圈。
+            # reader 是本模块共用的（一次性线程里新建会在卡死机器上累积泄漏）。
+            reader = _detect_reader()
             try:
                 sample = sampling.collect(
                     browser_media_enabled=browser_media,
                     allowed_ids=allowed or None,
                     targets=targets,
+                    smtc=reader.read,
                 )
                 decision = recognizer.decide(
                     sample,
@@ -502,9 +518,7 @@ class MusicPage(SettingsPage):
             except Exception:
                 text = "采样失败：读取系统媒体信息时出了意外，请稍后重试。"
             finally:
-                # 这条线程是一次性的：常驻事件循环与 COM apartment 都要收尾，
-                # 否则每次点击都漏一个 loop，还会把音频会话缓存绑到将死的线程上。
-                now_playing.close_thread_loop()
+                # 音频会话缓存绑在这条一次性线程的 COM apartment 上，必须配对收尾。
                 audio_sessions.close()
             try:
                 self.diagnose_done.emit(text)

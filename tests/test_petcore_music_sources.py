@@ -63,6 +63,7 @@ def sample(
     windows=(),
     smtc_reason: str = "",
     smtc_error: bool = False,
+    smtc_degraded: bool = False,
     audio_available: bool = True,
     window_available: bool = True,
 ):
@@ -71,6 +72,7 @@ def sample(
         playback=playback,
         smtc_reason=smtc_reason,
         smtc_error=smtc_error,
+        smtc_degraded=smtc_degraded,
         audio=tuple(audio_rows),
         audio_available=audio_available,
         windows=tuple(windows),
@@ -151,18 +153,67 @@ def test_smtc_paused_stays_paused_even_if_audio_is_active() -> None:
     assert decision.status == recognizer.STATUS_PAUSED
 
 
-def test_smtc_paused_ignores_the_same_players_leftover_window_session() -> None:
-    """同一台播放器暂停后 WASAPI 会话常仍挂 active：不能拿它把暂停翻成在播。"""
+def test_smtc_paused_ignores_the_same_players_silent_leftover_session() -> None:
+    """同一台播放器暂停后 WASAPI 会话常仍挂 active，但**没有声音**（peak=0）：
+    不能拿它把暂停翻成在播。"""
     decision = recognizer.decide(
         sample(
             playback=playback(playing=False),
-            audio_rows=[audio("cloudmusic.exe")],
+            audio_rows=[audio("cloudmusic.exe", peak=0.0)],
             windows=[window("cloudmusic.exe", "晴天 - 周杰伦")],
         ),
         parse_window=parse_ok,
     )
     assert decision.status == recognizer.STATUS_PAUSED
     assert any("同一台播放器" in reason for reason in decision.reasons)
+
+
+def test_smtc_paused_yields_to_the_same_player_when_audio_is_audible() -> None:
+    """SMTC 状态停在暂停、同一台播放器却真在出声（peak>0）：以窗口源为准。
+
+    网易云的 SMTC 状态会落后于实际播放；只看 ``state`` 会把"在播"永久判成暂停，
+    这正是"音乐识别不到"的一种现场。peak 是第三条证据，能分开两种"Active 残留"。
+    """
+    decision = recognizer.decide(
+        sample(
+            playback=playback(playing=False),
+            audio_rows=[audio("cloudmusic.exe", peak=0.4)],
+            windows=[window("cloudmusic.exe", "晴天 - 周杰伦")],
+        ),
+        parse_window=parse_ok,
+    )
+    assert decision.status == recognizer.STATUS_PLAYING
+    assert decision.source == recognizer.SOURCE_WINDOW
+    assert decision.track is not None and decision.track.title == "晴天"
+
+
+def test_degraded_smtc_falls_back_to_the_window_source() -> None:
+    """SMTC 读取超时（系统媒体服务卡死）：不许整拍判失败，窗口源能救就救。"""
+    decision = recognizer.decide(
+        sample(
+            smtc_degraded=True,
+            smtc_reason="读取系统媒体会话超时。",
+            audio_rows=[audio("cloudmusic.exe", peak=0.4)],
+            windows=[window("cloudmusic.exe", "晴天 - 周杰伦")],
+        ),
+        parse_window=parse_ok,
+    )
+    assert decision.status == recognizer.STATUS_PLAYING
+    assert decision.source == recognizer.SOURCE_WINDOW
+    assert any("超时" in line for line in (*decision.reasons, *decision.evidence))
+
+
+def test_degraded_smtc_without_any_source_is_absent_not_error() -> None:
+    """彻底没有证据时按"没在放"处理（歌词冻结、宽限后停），不是永久 ERROR。
+
+    ``error`` 的语义是"这一拍读失败、保留上一拍"；SMTC 卡死是**持续**状态，
+    按它处理就等于永远停在最后一首歌上。
+    """
+    decision = recognizer.decide(
+        sample(smtc_degraded=True, smtc_reason="读取系统媒体会话超时。")
+    )
+    assert decision.status == recognizer.STATUS_ABSENT
+    assert any("超时" in reason for reason in decision.reasons)
 
 
 def test_smtc_paused_yields_to_another_player_that_is_audible() -> None:

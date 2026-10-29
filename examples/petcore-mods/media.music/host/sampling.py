@@ -34,6 +34,9 @@ class Sample:
     sessions: tuple = ()
     smtc_reason: str = ""
     smtc_error: bool = False
+    #: SMTC **持续**读不到（读取超时/媒体服务无响应）：判定层要退到窗口标题源，
+    #: 不许整拍作废。与 ``smtc_error``（这一拍抖动、保持上一拍）语义不同。
+    smtc_degraded: bool = False
     audio: tuple = ()
     audio_available: bool = True
     windows: tuple = ()
@@ -142,6 +145,7 @@ def collect(
         sessions=tuple(getattr(smtc_sample, "sessions", ()) or ()),
         smtc_reason=str(getattr(smtc_sample, "reason", "") or ""),
         smtc_error=bool(getattr(smtc_sample, "failed", False)),
+        smtc_degraded=bool(getattr(smtc_sample, "degraded", False)),
         audio=audio_rows,
         audio_available=audio_available,
         windows=window_rows,

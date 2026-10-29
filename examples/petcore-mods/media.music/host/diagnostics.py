@@ -53,6 +53,10 @@ def _media_type_name(value) -> str:
 
 def _smtc_lines(sample) -> list[str]:
     sessions = tuple(getattr(sample, "sessions", ()) or ())
+    degraded = bool(getattr(sample, "smtc_degraded", False))
+    if degraded and not sessions:
+        # 系统媒体服务无响应（读取超时）：这一行就是排障的第一现场，别写成"没有会话"。
+        return ["SMTC：读取超时（已降级：用播放器窗口标题 + 音频会话识别）"]
     if not sessions:
         return ["SMTC：没有会话"]
     lines = [f"SMTC：{len(sessions)} 个会话"]

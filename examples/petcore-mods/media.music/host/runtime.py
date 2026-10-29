@@ -79,6 +79,12 @@ SING_ANIM = "悠闲哼歌"
 SCENE_OWNER = "media.music"
 #: 轮询间隔：与歌词/唱歌链路的既有口径一致，兼顾开销与切歌响应。
 POLL_MS = 1000
+#: 一拍采样的在飞上限（秒）：超过它就作废那一拍（SMTC 卡死时靠这条保住后续每一拍）。
+#: 正常采样实测 <20ms；给到 3 秒只为容忍冷启动与一次降级读取。
+INFLIGHT_LIMIT_SECONDS = 3.0
+#: 「同播放器暂停、但这一拍没声音」的确认拍数（峰值门限的迟滞）。PAUSED 的缺席宽限
+#: 是 0，单拍静音（淡出/间奏）若不迟滞就会 1Hz 释放—重播（气泡忽隐忽现）。
+SOFT_PAUSE_CONFIRM_TICKS = 2
 #: 唱歌失败后的退避：第 n 次失败等 ``2^n`` 拍，封顶该值（秒）。**不永久放弃**。
 SING_BACKOFF_MAX_SECONDS = 30.0
 #: 循环被核心清掉（点击/探头/击飞/拖拽）后重新武装的退避上限（秒）。首次当拍就补。
@@ -347,6 +353,9 @@ class MusicRuntime:
         self.sample_audio = audio_sessions.snapshot
         self.sample_windows = window_source.snapshot
         self.decide = recognizer.decide
+        #: SMTC 的有界读取线程（``start()`` 建）：卡死的系统媒体服务不许占住采样线程。
+        #: 测试/诊断直接调 ``poll()`` 的走法没有它，仍用上面那个同步接缝。
+        self._smtc_reader: now_playing.SmtcReader | None = None
         # 传输控制：**必须是实例属性**。写成类属性会让 `self.control_playback(...)`
         # 变成绑定方法、把 self 塞进 action 位（四个播放命令会 100% 抛 TypeError，
         # 再被 except 吞成"系统媒体控制调用失败"）。
@@ -370,8 +379,16 @@ class MusicRuntime:
         self._stopped = False
         self._pending: _Request | None = None
         self._inflight = False
+        #: 当前在飞那一拍的起点（``clock()``）：超过 ``INFLIGHT_LIMIT_SECONDS`` 就作废。
+        self._inflight_since: float | None = None
+        self._inflight_warned = False
         #: 采样线程意外退出时只记一条日志（每拍刷屏没有意义）。
         self._worker_lost = False
+        #: 降级日志：SMTC 读取超时的开始/恢复各记一条（不逐拍刷屏）。
+        self._smtc_degraded_logged = False
+        #: 「同播放器暂停、但这一拍没声音」的连拍计数（峰值门限的迟滞，见
+        #: ``SOFT_PAUSE_CONFIRM_TICKS``）：单拍静音不许把在播立刻收掉。
+        self._soft_pause_beats = 0
         #: 暂停期间窗口源的枚举缓存（2 秒一次，见 ``sampling.WINDOW_PAUSED_INTERVAL``）。
         self._window_cache = sampling.WindowCache()
         #: 每拍递增的采样令牌；落地时丢弃比已落地更旧的包（迟到/乱序）。
@@ -589,7 +606,7 @@ class MusicRuntime:
         if worker is None or not worker.is_alive():
             if not self._started:
                 # 运行时还没 start()（测试/诊断直接调 poll()）：没有常驻线程可等。
-                self._consume(self._collect(request), request)
+                self._consume(self._collect_safely(request), request)
                 return
             # 线程意外退出：上面已经尝试重拉；还是不在就记一条日志、**跳过这一拍**。
             # 绝不在 GUI 线程补采——SMTC 实测能把主线程永久钉住。
@@ -598,8 +615,36 @@ class MusicRuntime:
                 log.warning("music sampling worker is not running; skipping polls until it restarts")
             return
         if self._inflight:
-            return
+            started = self._inflight_since
+            if started is not None and (self.clock() - started) > INFLIGHT_LIMIT_SECONDS:
+                # 上一拍卡在采集里（SMTC 无响应之类）：作废它。否则此后每一拍都在这里
+                # 被挡回去，识别永久停摆。真正的卡死读取由 ``SmtcReader`` 的硬超时兜住，
+                # 这条是最后一道保险（也覆盖音频/窗口源侧的长时间阻塞）。
+                if not self._inflight_warned:
+                    self._inflight_warned = True
+                    log.warning(
+                        "music sampling beat exceeded %.1fs; dropping it and continuing",
+                        INFLIGHT_LIMIT_SECONDS,
+                    )
+                # 光放开标志不够：worker 真卡死时再也没有 sample 落地，状态机会永远
+                # 停在最后一拍（继续唱歌、歌词不动）。这里直接把"这一拍读不到"交给
+                # 判定层（按退化语义收掉循环）；卡死线程迟到的结果 seq 更旧，会被丢弃。
+                self._consume(
+                    sampling.Sample(
+                        smtc_degraded=True,
+                        smtc_reason="采样线程无响应，本次识别已跳过。",
+                    ),
+                    request,
+                )
+                if self._stopped:
+                    return
+                # ``_consume`` 会复位告警标志；这里补回来，让"同一次卡死"只告警一次
+                # （真恢复后由正常 sample 的 ``_consume`` 复位，下一次卡死会重新告警）。
+                self._inflight_warned = True
+            else:
+                return
         self._inflight = True
+        self._inflight_since = self.clock()
         self._pending = request
         self._wake.set()
 
@@ -610,12 +655,36 @@ class MusicRuntime:
             tracked_app_id=request.tracked_app_id,
             allowed_ids=request.allowed_ids,
             targets=request.targets,
-            smtc=self.sample_smtc,
+            smtc=self._smtc_callable(),
             audio=self.sample_audio,
             windows=self.sample_windows,
             window_cache=self._window_cache,
             clock=self.clock,
         )
+
+    def _smtc_callable(self):
+        """SMTC 采样入口：有 reader 走有界读取，否则用同步接缝（测试/诊断）。
+
+        在**采集时**解析而不是在 ``start()`` 时替换 ``sample_smtc``：``stop()`` 期间
+        采样线程可能还差最后一拍，替换成裸 ``read_sample`` 会让它重新执行无界 COM
+        调用（正是这次要修的那条链）。已收口时一律给"已收口"样例——那一拍的结果
+        本来就会被 generation 丢掉。
+        """
+        if self._stopped:
+            return now_playing.closed_sample
+        reader = self._smtc_reader
+        return reader.read if reader is not None else self.sample_smtc
+
+    def _collect_safely(self, request: _Request) -> sampling.Sample:
+        """采集一次，异常折成"这一拍读失败"（不许杀掉采样线程/冒到定时器回调）。"""
+        try:
+            return self._collect(request)
+        except Exception:
+            log.warning("music sampling failed; reporting a read failure", exc_info=True)
+            return sampling.Sample(
+                smtc_error=True,
+                smtc_reason="采样失败（音乐来源读取异常）。",
+            )
 
     def _decide(self, sample: sampling.Sample, request: _Request):
         try:
@@ -640,7 +709,7 @@ class MusicRuntime:
                 request = self._pending
                 if request is None:
                     continue
-                sample = self._collect(request)
+                sample = self._collect_safely(request)
                 self._post(
                     lambda sample=sample, request=request: self._consume(sample, request),
                     generation,
@@ -655,6 +724,8 @@ class MusicRuntime:
     def _consume(self, sample: sampling.Sample, request: _Request) -> None:
         """在 GUI 线程落地一次采样（迟到/过期的包直接丢弃）。"""
         self._inflight = False
+        self._inflight_since = None
+        self._inflight_warned = False
         if self._stopped or request.seq < self._delivered_seq:
             return
         self._delivered_seq = request.seq
@@ -665,6 +736,17 @@ class MusicRuntime:
 
     def _on_decision(self, decision, sample: sampling.Sample) -> None:
         self.last_decision = decision
+        degraded = bool(getattr(sample, "smtc_degraded", False))
+        if degraded and not self._smtc_degraded_logged:
+            # 开始/恢复各记一条（不逐拍刷屏）；理由里没有曲名/URL，可以进日志。
+            self._smtc_degraded_logged = True
+            log.warning(
+                "SMTC read timed out; falling back to window-title recognition: %s",
+                str(getattr(sample, "smtc_reason", "") or "").strip(),
+            )
+        elif not degraded and self._smtc_degraded_logged:
+            self._smtc_degraded_logged = False
+            log.info("SMTC read is back; window-title fallback is no longer needed")
         now = self.clock()
         status = str(getattr(decision, "status", ""))
         if status == recognizer.STATUS_ERROR:
@@ -672,6 +754,15 @@ class MusicRuntime:
             self._on_silence(now, status)
             return
         was_playing = self._playing_now
+        soft_paused = bool(getattr(decision, "soft_paused", False))
+        if soft_paused and was_playing:
+            self._soft_pause_beats += 1
+            if self._soft_pause_beats < SOFT_PAUSE_CONFIRM_TICKS:
+                # 峰值门限的单拍抖动（淡出/间奏）：保留上一拍，不释放循环、不藏气泡。
+                # 否则「PAUSED 零宽限」会把一次静音采样放大成 1Hz 释放—重播。
+                return
+        else:
+            self._soft_pause_beats = 0
         self._playing_now = bool(getattr(decision, "playing", False))
         app_id = str(getattr(decision, "app_id", "") or "")
         if app_id:
@@ -1441,10 +1532,19 @@ class MusicRuntime:
     def start(self) -> None:
         self._started = True
         self._stopped = False
+        self._smtc_degraded_logged = False
+        self._inflight_warned = False
+        self._inflight_since = None
+        self._soft_pause_beats = 0
         self._start_worker()
         # 取词线程按需建（第一次取词时），这里只允许它再次被派发：一首歌最多跑三轮
         # 取词，每轮都现场开线程既没法取消也没法在 stop() 里收尾（旧实现）。
         self._fetch_worker.arm()
+        # SMTC 读取挪到自己的线程：Windows 媒体服务卡死时（RequestAsync 永不返回）
+        # 采样线程不许被一条同步 COM 调用占住。测试把 ``sample_smtc`` 换成替身时
+        # 保持替身（它本来就是同步的，卡死风险由替身自己决定）。
+        if self._smtc_reader is None and self.sample_smtc is now_playing.read_sample:
+            self._smtc_reader = now_playing.SmtcReader()
         scheduler = getattr(self.context.ports, "scheduler", None)
         if scheduler is None or self._timer is not None:
             return
@@ -1488,9 +1588,21 @@ class MusicRuntime:
                 scheduler.cancel(timer)
             except Exception:
                 pass
+        # 先让采样线程收工，再收 reader：``_collect()`` 在采集时解析接缝
+        # （``_smtc_callable``），线程若在我们收掉 reader 之后还跑最后一拍，会退到
+        # 同步接缝 ``sample_smtc``——生产上就是无界 COM 调用（正是这次要修的那条链）。
         self._closing.set()
         self._wake.set()
         self._inflight = False
+        self._inflight_since = None
+        self._inflight_warned = False
+        self._soft_pause_beats = 0
+        self._smtc_degraded_logged = False
+        reader, self._smtc_reader = self._smtc_reader, None
+        if reader is not None and not reader.stop(0.2):
+            # 有界等待（进程退出/卸载扩展都在 GUI 线程上）：卡死的读取线程只能留给
+            # 进程退出；正常线程在 25ms 内就退出了。
+            log.warning("SMTC reader thread is still stuck after stop()")
         if not self._fetch_worker.stop(FETCH_JOIN_SECONDS):
             # 有界等待：一轮取词最多 8 秒，绝不能让 GUI 线程陪着等。取消位已置，
             # 线程会在下一跳之前收手（结果也会被 generation 丢掉）。

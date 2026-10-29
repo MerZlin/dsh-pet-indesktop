@@ -183,16 +183,15 @@ def create_clip(path: Path, name: str) -> PetClip | None:
 
 def create_frame_clip(frames_dir: Path, name: str) -> PetClip | None:
     try:
-        from PySide6.QtCore import Qt
-
         from pet.frameseq_clip import FrameSeqClip
     except Exception:
         return None
-    # petcore 的帧表是 24fps 级的呈现节拍，Coarse 的 5% 容差无感；
-    # Precise 会让 24fps 常驻把系统计时器精度钉在 1ms（旧版仍用默认 Precise）。
-    return PetClip(
-        FrameSeqClip(frames_dir, timer_type=Qt.TimerType.CoarseTimer), name
-    )
+    # 定时器必须是 PreciseTimer（FrameSeqClip 的默认值）：Windows 的计时器颗粒是
+    # 15.625ms，CoarseTimer 会把间隔量化到那个边界——24fps 的 42ms 变 47ms（1x 只有
+    # 21.3fps）、2x 的 21ms 变 31ms（2x 只有 32fps，观感"开了 2 倍速仍偏慢"）。
+    # Precise 的均值与目标一致（实测 1x 23.8fps / 2x 47.6fps）；它在这条链路上没有
+    # 观察到额外的计时器分辨率副作用（旧版主分支的满速档也一直是 Precise）。
+    return PetClip(FrameSeqClip(frames_dir), name)
 
 
 def create_fallback_clip(name: str = "fallback") -> PetClip:

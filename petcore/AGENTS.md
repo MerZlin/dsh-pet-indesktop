@@ -65,6 +65,11 @@
   Q 弹幅度/次数/时长取 `click_squash_strength`（30–200，默认 100）/`click_squash_bounces`
   （1–5，默认 1）/`click_squash_ms`（80–1000，默认 220）；`click_squash_enabled` 关闭时
   点击/碰撞/撞岛/落地的所有 Q 弹入口都不弹。
+- **帧表节拍固定 Precise**：几何动画的帧序列 clip（`create_frame_clip`）必须用
+  `PreciseTimer`（`FrameSeqClip` 的默认值）。Windows 计时器颗粒 15.625ms，
+  `CoarseTimer` 会把 24fps 的 42ms 量化成 47ms（1x 21.3fps）、2x 的 21ms 量化成
+  31ms（2x 只有 32fps = 用户说的"开了 2 倍速还是慢"）；Precise 实测 1x 23.8fps /
+  2x 47.6fps（旧版主分支满速档也一直用它）。
 - **每帧不预缩放**：`renderer.frame_pixmap` 只做 QImage→QPixmap；缩放与镜像由
   `paintEvent` 按目标矩形（含 Q 弹 rect）绘制，镜像用 painter 变换而不是每帧
   `transformed()` 造中间 pixmap。
@@ -512,6 +517,20 @@
 - **气泡分页**：长文本按「短 3 行 / 长 6 行」分页，页码点 + 滚轮翻页；
   点击仍只打开快速对话（`clicked` 信号不许被翻页吃掉）；副标题与正文同一
   `bubblePanel`，列宽走 `column_for_text()`（248→360 × 字号缩放，按屏宽收敛）。
+- **SMTC 读取必须有界、卡死要降级**：`media.music` 的 SMTC 读取只走
+  `now_playing.SmtcReader`（常驻 `music-smtc-reader` 线程、0.5s 硬超时（首读 ×4）、
+  30s 降级窗、卡死线程每跨一次窗就退役并重探一次、`SMTC_MAX_STUCK_THREADS` 次后
+  停止重试）。**不许**在采样线程上直接调 WinRT：`RequestAsync` 在系统媒体服务
+  无响应时永不返回，`asyncio.wait_for` 拦不住同步 COM 调用，一次卡死就会让采样线程、
+  `_inflight` 与整条识别永久停摆。退化（`smtc_degraded`）**不是** `smtc_error`：判定层
+  要跳过 SMTC 改判窗口标题源；`runtime.poll()` 另有 `INFLIGHT_LIMIT_SECONDS=3` 的
+  在飞看门狗（命中时直接把"读不到"交给判定层，不许只放开标志），`_worker_loop`
+  必须包住 `_collect` 的异常。
+- **同播放器暂停的 `peak` 判据**：`recognizer.AUDIBLE_PEAK`（0.005）——残留 Active
+  会话峰值为 0，判暂停；SMTC 状态落后但真在响，判在播。只看 `state` 会在两种相反
+  的情况下各错一次（"暂停了还在唱" / "在放歌却识别不到"）。这种暂停必须带
+  `Decision.soft_paused`，运行时按 `SOFT_PAUSE_CONFIRM_TICKS=2` 迟滞：PAUSED 的
+  缺席宽限是 0，单拍静音（淡出/间奏）不许把在播立刻收掉（否则 1Hz 释放—重播）。
 - **音乐识别范围**：`music_filter_enabled` 默认关；开启后只放行
   `music_player_paths` 的 exe 名 + `music_filter_extra_ids`；否决表仍是第二道闸；
   过滤同时作用于唱歌、歌词与 `transport()`，被挡下时要点名播放器。
