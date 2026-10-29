@@ -49,6 +49,15 @@
 执行。已知边界：X11 缺 XFixes 扩展时 ``QXcbWindow::setTransparentForMouseEvents``
 会静默早退（qxcbwindow.cpp:1279-1281）；Wayland 原生会话（非 XWayland）下
 Qt 是否处理该标志未验证。见交付报告「未实测项」。
+
+**Linux/X11 不再使用本控制器**（2026-10-25 起）：XWayland 下 ``QCursor.pos()``
+在指针位于非 XWayland surface 时会读到陈旧坐标，而「用光标位置决定输入区域」
+正是让坐标停滞的那件事本身——指针一离开 XWayland 窗口（overlay 空输入区域时
+每次都是），坐标就再也跟不上，判定恒「光标不在宠物上」、输入区域保持空，
+点击全部穿透到下层窗口（v4.3.0 起的 Linux「左右键点不到桌宠」根因）。Linux
+的输入区域改由 ``platform_x11_input.X11InputRegionController`` 用 XFixes
+``ShapeInput`` 直接按 sprite 绘制包围盒设置，**不读全局光标**。本模块保留给
+macOS / 原生 Wayland，以及 X11 控制器初始化失败时的退路。
 """
 
 from __future__ import annotations

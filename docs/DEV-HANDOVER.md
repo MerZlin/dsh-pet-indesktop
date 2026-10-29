@@ -645,6 +645,8 @@ pet/
 ├── predictive_prewarm.py     # 预测式预解码预热（切动画前预拉下一段，默认提前 350ms）
 ├── platform_win.py           # Windows 平台层（鼠标穿透/全屏判定/PerPixel 输入/WS_EX_TRANSPARENT）
 ├── platform_mac.py           # macOS 平台层（NSWindow level/激活策略）
+├── platform_passthrough.py   # 非 Windows 逐像素穿透（Qt 属性 + WindowTransparentForInput 轮询；macOS / 原生 Wayland 用）
+├── platform_x11_input.py     # Linux/X11（含 XWayland）输入区域：XFixes ShapeInput 按 sprite 绘制包围盒（不读全局光标）
 ├── catalog.py                # 角色和动画素材发现
 ├── library.py                # 动画库访问（懒加载 + 优先级预热）
 ├── webm_clip.py              # WebM 播放（reader 线程/软停 re-arm/定期回收/fan-out 钩子）

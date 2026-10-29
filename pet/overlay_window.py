@@ -7,8 +7,9 @@ overlay 内合成后，宠物移动 = 改 sprite 坐标 + update(脏矩形)，�
 WM/DWM 的窗口移动路径。Phase 0 实测（同目录 probe_report）该路线 GO。
 
 本阶段（1b/2）：逐像素穿透两端都已接通——Windows 复用 platform_win 的
-WS_EX_TRANSPARENT 轮询，非 Windows（X11/macOS）复用 platform_passthrough 的
-Qt 属性 + 原生输入穿透标志轮询，两边同一套判定/档位协议（见 showEvent）；
+WS_EX_TRANSPARENT 轮询；X11 / XWayland 用 platform_x11_input 的 XFixes 输入
+区域（按 sprite 绘制包围盒，**不读全局光标**）；macOS / 原生 Wayland 复用
+platform_passthrough 的 Qt 属性 + 原生输入穿透标志轮询（见 showEvent）；
 多屏由壳按屏开宿主窗口（pet/screen_host.py）。
 Phase 3a：右键菜单最小集（contextMenuEvent → sprite_menu.build_sprite_menu）；
 鼠标路由只让左键进拖拽 grab，右键只弹菜单（PetWindow 旧语义）。
@@ -37,6 +38,7 @@ Phase 4 M-2：仿真推进（行为/碰撞/抛掷物理）与 tick 时钟、M-1 
 
 from __future__ import annotations
 
+import logging
 import sys
 
 import shiboken6
@@ -53,6 +55,10 @@ from .platform_mac import (
     _mac_set_window_all_spaces,
 )
 from .platform_passthrough import QtPerPixelInputController
+from .platform_x11_input import (
+    X11InputRegionController,
+    platform_uses_x11_input_region,
+)
 from .sprite_menu import build_sprite_menu
 from .sprite_slingshot import SlingshotController
 from .tick_driver import TickDriver
@@ -283,23 +289,45 @@ class OverlayWindow(QWidget):
             # on_top 开关会重建原生窗口，新句柄不带 WS_EX_NOACTIVATE。
             _set_windows_no_activate(int(self.winId()))
         else:
-            # 非 Windows（X11/macOS）同一条逐像素穿透：落点是 Qt 属性
-            # WA_TransparentForMouseEvents + 原生输入穿透标志，判定与档位协议
-            # 与 Windows 控制器逐条相同（见 platform_passthrough 模块 docstring）。
-            # 这里此前没有任何穿透落点，整屏 overlay 就是一个整屏输入区——
-            # 桌面点击被整块吞掉（发布阻断项）。
+            # 非 Windows 的输入穿透落点（两族，按 Qt 平台插件分流）：
+            #
+            # 1. X11 / XWayland（Linux 默认；Wayland 会话下 app.py 会把平台插件
+            #    强制设成 xcb）：把 XFixes 输入区域直接设成 sprite 绘制包围盒。
+            #    **不能**沿用光标轮询——XWayland 只在指针位于 XWayland surface
+            #    上时才更新自己的指针坐标，指针停在 GNOME 桌面 / Wayland 原生
+            #    窗口上时 ``QCursor.pos()`` 读到的是陈旧值；而 overlay 平时是
+            #    穿透的（空输入区域），指针一离开 XWayland 窗口坐标就再也跟不上，
+            #    于是「判定光标不在宠物上 → 输入区域保持空 → 点击全部穿透」互相
+            #    锁死（v4.3.0 起的 Linux「左右键点不到桌宠」根因，见
+            #    platform_x11_input 模块 docstring）。
+            # 2. macOS / 原生 Wayland：没有 XFixes 可用，沿用 Qt 属性
+            #    WA_TransparentForMouseEvents + 原生输入穿透标志的轮询控制器
+            #    （判定与档位协议与 Windows 控制器逐条相同）。
             if self._input_controller is None:
-                self._input_controller = QtPerPixelInputController(self)
-            # 首次创建与隐藏后恢复统一走 resume：同步收敛一次穿透态（首拍定时器
-            # 之前不留「整屏吞点击」窗口）+ 重开轮询表 + 排一次延迟对账（平台显示
+                if platform_uses_x11_input_region():
+                    try:
+                        self._input_controller = X11InputRegionController(self)
+                    except Exception:
+                        # X 库不可用/连接失败：退回轮询控制器（行为等同修复前，
+                        # 至少不会因为缺一条穿透路径而让整窗吞点击或直接崩）。
+                        logging.warning(
+                            "X11 输入区域控制器初始化失败，回退 Qt 轮询穿透",
+                            exc_info=True)
+                if self._input_controller is None:
+                    self._input_controller = QtPerPixelInputController(self)
+            # 首次创建与隐藏后恢复统一走 resume：X11 控制器同步写一次输入区域
+            # （show() 返回时输入区已正确，不留「首拍之前整屏吞点击」的窗口）；
+            # Qt 控制器同步收敛穿透态 + 重开轮询表 + 排一次延迟对账（平台显示
             # 阶段可能又重建了原生窗口，见 platform_passthrough._reconcile_after_show）。
             self._input_controller.resume()
 
     def hideEvent(self, event) -> None:
         """隐藏期不轮询（O2）：不可见窗口不收输入，两条探测链路都是空转。
 
-        - 逐像素穿透轮询（10/50ms，Windows 写扩展样式位 / 非 Windows 写 Qt 属性
-          与原生输入穿透标志）停表；
+        - 输入穿透控制（Windows 写扩展样式位 / X11 清空输入区域 / 其余非
+          Windows 写 Qt 属性与原生输入穿透标志）停表。X11 控制器在这里还要
+          **清空输入区域**：隐藏窗口留着「按宠物包围盒接点击」的区域，会让
+          那块屏幕区域继续吞点击（与「未显示 = 未穿透」的契约相反）；
         - 光标可见性探测（20Hz）停表——由可见性闸门转达（overlay 不认识
           watcher，多屏多 overlay 时语义也是进程级的「全都在隐藏」）；
         - 全屏探测 1Hz 表**不**停：它是全屏避让后恢复显示的唯一路径。
@@ -319,7 +347,13 @@ class OverlayWindow(QWidget):
         self._driver.detach(self)
         self._disarm_dpr_change_watch()  # D2/P1：摘线，与 showEvent arm 对称
         if self._input_controller is not None:
-            self._input_controller.stop()
+            # X11 控制器持有自己的 Display 连接，关窗必须 close() 释放；
+            # 其余控制器只有 stop()（窗口随进程/重建销毁，不另持资源）。
+            close = getattr(self._input_controller, "close", None)
+            if callable(close):
+                close()
+            else:
+                self._input_controller.stop()
             self._input_controller = None
         super().closeEvent(event)
 
