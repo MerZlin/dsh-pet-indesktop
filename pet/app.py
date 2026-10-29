@@ -5298,6 +5298,14 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
             _show_startup_error("dsh-pet-standalone", str(exc))
             return 1
 
+        # 网易云悬浮控制器：Windows 专用（SMTC + 进程探测），跟随 music 功能开关。
+        if sys.platform == "win32" and feature_activation_mod.is_active("music"):
+            from pet.music.floatbar import create_floatbar
+
+            floatbar = create_floatbar(app)
+            if floatbar is not None:
+                app.aboutToQuit.connect(floatbar.shutdown)
+
         logging.info("进入事件循环")
         return app.exec()
     finally:
