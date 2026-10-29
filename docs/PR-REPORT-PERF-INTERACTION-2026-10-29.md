@@ -59,6 +59,7 @@
 | `petcore/ui/settings/pages_core.py` | +2 / −1 | 穿透 hint 改为仅左键语义 |
 | `petcore/ui/app.py` | +45 / −3 | 会话 pause/resume 接线；托盘穿透文案 |
 | `pet/frameseq_clip.py` | +13 / −2 | 可选 `timer_type`（默认 Precise 不变）+ `rearm_same()` |
+| `scripts/build_petcore.ps1` | +6 / −0 | 时间戳服务器超时返回 `UnknownError`（不抛异常）时重签一次不带时间戳；本次构建实测 digicert 超时 0x80072ee2，fallback 后 exe/setup 均 Valid |
 | `petcore/AGENTS.md` | 见 diff | Q 弹键、仅左键穿透、碰撞表按需、帧渲染、锁屏停播、探针占位/目标生命周期、歌词单飞口径 |
 | `docs/PETCORE-SPEC.md` | +9 / −2 | Q 弹参数与仅左键穿透语义 |
 | `docs/SETTINGS-CHANGE-GATES.md` | +41 / −0 | 两个新键的准入/准出记录 |
@@ -170,6 +171,22 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m petcore --check --root .scratc
 → {"samples":157,"cpu_mean":15.23,"cpu_p50":10.9,"cpu_p95":49.2,"cpu_max":77.8,
    "spawned_children":["python.exe","ffmpeg…","conhost…","ffmpeg…",…]}
 ```
+
+**候选包构建（signed）**：
+
+```text
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 \
+  -Clean -Installer -SignThumbprint 217337C099EC8624AC481BFC9F3E1664D0A442E1 \
+  -OutputRoot rel-perf-interaction-2026-10-29b
+→ PyInstaller Build complete；smoke --check --strict（strict.problems=[]）
+→ Inno Successful compile (145.047 sec)
+→ exe/setup Authenticode 均 Valid（CN=DSH Pet Core Dev）
+→ setup 291 MB（sha256 E206650970524D1E52E8A26FF2E9B3E75CA1B8C81254137B4B6701F1E6274D1B）
+```
+
+- 首次带时间戳构建在 digicert 超时（0x80072ee2）时 `Set-AuthenticodeSignature` 返回
+  `UnknownError` 而不抛异常，脚本因此中止；已加「时间戳失败重签一次不带时间戳」的
+  fallback，第二次构建成功。产物签名有效，但没有可信时间戳（开发证书只在本机可信）。
 
 - **现场前提复核**：本机 `logman query -ets` rc=0、0 个 `dsh-pet-fps-*` 残留会话；`petcore/platform/fps.py` 的 `sweep_residual_sessions` 在这一环境下不会命中真实残留（如实登记）。真机 FPS 采集仍受 Performance Log Users 权限限制（plain user → `access denied`），**没有真实帧读数**，只有探针生命周期/占位/停采的自动化与计时证据。
 - **QQ 音乐**：本机没有登录态/播放会话，SMTC/WASAPI 真实链路未实测；歌词单飞/负缓存/并发 1 由假端口计数验证（96 passed）。不伪造「QQ 音乐已修复」。
