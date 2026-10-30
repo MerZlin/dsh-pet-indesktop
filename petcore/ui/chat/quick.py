@@ -15,10 +15,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from .icons import tool_icon
 from .markdown_view import markdown_to_html
 
 FOLLOW_COALESCE_MS = 40
@@ -42,6 +44,8 @@ class QuickChatBubble(QWidget):
     submitted = Signal(str)
     open_full_requested = Signal()
     closed = Signal()
+    record_requested = Signal()
+    record_stopped = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -115,6 +119,14 @@ class QuickChatBubble(QWidget):
         self.input.setPlaceholderText("和桌宠说点什么… Enter 发送")
         self.input.returnPressed.connect(self._submit)
         footer.addWidget(self.input, 1)
+        self.record_button = QToolButton(self.surface)
+        self.record_button.setObjectName("quick-chat-record")
+        self.record_button.setIcon(tool_icon(self.record_button, "mic", 15))
+        self.record_button.setToolTip("语音输入")
+        self.record_button.setAccessibleName("语音输入")
+        self.record_button.setCheckable(True)
+        self.record_button.clicked.connect(self._toggle_record)
+        footer.addWidget(self.record_button)
         self.send_button = QPushButton("发送", self.surface)
         self.send_button.setObjectName("quick-chat-send")
         self.send_button.clicked.connect(self._submit)
@@ -141,6 +153,9 @@ class QuickChatBubble(QWidget):
             "}"
             "QPushButton:hover { background: #e2e5ea; }"
             "QPushButton#quick-chat-close { background: transparent; font-size: 16px; }"
+            "QToolButton#quick-chat-record { border: none; border-radius: 6px; padding: 4px; background: transparent; }"
+            "QToolButton#quick-chat-record:hover { background: #e2e5ea; }"
+            "QToolButton#quick-chat-record[recording=\"true\"] { background: #d34f48; }"
             "QPushButton#quick-chat-send { background: #1677e8; color: #ffffff; font-weight: 600; }"
             "QPushButton#quick-chat-send:hover { background: #3d8ef0; }"
             "QPushButton#quick-chat-send:disabled { background: rgba(22, 119, 232, 70); }"
@@ -273,6 +288,43 @@ class QuickChatBubble(QWidget):
         self.input.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
 
     # ---------------------------------------------------------------- 事件
+    def _toggle_record(self, checked: bool) -> None:
+        if checked:
+            self.record_requested.emit()
+        else:
+            self.record_stopped.emit()
+
+    def set_recording(self, recording: bool, hint: str = "") -> None:
+        self.record_button.blockSignals(True)
+        self.record_button.setChecked(bool(recording))
+        self.record_button.blockSignals(False)
+        self.record_button.setProperty("recording", bool(recording))
+        self.record_button.setIcon(
+            tool_icon(
+                self.record_button,
+                "stop" if recording else "mic",
+                15,
+                dark=bool(recording),
+            )
+        )
+        label = "停止录音" if recording else "语音输入"
+        self.record_button.setToolTip(label)
+        self.record_button.setAccessibleName(label)
+        style = self.record_button.style()
+        style.unpolish(self.record_button)
+        style.polish(self.record_button)
+        if hint:
+            self.hint.setText(hint)
+
+    def insert_transcript(self, text: str, *, auto_send: bool = False) -> None:
+        value = str(text or "").strip()
+        if not value:
+            return
+        self.input.setText(value)
+        self.input.setFocus()
+        if auto_send:
+            self._submit()
+
     def _submit(self) -> None:
         text = self.input.text().strip()
         if not text or self._streaming:

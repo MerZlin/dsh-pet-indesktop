@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Callable, Sequence
 
 from ..contracts.content import AnimationSpec
+from .animation_policy import AnimationPolicy
 from .catalog import GraphCatalog
 from .enums import AnimatType, GraphType
 
@@ -50,6 +51,7 @@ class BehaviorDirector:
         *,
         weights: Sequence[float] | None = None,
         weights_provider: Callable[[], Sequence[float]] | None = None,
+        policy_provider: Callable[[], AnimationPolicy] | None = None,
     ):
         self.catalog = catalog
         self.rng = rng or catalog.rng
@@ -57,6 +59,8 @@ class BehaviorDirector:
             normalize_weights(*weights) if weights is not None else DEFAULT_WEIGHTS
         )
         self._weights_provider = weights_provider
+        self._policy = AnimationPolicy()
+        self._policy_provider = policy_provider
 
     @property
     def weights(self) -> Weights:
@@ -71,43 +75,85 @@ class BehaviorDirector:
             return DEFAULT_WEIGHTS
         return normalize_weights(*values)
 
+    @property
+    def policy(self) -> AnimationPolicy:
+        provider = self._policy_provider
+        if provider is None:
+            return self._policy
+        try:
+            policy = provider()
+        except Exception:
+            return AnimationPolicy()
+        return policy if isinstance(policy, AnimationPolicy) else AnimationPolicy()
+
     def set_weights(self, weights: Sequence[float]) -> None:
         self._weights = normalize_weights(*tuple(weights)[:4])
         self._weights_provider = None
 
+    def _auto_pool(self, specs):
+        """按策略过滤自动候选；被禁用/仅手动的动画不允许回退播放。"""
+        return [spec for spec in specs if self.policy.auto_allowed(spec)]
+
     def idle(self) -> Action | None:
-        spec = self.catalog.find_for(GraphType.IDEL, AnimatType.B_LOOP)
-        return Action(KIND_IDLE, spec) if spec is not None else None
+        specs = [
+            spec
+            for spec in self.catalog.specs_for(GraphType.IDEL)
+            if spec.animat is AnimatType.B_LOOP
+        ]
+        pool = self._auto_pool(specs)
+        if not pool:
+            return None
+        return Action(KIND_IDLE, self.rng.choice(pool))
 
     def turn(self) -> Action | None:
-        candidates = [
+        specs = [
             spec
             for spec in self.catalog.specs_for(GraphType.MOVE)
             if spec.locate == "in_place"
         ]
-        if not candidates:
+        pool = self._auto_pool(specs)
+        if not pool:
             return None
-        return Action(KIND_TURN, self.rng.choice(candidates))
+        return Action(KIND_TURN, self.rng.choice(pool))
 
     def act(self) -> Action | None:
-        spec = self.catalog.find_for(GraphType.DEFAULT, AnimatType.SINGLE)
-        return Action(KIND_ACT, spec) if spec is not None else None
+        specs = [
+            spec
+            for spec in self.catalog.specs_for(GraphType.DEFAULT)
+            if spec.animat is AnimatType.SINGLE
+        ]
+        pool = self._auto_pool(specs)
+        if not pool:
+            return None
+        return Action(KIND_ACT, self.rng.choice(pool))
 
     def move(self) -> Action | None:
-        candidates = [
+        specs = [
             spec
             for spec in self.catalog.specs_for(GraphType.MOVE)
             if spec.locate != "in_place"
         ]
-        if not candidates:
+        pool = self._auto_pool(specs)
+        if not pool:
             return None
-        return Action(KIND_MOVE, self.rng.choice(candidates))
+        return Action(KIND_MOVE, self.rng.choice(pool))
 
     def choose(self) -> Action | None:
-        idle, turn, _act, _move = self.weights
+        idle, turn, act, move = self.weights
+        if not self.policy.random_auto:
+            act = 0.0
+        values = [idle, turn, act, move]
+        total = sum(values)
+        if total <= 0.0:
+            # 四项全 0：保留待机，别让桌宠冻住；随机动作仍按开关关掉。
+            values = list(DEFAULT_WEIGHTS)
+            if not self.policy.random_auto:
+                values[2] = 0.0
+            total = sum(values)
+        idle, turn, act, move = (value / total for value in values)
         roll = self.rng.random()
         p_turn = idle + turn
-        p_act = p_turn + _act
+        p_act = p_turn + act
         if roll < idle:
             order = (self.idle, self.turn, self.act, self.move)
         elif roll < p_turn:

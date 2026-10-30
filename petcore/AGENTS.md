@@ -573,9 +573,14 @@
 - **Agent 联动只在 mod**：`ai.agent` 是 `examples/petcore-mods/` 里的可卸载扩展，
   Core 不得出现任何 Agent 名、事件名、阈值或动作池。Core 只提供三条接缝：
   `StoragePort.data_root()`、`PresentationPort.visible()`、`PetHandle.animations()`。
-- **联动只读**：不装桥接插件、不跑 pnpm、不写 `~/.claude` 或任何 Agent 配置；只 tail
-  事件文件。首次见到已存在的文件跳到末尾（不回放历史），监视开始后出现的文件从头读；
+- **联动默认只读**：不自动装桥接插件、不跑 pnpm、不写 `~/.claude` 或任何 Agent 配置；
+  只 tail 事件文件。**例外**：用户在「设置 → 常规 → DSH 连接」显式点击安装/更新时，
+  可把随包 `integrations/dsh-pet-bridge` 与 `dsh-pet-channel` 写入 `~/.dsh`；写入前
+  必须备份 profile 的 `package.json`，失败可见，绝不自动执行。
+  首次见到已存在的文件跳到末尾（不回放历史），监视开始后出现的文件从头读；
   单次 ≤64KB，半行缓冲 ≤8KB，超限即丢弃。事件正文不落盘、不写日志。
+- **DSH 指令**：`pet/command` 记录只接受 `say|play_animation|notify`，正文 ≤200 字、
+  动作名 ≤64 且必须存在于当前角色；1 秒最多一条，隐藏态不播，未知动作静默丢弃。
 - **联动线程边界**：文件 IO 只在 `runtime.py` 的轮询线程（1.5 s）；`LinkEngine` 与所有
   呈现调用只在 GUI 线程（解析结果经 `scheduler.call_later(0, …)` 回队）。`protocol.py` /
   `tailer.py` / `links.py` / `runtime.py` 不许 import PySide6。

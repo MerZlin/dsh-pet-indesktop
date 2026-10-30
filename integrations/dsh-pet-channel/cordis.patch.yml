@@ -1,0 +1,7 @@
+- insert:
+    - id: pet-channel
+      name: dsh-pet-channel
+      config:
+        port: 6791
+        askApproval: false
+        sandboxMode: danger-full-access

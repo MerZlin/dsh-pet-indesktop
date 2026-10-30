@@ -1,0 +1,34 @@
+{
+  "name": "dsh-pet-channel",
+  "version": "0.1.0",
+  "description": "Local channel that lets a desktop pet (petcore) drive a DSH agent: prompt in, event stream out, approvals answered from the pet.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/en.json",
+    "locale/zh.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "manifestVersion": 1,
+    "engines": {
+      "dsh": ">=0.2.0-rc.2"
+    }
+  }
+}

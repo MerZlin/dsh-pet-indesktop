@@ -171,3 +171,4 @@
 | L134 | 2026-10-29 | 仅左键穿透/右键交互 + 可调 Q 弹 + 帧/碰撞/锁屏 | Windows 穿透只放左键（松手 SendInput 转发、左键长按拖动、右键单击反馈/长按菜单）；`click_squash_bounces/strength/ms` 三键；渲染去每帧中间 pixmap；碰撞表单宠停表；锁屏/睡眠停播。 | passthrough、mouse、click-through、right-click、q-squash、elasticity、render、collision-timer、session-lock |
 | L135 | 2026-10-29 | 帧表节拍回到 PreciseTimer | `create_frame_clip` 去掉 Coarse（Windows 15.625ms 颗粒把它量化成 31ms → 2x 只有 32fps）；实测 Precise 1x 23.84fps / 2x 47.62fps。 | animation、pacing、frameseq、timer、coarse、precise、2x-speed |
 | L136 | 2026-10-29 | SMTC 硬超时降级 + peak 判据 | `SmtcReader`（专用线程 + 0.5s 硬超时 + 30s 降级窗 + 自愈）；退化不走 ERROR、改判窗口源；`poll()` 在飞看门狗 + `_collect` 异常兜底；同播放器 paused 用 peak 区分"真在播/残留 Active"。 | music、smtc、timeout、degraded、watchdog、peak、recognition、self-heal |
+| L137 | 2026-10-30 | 用户反馈八组需求 | 动画策略/聊天语义/字体人设/语音ASR/API预设/DSH通道/长期记忆；新增 animation_policy、dsh-pet-channel、memory 等 | animation-policy、semantic-animation、font、persona、asr、opencode、dsh、memory |

@@ -5,7 +5,7 @@ import threading
 from contextlib import ExitStack
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
@@ -30,6 +30,28 @@ from .base import (
     make_slider,
     make_spin,
 )
+
+
+class _DshInstallSignals(QObject):
+    finished = Signal(object)
+
+
+class _DshInstallWorker(QRunnable):
+    def __init__(self, signals: _DshInstallSignals) -> None:
+        super().__init__()
+        self.signals = signals
+
+    def run(self) -> None:
+        from ...platform import dsh_install
+
+        try:
+            result = dsh_install.install()
+        except Exception:  # noqa: BLE001 - 异常不许穿出 QRunnable
+            result = dsh_install.InstallResult(False, "internal")
+        try:
+            self.signals.finished.emit(result)
+        except RuntimeError:
+            pass
 
 
 def _clamped_scale(value: float) -> float:
@@ -132,15 +154,39 @@ class GeneralPage(SettingsPage):
             self._pack_links_row(
                 (("GitHub 下载", CHARACTER_PACKS_URL), ("夸克网盘", QUARK_URL))
             ),
-            "在浏览器打开素材包下载页；下载后用上面的「导入角色目录 / 导入角色 ZIP」安装。",
+            "在浏览器打开素材包下载页（GitHub / 夸克网盘）；下载后用上面的「导入角色目录 / 导入角色 ZIP」安装。"
+            "装好后可在「互动与物理 → 动画 → 动画清单」把整类设为「仅手动」，不参与随机自播。",
         )
         data_card.add_row(
             "高清完整角色素材包",
             self._pack_links_row(
                 (("GitHub 下载", CHARACTER_PACKS_URL), ("夸克网盘", QUARK_URL))
             ),
-            "高清素材体积更大、首次加载更慢；安装方式同上。",
+            "高清素材体积更大、首次加载更慢；安装方式同上，同样可在动画清单里设为仅手动。",
         )
+
+        dsh_card = self.section("DSH 连接")
+        dsh_row = QWidget(self)
+        dsh_layout = QHBoxLayout(dsh_row)
+        dsh_layout.setContentsMargins(0, 0, 0, 0)
+        dsh_layout.setSpacing(8)
+        self.dsh_install_button = make_button("安装/更新 DSH 通道", self)
+        self.dsh_install_button.clicked.connect(self._install_dsh)
+        self.dsh_check_button = make_button("检查连接", self)
+        self.dsh_check_button.clicked.connect(self._check_dsh)
+        dsh_layout.addWidget(self.dsh_install_button)
+        dsh_layout.addWidget(self.dsh_check_button)
+        dsh_layout.addStretch(1)
+        dsh_card.add_row(
+            "通道插件",
+            dsh_row,
+            "把随包 dsh-pet-bridge / dsh-pet-channel 写入 ~/.dsh，并注册到 desktop profile；需要重启 DSH 桌面端。",
+        )
+        self.dsh_status = QLabel("", self)
+        self.dsh_status.setObjectName("settingHint")
+        self.dsh_status.setWordWrap(True)
+        dsh_card.add_widget(self.dsh_status)
+        self._refresh_dsh_status()
 
         app_card = self.section("应用")
         quit_button = make_button("退出桌宠", self)
@@ -163,6 +209,67 @@ class GeneralPage(SettingsPage):
             )
             layout.addWidget(button)
         return row
+
+    def _refresh_dsh_status(self) -> None:
+        from ...platform import dsh_install
+
+        state = dsh_install.status()
+        if not state.get("profile_exists"):
+            text = "未找到 ~/.dsh/profiles/desktop；先安装并启动 DSH 桌面端。"
+        elif state.get("installed"):
+            text = "已安装到 desktop profile；点「检查连接」测试通道是否在线。"
+        else:
+            text = "尚未安装。"
+        self.dsh_status.setText(text)
+
+    def _install_dsh(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "安装 DSH 通道",
+            "会把随包插件写入 ~/.dsh/local-plugins，并修改 desktop profile 的 package.json（先备份）。\n"
+            "需要重启 DSH 桌面端生效。继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.dsh_install_button.setEnabled(False)
+        self.dsh_status.setText("正在安装/更新 DSH 通道…")
+        signals = _DshInstallSignals()
+        signals.finished.connect(self._on_dsh_installed)
+        self._dsh_install_signals = signals
+        QThreadPool.globalInstance().start(_DshInstallWorker(signals))
+
+    def _on_dsh_installed(self, result) -> None:
+        self.dsh_install_button.setEnabled(True)
+        if getattr(result, "ok", False):
+            message = "已安装；请重启 DSH 桌面端。"
+        else:
+            reason = str(getattr(result, "reason", "") or "internal")
+            message = "安装失败：" + {
+                "no_profile": "未找到 ~/.dsh/profiles/desktop",
+                "plugins_missing": "安装包缺少 integrations 插件",
+                "bad_profile": "profile/package.json 无法解析",
+                "backup_failed": "无法备份 package.json",
+                "write_failed": "无法写入 profile/package.json",
+                "link_failed": "创建 node_modules 联接失败（已回滚 package.json）",
+            }.get(reason, reason)
+        QMessageBox.information(self, "DSH 通道", message)
+        self._refresh_dsh_status()
+
+    def _check_dsh(self) -> None:
+        client = getattr(self.host, "dsh", None)
+        if client is None:
+            self.dsh_status.setText("DSH 客户端未初始化。")
+            return
+        try:
+            info = client.ping()
+            self.dsh_status.setText(
+                f"通道在线：{info.get('plugin') or 'dsh-pet-channel'} · v{info.get('version') or '?'}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            reason = str(getattr(exc, "reason", "") or "offline")
+            self.dsh_status.setText(f"通道离线（{reason}）；先启动 DSH 或安装/重启插件。")
 
     def _select_character(self, character_id: str) -> None:
         if self.character_combo.count() == 0:
@@ -399,6 +506,11 @@ class GeneralPage(SettingsPage):
             "网盘",
             "github",
             "ZIP",
+            "DSH",
+            "dsh",
+            "通道",
+            "bridge",
+            "pet-channel",
             "退出",
             "general",
             "character",

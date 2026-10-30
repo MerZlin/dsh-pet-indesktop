@@ -353,6 +353,38 @@ def test_animation_pool_falls_back_to_any_act() -> None:
     assert bridge.animations_played == ["伸个懒腰"]
 
 
+def test_thinking_prefers_thinking_animation() -> None:
+    engine, bridge, _scheduler, _clock = _engine(animations=("思考", "写代码"))
+    engine.handle(_event("thinking"))
+    assert bridge.animations_played == ["思考"]
+
+
+def test_attention_prefers_attention_animation() -> None:
+    engine, bridge, _scheduler, _clock = _engine(animations=("招手", "写代码"))
+    engine.handle(_event("attention"))
+    assert bridge.animations_played == ["招手"]
+
+
+def test_done_plays_success_animation() -> None:
+    engine, bridge, scheduler, clock = _engine(animations=("开心", "写代码"))
+    engine.handle(_event("working"))
+    clock.advance(9.0)
+    engine.handle(_event("idle"))
+    clock.advance(0.8)
+    scheduler.run_due()
+    assert bridge.animations_played == ["写代码", "开心"]
+
+
+def test_error_plays_error_animation_once() -> None:
+    engine, bridge, scheduler, clock = _engine(animations=("难过", "写代码"))
+    engine.handle(_event("working"))
+    clock.advance(9.0)
+    engine.handle(_event("error"))
+    clock.advance(0.8)
+    scheduler.run_due()
+    assert bridge.animations_played == ["写代码", "难过"]
+
+
 # ------------------------------------- 「还在播就别重发」与旋转地板
 
 
@@ -1180,3 +1212,53 @@ def test_closed_runtime_cannot_restart(tmp_path):
         assert runtime._thread is None or not runtime._thread.is_alive()
     finally:
         runtime.stop()
+
+
+# ------------------------------------------------------------ DSH 指令
+
+
+def test_parse_command_accepts_pet_control_records() -> None:
+    command = protocol.parse_command(
+        json.dumps(
+            {
+                "event": "pet/command",
+                "cmd": "play_animation",
+                "name": "写代码",
+                "agent": "dsh",
+                "inst": "boot-1",
+            },
+            ensure_ascii=False,
+        )
+    )
+    assert command is not None
+    assert command.cmd == "play_animation"
+    assert command.name == "写代码"
+    assert command.writer == "boot-1"
+    assert protocol.parse_command(
+        json.dumps({"event": "turn/start", "state": "thinking"})
+    ) is None
+    assert protocol.parse_command(
+        json.dumps({"event": "pet/command", "cmd": "play_animation"})
+    ) is None
+
+
+def test_runtime_applies_pet_commands(tmp_path: Path) -> None:
+    runtime, _config, presentation, _audio, _scheduler = _runtime(tmp_path)
+    runtime._apply_command(protocol.PetCommand(cmd="play_animation", name="写代码"))
+    assert presentation.animations == ["写代码"]
+    runtime._last_command_at = 0.0
+    runtime._apply_command(
+        protocol.PetCommand(cmd="say", text="你好", duration_ms=1200)
+    )
+    assert presentation.said[-1] == ("你好", True)
+
+
+def test_runtime_ignores_unknown_or_disabled_commands(tmp_path: Path) -> None:
+    runtime, _config, presentation, _audio, _scheduler = _runtime(tmp_path)
+    runtime._apply_command(protocol.PetCommand(cmd="play_animation", name="不存在"))
+    assert presentation.animations == []
+    runtime, _config, presentation, _audio, _scheduler = _runtime(
+        tmp_path, {"ai_agent_command_enabled": False}
+    )
+    runtime._apply_command(protocol.PetCommand(cmd="play_animation", name="写代码"))
+    assert presentation.animations == []

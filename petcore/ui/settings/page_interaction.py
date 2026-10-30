@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QSpinBox,
+    QTreeWidget,
+    QTreeWidgetItem,
     QWidget,
 )
 
@@ -20,6 +22,7 @@ from ... import paths
 from ...media import talk_images
 from ...media.click_sound import choose_click_sound, resolve_click_sound_candidates
 from ...media.sound import SoundPlayer
+from ...engine.animation_policy import CATEGORY_ORDER, category_of
 from ...engine.head_pat import (
     HEAD_PAT_ALL_MODE,
     HEAD_PAT_CUSTOM_MODE,
@@ -406,6 +409,54 @@ class InteractionPage(SettingsPage):
                 weight_card.add_row(label, spin, hint)
                 self._weights[key] = spin
 
+            random_card = self.section("随机动作")
+            self.random_auto = make_checkbox(self)
+            self.random_auto.setChecked(
+                bool(self.config().get("anim_random_auto", True))
+            )
+            self.random_auto.toggled.connect(self._on_changed)
+            self.random_auto.toggled.connect(self._sync_random_weight)
+            random_card.add_row(
+                "待机时自动播放随机动作",
+                self.random_auto,
+                "关闭后动作池不再自播；右键「播放动画 → 随机动作」手动点播不受影响。",
+            )
+
+            list_card = self.section("动画清单")
+            self.anim_tree = QTreeWidget(self)
+            self.anim_tree.setColumnCount(3)
+            self.anim_tree.setHeaderLabels(["动画", "自动", "允许"])
+            self.anim_tree.setRootIsDecorated(True)
+            self.anim_tree.setUniformRowHeights(True)
+            self.anim_tree.setMinimumHeight(280)
+            self.anim_tree.itemChanged.connect(self._on_animation_tree_changed)
+            list_card.add_row(
+                "按分类开关",
+                self.anim_tree,
+                "「自动」控制是否参与自动播放；「允许」控制右键菜单/外部动画调用。"
+                "自动关+允许开 = 仅手动；允许关 = 完全禁用。",
+                expand=True,
+            )
+            anim_buttons = [
+                make_button("全部允许", self),
+                make_button("全部仅手动", self),
+                make_button("全部禁用", self),
+                make_button("刷新当前角色", self),
+            ]
+            anim_buttons[0].clicked.connect(
+                lambda: self._set_all_animation_checks(True, True)
+            )
+            anim_buttons[1].clicked.connect(
+                lambda: self._set_all_animation_checks(False, True)
+            )
+            anim_buttons[2].clicked.connect(
+                lambda: self._set_all_animation_checks(False, False)
+            )
+            anim_buttons[3].clicked.connect(self._refresh_animation_tree)
+            list_card.add_buttons(anim_buttons)
+            self._refresh_animation_tree()
+            self._sync_random_weight()
+
         with self.tab("easter", "彩蛋与配图"):
             egg_card = self.section("彩蛋")
             self.easter_enabled = make_checkbox(self)
@@ -576,6 +627,13 @@ class InteractionPage(SettingsPage):
         self._embed_owner(embedded, "tool.quiet-mode", "quiet", "免打扰")
         # 差异写入的基准：控件建好后才拿得到当前值。
         self._last_values = self._current()
+        # 分类名单在控件建好后会展开成具体动画名；基准同步刷新，避免一打开就 dirty。
+        self._initial = self._snapshot()
+        self._anim_policy_dirty = False
+        self._initial_policy_raw = (
+            list(self.config().get("anim_auto_off") or ()),
+            list(self.config().get("anim_blocked") or ()),
+        )
 
     def _embed_owner(self, embedded: dict, owner: str, key: str, label: str) -> None:
         spec = embedded.pop(owner, None)
@@ -907,6 +965,166 @@ class InteractionPage(SettingsPage):
     def _clear_head_pat(self) -> None:
         self._set_all_head_pat_checks(False)
 
+    # ------------------------------------------------------------ 动画策略
+    def _anim_catalog(self):
+        return getattr(getattr(self.host, "window", None), "catalog", None)
+
+    def _anim_name_buckets(self) -> dict[str, list[str]]:
+        catalog = self._anim_catalog()
+        specs = list(getattr(catalog, "animations", ()) or ())
+        buckets: dict[str, list[str]] = {}
+        seen: set[tuple[str, str]] = set()
+        for spec in specs:
+            category = category_of(spec)
+            key = (category, spec.name)
+            if key in seen:
+                continue
+            seen.add(key)
+            buckets.setdefault(category, []).append(spec.name)
+        for names in buckets.values():
+            names.sort()
+        return buckets
+
+    def _expand_policy_tokens(self, tokens) -> list[str]:
+        buckets = self._anim_name_buckets()
+        result: list[str] = []
+        for raw in tokens or ():
+            token = str(raw or "").strip()
+            if not token:
+                continue
+            names = buckets.get(token)
+            for name in names if names else [token]:
+                if name not in result:
+                    result.append(name)
+        return result
+
+    def _snapshot_policy_lists(self) -> tuple[list[str], list[str]]:
+        config = self.config()
+        return (
+            self._expand_policy_tokens(config.get("anim_auto_off") or ()),
+            self._expand_policy_tokens(config.get("anim_blocked") or ()),
+        )
+
+    def _tree_animation_values(self) -> tuple[list[str], list[str]]:
+        tree = getattr(self, "anim_tree", None)
+        if tree is None:
+            return self._snapshot_policy_lists()
+        auto_off: list[str] = []
+        blocked: list[str] = []
+        for index in range(tree.topLevelItemCount()):
+            parent = tree.topLevelItem(index)
+            for child_index in range(parent.childCount()):
+                child = parent.child(child_index)
+                name = child.text(0)
+                if child.checkState(1) != Qt.CheckState.Checked:
+                    auto_off.append(name)
+                if child.checkState(2) != Qt.CheckState.Checked:
+                    blocked.append(name)
+        return auto_off, blocked
+
+    @staticmethod
+    def _sync_parent_check(parent: QTreeWidgetItem, column: int) -> None:
+        states = [
+            parent.child(index).checkState(column)
+            for index in range(parent.childCount())
+        ]
+        if states and all(state == Qt.CheckState.Checked for state in states):
+            state = Qt.CheckState.Checked
+        elif states and all(state == Qt.CheckState.Unchecked for state in states):
+            state = Qt.CheckState.Unchecked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+        parent.setCheckState(column, state)
+
+    def _refresh_animation_tree(self) -> None:
+        tree = getattr(self, "anim_tree", None)
+        if tree is None:
+            return
+        buckets = self._anim_name_buckets()
+        auto_off, blocked = self._snapshot_policy_lists()
+        auto_off_set = set(auto_off)
+        blocked_set = set(blocked)
+        self._anim_tree_loading = True
+        tree.blockSignals(True)
+        tree.clear()
+        for category, label in CATEGORY_ORDER:
+            names = buckets.get(category) or []
+            if not names:
+                continue
+            parent = QTreeWidgetItem(tree, [label, "", ""])
+            parent.setFlags(parent.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            for name in names:
+                child = QTreeWidgetItem(parent, [name, "", ""])
+                child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                child.setCheckState(
+                    1,
+                    Qt.CheckState.Unchecked
+                    if name in auto_off_set
+                    else Qt.CheckState.Checked,
+                )
+                child.setCheckState(
+                    2,
+                    Qt.CheckState.Unchecked
+                    if name in blocked_set
+                    else Qt.CheckState.Checked,
+                )
+            for column in (1, 2):
+                self._sync_parent_check(parent, column)
+        tree.blockSignals(False)
+        self._anim_tree_loading = False
+
+    def _on_animation_tree_changed(self, item, column: int) -> None:
+        if getattr(self, "_anim_tree_loading", False) or column not in (1, 2):
+            return
+        tree = getattr(self, "anim_tree", None)
+        if tree is None:
+            return
+        self._anim_tree_loading = True
+        tree.blockSignals(True)
+        if item.childCount():
+            state = item.checkState(column)
+            for index in range(item.childCount()):
+                item.child(index).setCheckState(column, state)
+        else:
+            parent = item.parent()
+            if parent is not None:
+                self._sync_parent_check(parent, column)
+        tree.blockSignals(False)
+        self._anim_tree_loading = False
+        self._anim_policy_dirty = True
+        self._on_changed()
+
+    def _set_all_animation_checks(self, auto: bool, allowed: bool) -> None:
+        tree = getattr(self, "anim_tree", None)
+        if tree is None:
+            return
+        auto_state = Qt.CheckState.Checked if auto else Qt.CheckState.Unchecked
+        allowed_state = Qt.CheckState.Checked if allowed else Qt.CheckState.Unchecked
+        self._anim_tree_loading = True
+        tree.blockSignals(True)
+        for index in range(tree.topLevelItemCount()):
+            parent = tree.topLevelItem(index)
+            for child_index in range(parent.childCount()):
+                child = parent.child(child_index)
+                child.setCheckState(1, auto_state)
+                child.setCheckState(2, allowed_state)
+            self._sync_parent_check(parent, 1)
+            self._sync_parent_check(parent, 2)
+        tree.blockSignals(False)
+        self._anim_tree_loading = False
+        self._anim_policy_dirty = True
+        self._on_changed()
+
+    def _sync_random_weight(self, *_args) -> None:
+        spin = getattr(self, "_weights", {}).get("anim_weight_act")
+        if spin is None:
+            return
+        enabled = bool(self.random_auto.isChecked())
+        spin.setEnabled(enabled)
+        spin.setToolTip(
+            "" if enabled else "随机动作总开关已关闭；勾选后才按此概率自播。"
+        )
+
     def _snapshot(self) -> dict:
         config = self.config()
         values = {key: bool(config.get(key)) for key in self._CHECK_KEYS}
@@ -930,6 +1148,10 @@ class InteractionPage(SettingsPage):
             "anim_weight_move",
         ):
             values[key] = int(float(config.get(key) or 0))
+        auto_off, blocked = self._snapshot_policy_lists()
+        values["anim_random_auto"] = bool(config.get("anim_random_auto", True))
+        values["anim_auto_off"] = auto_off
+        values["anim_blocked"] = blocked
         values["click_sound_pack"] = self._read_sound_pack()
         values["balance_tier_labels_mode"] = str(
             config.get("balance_tier_labels_mode") or "default"
@@ -971,6 +1193,14 @@ class InteractionPage(SettingsPage):
         values["head_pat_animation_names"] = self._head_pat_checked_names()
         for key, spin in self._weights.items():
             values[key] = int(spin.value())
+        values["anim_random_auto"] = bool(self.random_auto.isChecked())
+        if getattr(self, "_anim_policy_dirty", False):
+            auto_off, blocked = self._tree_animation_values()
+        else:
+            auto_off = list(self._initial.get("anim_auto_off") or [])
+            blocked = list(self._initial.get("anim_blocked") or [])
+        values["anim_auto_off"] = auto_off
+        values["anim_blocked"] = blocked
         values["click_sound_pack"] = dict(self._sound_pack)
         values["balance_tier_labels_mode"] = str(
             self.balance_tier_mode.currentData() or "default"
@@ -1013,6 +1243,11 @@ class InteractionPage(SettingsPage):
     def confirm_save(self) -> None:
         self._on_changed()
         self._initial = self._snapshot()
+        self._anim_policy_dirty = False
+        self._initial_policy_raw = (
+            list(self.config().get("anim_auto_off") or ()),
+            list(self.config().get("anim_blocked") or ()),
+        )
         self._last_values = self._current()
         self._embedded_confirm_save()
 
@@ -1020,7 +1255,7 @@ class InteractionPage(SettingsPage):
         config = self.config()
         for key in self._CHECK_KEYS:
             config.set(key, self._initial[key])
-        self._last_values = dict(self._initial)
+        self._last_values = self._current()
         config.set("throw_strength", self._initial["throw_strength"])
         config.set("playback_speed", self._initial["playback_speed"])
         config.set("animation_gap_seconds", self._initial["animation_gap_seconds"])
@@ -1029,6 +1264,15 @@ class InteractionPage(SettingsPage):
         config.set("head_pat_animation_names", list(self._initial["head_pat_animation_names"]))
         for key in self._weights:
             config.set(key, self._initial[key])
+        config.set("anim_random_auto", self._initial["anim_random_auto"])
+        config.set("anim_auto_off", list(self._initial_policy_raw[0]))
+        config.set("anim_blocked", list(self._initial_policy_raw[1]))
+        self.random_auto.blockSignals(True)
+        self.random_auto.setChecked(bool(self._initial["anim_random_auto"]))
+        self.random_auto.blockSignals(False)
+        self._refresh_animation_tree()
+        self._anim_policy_dirty = False
+        self._sync_random_weight()
         config.set("click_sound_pack", dict(self._initial["click_sound_pack"]))
         config.set(
             "balance_tier_labels_mode", self._initial["balance_tier_labels_mode"]
@@ -1192,6 +1436,10 @@ class InteractionPage(SettingsPage):
             "待机",
             "转向",
             "随机动作",
+            "随机动作开关",
+            "仅手动",
+            "禁用动画",
+            "动画清单",
             "漫游",
             "不自动移动",
             "interaction",

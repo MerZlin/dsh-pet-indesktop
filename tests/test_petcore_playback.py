@@ -442,3 +442,66 @@ def test_probe_drag_started_reports_the_previous_session(app, tmp_path: Path) ->
         assert window._edge_probe.on_drag_started() is False
     finally:
         window.shutdown()
+
+
+# ---------------------------------------------------------------- 动画策略
+
+
+def test_random_action_switch_stops_auto_but_manual_still_plays(
+    app, tmp_path: Path
+) -> None:
+    window = _window(
+        app,
+        tmp_path,
+        anim_random_auto=False,
+        anim_weight_idle=100,
+        anim_weight_turn=0,
+        anim_weight_act=100,
+        anim_weight_move=0,
+    )
+    try:
+        for _ in range(10):
+            window._roll_next()
+            assert window._action_kind != "act"
+        assert window.play_animation("wave") is True
+        assert window._action_kind == "act"
+    finally:
+        window.shutdown()
+
+
+def test_manual_only_animation_never_rolls_but_still_plays(
+    app, tmp_path: Path
+) -> None:
+    window = _window(
+        app,
+        tmp_path,
+        anim_weight_idle=0,
+        anim_weight_turn=0,
+        anim_weight_act=100,
+        anim_weight_move=0,
+        anim_auto_off=["wave"],
+    )
+    try:
+        for _ in range(20):
+            window._roll_next()
+            assert window.state.current is None or window.state.current.name != "wave"
+        assert window.play_animation("wave") is True
+    finally:
+        window.shutdown()
+
+
+def test_blocked_animation_cannot_be_played_manually(app, tmp_path: Path) -> None:
+    window = _window(app, tmp_path, anim_blocked=["wave"])
+    try:
+        assert window.play_animation("wave") is False
+        assert window._action_kind != "act"
+    finally:
+        window.shutdown()
+
+
+def test_blocked_event_animation_is_refused(app, tmp_path: Path) -> None:
+    window = _window(app, tmp_path, anim_blocked=["余额-钱袋满溢"])
+    try:
+        assert window.play_event("balance") is False
+    finally:
+        window.shutdown()

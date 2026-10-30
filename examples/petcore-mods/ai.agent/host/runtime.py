@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .links import LinkEngine, LinkPrefs
-from .protocol import parse_line
+from .protocol import parse_command, parse_line
 from .tailer import ByteTailer, GlobTailer, agent_key_for
 
 #: 轮询间隔（协议 §1 的 1.5s 节拍）。
@@ -84,6 +84,7 @@ class AgentLinkRuntime:
         self._sources: list[_Source] = []
         self._signature: object = None
         self._recent: list[dict] = []
+        self._last_command_at = 0.0
         #: 本 runtime 是否真的请求过 loop=True 的动画；没有就绝不许 release_loop()，
         #: 否则会误清唱歌/报时等其它持有者的循环。
         self._requested_loop = False
@@ -180,6 +181,14 @@ class AgentLinkRuntime:
         batch: list[tuple[object, str]] = []
         for source in sources:
             for path, line in source.read():
+                command = parse_command(line)
+                if command is not None:
+                    self._schedule(
+                        0,
+                        lambda cmd=command: self._apply_command(cmd),
+                        generation=generation,
+                    )
+                    continue
                 event = parse_line(line)
                 if event is None:
                     continue
@@ -208,6 +217,48 @@ class AgentLinkRuntime:
             except Exception:  # noqa: BLE001 - 单条事件失败不影响其余
                 self._log("agent link handle failed", exc_info=True)
             self._remember(event)
+
+    def _apply_command(self, command) -> None:
+        if self._closed or self._stop.is_set() or not self._enabled():
+            return
+        if not bool(self._config_value("ai_agent_command_enabled", True)):
+            return
+        if not self.visible():
+            return
+        now = time.monotonic()
+        if now - self._last_command_at < 1.0:
+            self._log("pet command throttled", level="debug")
+            return
+        self._last_command_at = now
+        if command.cmd == "play_animation":
+            names = self.animations()
+            if command.name not in names:
+                self._log(
+                    f"pet command ignored: unknown animation {command.name!r}",
+                    level="debug",
+                )
+                return
+            self.play_animation(command.name)
+            self._log(f"pet command: animation {command.name}", level="debug")
+            return
+        presentation = getattr(self.ports, "presentation", None)
+        speaker = getattr(presentation, "say", None)
+        if not callable(speaker):
+            return
+        try:
+            speaker(
+                command.text,
+                duration_ms=command.duration_ms or 5000,
+                force=True,
+            )
+        except TypeError:
+            try:
+                speaker(command.text)
+            except Exception:  # noqa: BLE001
+                return
+        except Exception:  # noqa: BLE001
+            return
+        self._log(f"pet command: {command.cmd}", level="debug")
 
     def _remember(self, event) -> None:
         self._recent.append(

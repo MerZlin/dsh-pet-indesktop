@@ -25,7 +25,7 @@ DSH 通道只有**一个读方**：`DshMonitor`（一个 `DirGlobTailer` + 一�
 19387 与 `$DSH_PORT`）。
 ```
 
-- **通信方式**：事件通道是纯本地文件追加写 + 增量读，全程不访问外网（联动唯一的网络形态是本机回环端口探活，用于判定 DSH 是否在线）。2026-10 减法后不再有交互回写（mux 订阅与 `/api/respond` 均已删除）：审批/提问只弹纯提示气泡，处理回 DSH 界面完成。
+- **通信方式**：事件通道是纯本地文件追加写 + 增量读，全程不访问外网（联动唯一的网络形态是本机回环端口探活，用于判定 DSH 是否在线）。2026-10 减法删除了旧的 mux 订阅与 `/api/respond`；2026-10-30 起新增可选的 `dsh-pet-channel`（本地回环 HTTP+SSE，用户显式安装才启用）承担 DSH 对话双向通道，事件 JSONL 仍保持只读。
 - **读方保证**：byte-offset tail 不回放历史事件；文件不存在时静默空转；半行缓冲不丢事件；单次读取有界（64KB）。
 - **低功耗**：联动默认全关；桌宠隐藏时监视器全线 pause，显示时 resume。
 
@@ -46,6 +46,19 @@ DSH 通道只有**一个读方**：`DshMonitor`（一个 `DirGlobTailer` + 一�
 | Windows | `%APPDATA%\dsh-pet-standalone[-变体]\agent-events\` |
 | macOS | `~/Library/Application Support/dsh-pet-standalone[-变体]/agent-events/` |
 | Linux | `~/.config/dsh-pet-standalone[-变体]/agent-events/` |
+
+### 2.1b 桌宠控制命令（可选，`pet/command`）
+
+`dsh-pet-channel` 的 `pet_control` 工具或 `/pet say|play|notify` 会往
+`dsh-pet-bridge/dsh-petcmd-<pid>.jsonl` 追加：
+
+```json
+{"event":"pet/command","cmd":"play_animation","name":"写代码","agent":"dsh","inst":"..."}
+```
+
+`cmd` 只允许 `say|play_animation|notify`；`text` ≤200 字、`name` ≤64 字且必须在
+当前角色动画里存在；消费端 1 秒最多一条，隐藏态不播，未知动作静默丢弃。
+命令文件同样以 `dsh*.jsonl` 命名，由 `ai.agent` 的 GlobTailer 读取。
 
 ### 2.2 JSON 行格式
 
@@ -186,10 +199,10 @@ printf '{"ts": %s, "state": "idle"}\n' "$(date +%s)" >> ~/.gemini/pet-events.jso
 | 事件文件 tail | `ByteOffsetTailer` / `DirGlobTailer` | `examples/petcore-mods/ai.agent/host/tailer.py`（同一套偏移/半行/有界口径） |
 | 六态映射 | `pet/agent_event_normalizer.py` + `dsh_state.py` | `ai.agent/host/protocol.py`（表外事件一律忽略） |
 | 动画/气泡/音效 | `AgentLinkManager` | `ai.agent/host/links.py`（`LinkEngine`） |
-| DSH 桥接插件安装 | 内置 `integrations/dsh-pet-bridge` + pnpm 安装 | **未做**（只读已有的 `dsh-pet-bridge/dsh*.jsonl`） |
+| DSH 桥接插件安装 | 内置 `integrations/dsh-pet-bridge` + pnpm 安装 | 设置页「常规 → DSH 连接」显式安装（`dsh-pet-bridge` + `dsh-pet-channel`），先备份 profile |
 | Claude hooks 注入 | 支持 | **未做**（走统一 `agent-events/claude.jsonl`） |
 | Cursor / OpenCode 直读 | 支持 | **未做**（走统一 JSONL） |
-| 审批/提问常驻卡片、live 成本 | 支持 | **未做** |
+| 审批/提问常驻卡片、live 成本 | 支持 | DSH 页可答审批；live 成本 **未做** |
 
 行为口径（节流、完成确认、动作池、隐私红线）见
 [`PETCORE-SPEC.md`](PETCORE-SPEC.md) §28。写方接入方式不变：仍然只是往

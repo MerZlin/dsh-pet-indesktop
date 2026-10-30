@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QRegularExpression, QTimer
-from PySide6.QtGui import QColor, QRegularExpressionValidator
+from PySide6.QtCore import QRegularExpression, QTimer, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFontComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -27,7 +28,9 @@ from PySide6.QtWidgets import (
 )
 
 from petcore.ui.chat.themes import theme_names
-from petcore.ui.settings.base import SettingsPage, make_checkbox
+from petcore.ui.settings.base import SettingsPage, make_button, make_checkbox
+
+from .persona_presets import CUSTOM_PERSONA, DEFAULT_PERSONA, load_presets
 
 _CUSTOM_BACKGROUND = "__custom__"
 _HEX = QRegularExpression(r"^#[0-9a-fA-F]{6}$")
@@ -40,17 +43,27 @@ class AiChatPage(SettingsPage):
         "ai_service",
         "ai_model",
         "ai_system_prompt",
+        "ai_persona",
         "ai_vision_enabled",
         "ai_temperature",
         "ai_look_screen_auto_open",
         "ai_thinking",
         "ai_reasoning_effort",
+        "ai_animation_enabled",
+        "ai_animation_thinking",
+        "ai_animation_min_seconds",
+        "ai_voice_reply",
+        "ai_memory_enabled",
+        "ai_memory_inject",
+        "ai_memory_max_entries",
         "ai_web_search",
         "ai_web_engine",
         "ai_web_results",
         "ai_web_fetch",
         "chat_background",
         "chat_accent",
+        "chat_font_size",
+        "chat_font_family",
         "chat_follow_pet",
         "chat_always_on_top",
         "ai_proactive_enabled",
@@ -104,11 +117,36 @@ class AiChatPage(SettingsPage):
         card.add_row("温度", self.temperature_spin, "越高越发散，0.7 适合日常聊天。")
 
         card2 = self.section("人格与视觉", level=3)
+        self.persona_combo = QComboBox(self)
+        for preset in load_presets():
+            self.persona_combo.addItem(preset.name, preset.id)
+        self.persona_combo.addItem("自定义提示词", CUSTOM_PERSONA)
+        persona = str(self._initial.get("ai_persona") or "").strip()
+        if not persona:
+            persona = (
+                CUSTOM_PERSONA
+                if str(self._initial.get("ai_system_prompt") or "").strip()
+                else DEFAULT_PERSONA
+            )
+        index = self.persona_combo.findData(persona)
+        self.persona_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.persona_combo.currentIndexChanged.connect(self._on_persona_changed)
+        card2.add_row(
+            "人设",
+            self.persona_combo,
+            "预设只替换系统提示词；选「自定义提示词」后用下面的文本框。",
+        )
+        self.persona_desc = QLabel("", self)
+        self.persona_desc.setObjectName("settingHint")
+        self.persona_desc.setWordWrap(True)
+        card2.add_row("人设说明", self.persona_desc, "")
+
         self.prompt_edit = QPlainTextEdit(self)
         self.prompt_edit.setPlaceholderText("留空使用默认人格")
         self.prompt_edit.setPlainText(str(self._initial.get("ai_system_prompt") or ""))
         self.prompt_edit.textChanged.connect(self._on_changed)
         card2.add_row("系统提示词", self.prompt_edit, "每次对话开头发给模型；支持 {name} 占位。")
+        self._sync_persona_rows()
 
         self.vision_check = make_checkbox(self)
         self.vision_check.setChecked(bool(self._initial.get("ai_vision_enabled", True)))
@@ -129,6 +167,104 @@ class AiChatPage(SettingsPage):
             self.auto_open_check,
             "默认只把结果同步进对话记录并用气泡回答；勾选后才主动唤出对话窗口。",
         )
+
+        card_anim = self.section("对话动作", level=3)
+        self.anim_check = make_checkbox(self)
+        self.anim_check.setChecked(
+            bool(self._initial.get("ai_animation_enabled", True))
+        )
+        self.anim_check.toggled.connect(self._on_changed)
+        card_anim.add_row(
+            "回复时播放动作",
+            self.anim_check,
+            "按回复语义从当前角色的随机动作池挑一个动作；关闭后对话完全不自动切动作。",
+        )
+
+        self.anim_thinking_check = make_checkbox(self)
+        self.anim_thinking_check.setChecked(
+            bool(self._initial.get("ai_animation_thinking", True))
+        )
+        self.anim_thinking_check.toggled.connect(self._on_changed)
+        card_anim.add_row(
+            "生成时播放思考动作",
+            self.anim_thinking_check,
+            "收到第一个字时先播一个「思考」类动作；没有这类素材时不播。",
+        )
+
+        self.anim_min_spin = QDoubleSpinBox(self)
+        self.anim_min_spin.setRange(0.5, 30.0)
+        self.anim_min_spin.setSingleStep(0.5)
+        self.anim_min_spin.setDecimals(1)
+        self.anim_min_spin.setSuffix(" 秒")
+        try:
+            self.anim_min_spin.setValue(
+                float(self._initial.get("ai_animation_min_seconds") or 2.0)
+            )
+        except (TypeError, ValueError):
+            self.anim_min_spin.setValue(2.0)
+        self.anim_min_spin.valueChanged.connect(self._on_changed)
+        card_anim.add_row(
+            "最短切换间隔",
+            self.anim_min_spin,
+            "两次对话动作之间至少间隔多久；回复完成时的语义动作可以打断思考动作。",
+        )
+
+        self.voice_reply_check = make_checkbox(self)
+        self.voice_reply_check.setChecked(
+            bool(self._initial.get("ai_voice_reply", False))
+        )
+        self.voice_reply_check.toggled.connect(self._on_changed)
+        card_anim.add_row(
+            "朗读回复",
+            self.voice_reply_check,
+            "回复完成后用「语音 → 主后端」朗读（去 Markdown、最多 500 字）。",
+        )
+
+        card_mem = self.section("长期记忆", level=3)
+        self.memory_check = make_checkbox(self)
+        self.memory_check.setChecked(
+            bool(self._initial.get("ai_memory_enabled", True))
+        )
+        self.memory_check.toggled.connect(self._on_changed)
+        card_mem.add_row(
+            "启用长期记忆",
+            self.memory_check,
+            "用户说「记住…」时写入本机；每轮按问题检索 top-K 注入 system。",
+        )
+        self.memory_inject = QSpinBox(self)
+        self.memory_inject.setRange(1, 8)
+        self.memory_inject.setSuffix(" 条")
+        self.memory_inject.setValue(int(self._initial.get("ai_memory_inject") or 3))
+        self.memory_inject.valueChanged.connect(self._on_changed)
+        card_mem.add_row(
+            "每轮注入",
+            self.memory_inject,
+            "最多注入几条相关记忆；总预算 800 字。",
+        )
+        self.memory_max = QSpinBox(self)
+        self.memory_max.setRange(50, 2000)
+        self.memory_max.setSuffix(" 条")
+        self.memory_max.setValue(
+            int(self._initial.get("ai_memory_max_entries") or 500)
+        )
+        self.memory_max.valueChanged.connect(self._on_changed)
+        card_mem.add_row(
+            "每域上限",
+            self.memory_max,
+            "超出后按创建时间淘汰最旧条目；全局与当前角色各一份。",
+        )
+        memory_buttons = [
+            make_button("打开记忆目录", self),
+            make_button("清空当前角色记忆", self),
+        ]
+        memory_buttons[0].clicked.connect(self._open_memory_dir)
+        memory_buttons[1].clicked.connect(self._clear_memory)
+        card_mem.add_buttons(memory_buttons)
+        self.memory_status = QLabel("", self)
+        self.memory_status.setObjectName("settingHint")
+        self.memory_status.setWordWrap(True)
+        card_mem.add_widget(self.memory_status)
+        self._refresh_memory_status()
 
         card_proactive = self.section("主动识屏", level=3)
         self.proactive_check = make_checkbox(self)
@@ -426,6 +562,42 @@ class AiChatPage(SettingsPage):
             "发送键、选中态与强调线；留空使用角色默认色，格式 #RRGGBB。",
         )
 
+        self.default_font_check = make_checkbox(self)
+        self.default_font_check.setChecked(
+            not bool(str(self._initial.get("chat_font_family") or "").strip())
+        )
+        self.default_font_check.toggled.connect(self._sync_font_rows)
+        self.default_font_check.toggled.connect(self._on_changed)
+        self.font_combo = QFontComboBox(self)
+        family = str(self._initial.get("chat_font_family") or "").strip()
+        if family:
+            self.font_combo.setCurrentFont(QFont(family))
+        card3.add_row(
+            "对话窗字体",
+            self.font_combo,
+            "只改对话窗；设置页、菜单、气泡仍跟随全局界面字号。",
+        )
+        card3.add_row(
+            "使用系统字体",
+            self.default_font_check,
+            "勾选后忽略上面的字体选择，跟随系统 UI 字体。",
+        )
+
+        self.chat_font_size = QSpinBox(self)
+        self.chat_font_size.setRange(0, 24)
+        self.chat_font_size.setSuffix(" px")
+        self.chat_font_size.setSpecialValueText("跟随界面字号")
+        self.chat_font_size.setValue(
+            int(self._initial.get("chat_font_size") or 0)
+        )
+        self.chat_font_size.valueChanged.connect(self._on_changed)
+        card3.add_row(
+            "对话窗字号",
+            self.chat_font_size,
+            "0 = 跟随「文字与快捷键 → 界面字号」；10–24 可单独放大/缩小对话窗。",
+        )
+        self._sync_font_rows()
+
         self.follow_check = make_checkbox(self)
         self.follow_check.setChecked(bool(self._initial.get("chat_follow_pet", False)))
         self.follow_check.toggled.connect(self._on_changed)
@@ -668,6 +840,7 @@ class AiChatPage(SettingsPage):
         config.set("ai_service", str(self.service_combo.currentData() or ""))
         config.set("ai_model", self.model_edit.text().strip())
         config.set("ai_system_prompt", self.prompt_edit.toPlainText().strip())
+        config.set("ai_persona", str(self.persona_combo.currentData() or ""))
         config.set("ai_vision_enabled", bool(self.vision_check.isChecked()))
         config.set("ai_temperature", float(self.temperature_spin.value()))
         config.set("ai_look_screen_auto_open", bool(self.auto_open_check.isChecked()))
@@ -675,12 +848,28 @@ class AiChatPage(SettingsPage):
         config.set(
             "ai_reasoning_effort", str(self.effort_combo.currentData() or "high")
         )
+        config.set("ai_animation_enabled", bool(self.anim_check.isChecked()))
+        config.set(
+            "ai_animation_thinking", bool(self.anim_thinking_check.isChecked())
+        )
+        config.set("ai_animation_min_seconds", float(self.anim_min_spin.value()))
+        config.set("ai_voice_reply", bool(self.voice_reply_check.isChecked()))
+        config.set("ai_memory_enabled", bool(self.memory_check.isChecked()))
+        config.set("ai_memory_inject", int(self.memory_inject.value()))
+        config.set("ai_memory_max_entries", int(self.memory_max.value()))
         config.set("ai_web_search", bool(self.web_check.isChecked()))
         config.set("ai_web_engine", str(self.engine_combo.currentData() or "baidu"))
         config.set("ai_web_results", int(self.web_results_spin.value()))
         config.set("ai_web_fetch", bool(self.web_fetch_check.isChecked()))
         config.set("chat_background", self._background_value)
         config.set("chat_accent", self._accent_value())
+        config.set(
+            "chat_font_family",
+            ""
+            if self.default_font_check.isChecked()
+            else self.font_combo.currentFont().family(),
+        )
+        config.set("chat_font_size", int(self.chat_font_size.value()))
         config.set("chat_follow_pet", bool(self.follow_check.isChecked()))
         config.set("chat_always_on_top", bool(self.on_top_check.isChecked()))
         config.set(
@@ -740,10 +929,154 @@ class AiChatPage(SettingsPage):
         self._initial = self._snapshot()
         self._background_value = str(self._initial.get("chat_background") or "")
         self._rebuild_background_options()
+        self._sync_persona()
         self._sync_thinking_web()
+        self._sync_chat_animation()
+        self._sync_chat_font()
+        self._sync_memory()
         self._sync_proactive()
         self.apply_preview()
         self.changed.emit()
+
+    def _sync_chat_animation(self) -> None:
+        config = self.config()
+        for check, key, fallback in (
+            (self.anim_check, "ai_animation_enabled", True),
+            (self.anim_thinking_check, "ai_animation_thinking", True),
+        ):
+            check.blockSignals(True)
+            check.setChecked(bool(config.get(key, fallback)))
+            check.blockSignals(False)
+        try:
+            seconds = float(config.get("ai_animation_min_seconds") or 2.0)
+        except (TypeError, ValueError):
+            seconds = 2.0
+        self.anim_min_spin.blockSignals(True)
+        self.anim_min_spin.setValue(max(0.5, min(30.0, seconds)))
+        self.anim_min_spin.blockSignals(False)
+        self.voice_reply_check.blockSignals(True)
+        self.voice_reply_check.setChecked(bool(config.get("ai_voice_reply", False)))
+        self.voice_reply_check.blockSignals(False)
+
+    def _on_persona_changed(self, *_args) -> None:
+        self._sync_persona_rows()
+        self._on_changed()
+
+    def _sync_persona_rows(self) -> None:
+        persona_id = str(self.persona_combo.currentData() or "")
+        preset = next(
+            (item for item in load_presets() if item.id == persona_id), None
+        )
+        self.prompt_edit.setEnabled(persona_id == CUSTOM_PERSONA)
+        if persona_id == CUSTOM_PERSONA:
+            self.persona_desc.setText(
+                "自定义提示词：下面文本框里的内容会发给模型（支持 {name}）。"
+            )
+        elif preset is not None:
+            self.persona_desc.setText(preset.description or "预设人设")
+        else:
+            self.persona_desc.setText("")
+
+    def _sync_persona(self) -> None:
+        config = self.config()
+        persona = str(config.get("ai_persona") or "").strip()
+        if not persona:
+            persona = (
+                CUSTOM_PERSONA
+                if str(config.get("ai_system_prompt") or "").strip()
+                else DEFAULT_PERSONA
+            )
+        index = self.persona_combo.findData(persona)
+        self.persona_combo.blockSignals(True)
+        self.persona_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.persona_combo.blockSignals(False)
+        self.prompt_edit.blockSignals(True)
+        self.prompt_edit.setPlainText(str(config.get("ai_system_prompt") or ""))
+        self.prompt_edit.blockSignals(False)
+        self._sync_persona_rows()
+
+    def _memory_root(self):
+        root = getattr(self.host, "root", None) or getattr(self.config(), "root", None)
+        if not root:
+            return None
+        from petcore import paths
+
+        return paths.feature_data_dir(Path(root), "ai.chat") / "memory"
+
+    def _refresh_memory_status(self) -> None:
+        from .memory import MemoryStore
+
+        root = self._memory_root()
+        if root is None:
+            self.memory_status.setText("记忆目录不可用")
+            return
+        character = str(self.config().get("character") or "default")
+        store = MemoryStore(root, character)
+        self.memory_status.setText(
+            f"当前角色 {store.count('character')} 条 · 全局 {store.count('global')} 条"
+        )
+
+    def _open_memory_dir(self) -> None:
+        root = self._memory_root()
+        if root is None:
+            return
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
+
+    def _clear_memory(self) -> None:
+        from .memory import MemoryStore
+
+        root = self._memory_root()
+        if root is None:
+            return
+        character = str(self.config().get("character") or "default")
+        removed = MemoryStore(root, character).clear("character")
+        self.memory_status.setText(
+            f"已清空当前角色记忆（{removed} 条）；全局记忆保留。"
+        )
+
+    def _sync_memory(self) -> None:
+        config = self.config()
+        self.memory_check.blockSignals(True)
+        self.memory_check.setChecked(bool(config.get("ai_memory_enabled", True)))
+        self.memory_check.blockSignals(False)
+        for widget, key, fallback in (
+            (self.memory_inject, "ai_memory_inject", 3),
+            (self.memory_max, "ai_memory_max_entries", 500),
+        ):
+            try:
+                value = int(config.get(key) or fallback)
+            except (TypeError, ValueError):
+                value = fallback
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
+        self._refresh_memory_status()
+
+    def _sync_font_rows(self, *_args) -> None:
+        self.font_combo.setEnabled(not self.default_font_check.isChecked())
+
+    def _sync_chat_font(self) -> None:
+        config = self.config()
+        family = str(config.get("chat_font_family") or "").strip()
+        self.default_font_check.blockSignals(True)
+        self.default_font_check.setChecked(not family)
+        self.default_font_check.blockSignals(False)
+        if family:
+            self.font_combo.blockSignals(True)
+            self.font_combo.setCurrentFont(QFont(family))
+            self.font_combo.blockSignals(False)
+        try:
+            size = int(config.get("chat_font_size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        self.chat_font_size.blockSignals(True)
+        self.chat_font_size.setValue(max(0, min(24, size)))
+        self.chat_font_size.blockSignals(False)
+        self._sync_font_rows()
 
     def _sync_thinking_web(self) -> None:
         """取消后把新控件拉回已恢复的配置（config 已由对话框整体还原）。"""

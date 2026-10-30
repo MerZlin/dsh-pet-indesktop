@@ -21,6 +21,10 @@ BUSY_STATES = ("thinking", "working")
 MAX_LINE_BYTES = 4096
 #: 展示字段的字符上限（agent 标识 / 工具名 / 事件名）。
 MAX_FIELD_CHARS = 64
+#: 桌宠控制命令的正文/动作名上限。
+MAX_COMMAND_TEXT = 200
+MAX_COMMAND_NAME = 64
+MAX_COMMAND_MS = 10000
 
 #: 事件名 → 六态。Claude Code hooks 名、DSH 桥接名与裸状态名共用一张表。
 #: 表外的事件名一律忽略（绝不默认当成 working）：transcript 类密集写入会把
@@ -115,6 +119,18 @@ class AgentEvent:
         return self.state in BUSY_STATES
 
 
+@dataclass(frozen=True, slots=True)
+class PetCommand:
+    """DSH → 桌宠的控制命令（``event: "pet/command"``）。"""
+
+    cmd: str
+    text: str = ""
+    name: str = ""
+    duration_ms: int = 0
+    agent: str = "dsh"
+    writer: str = ""
+
+
 def _text(value: object, limit: int = MAX_FIELD_CHARS) -> str:
     return str(value if value is not None else "").strip()[:limit]
 
@@ -162,6 +178,44 @@ def parse_line(raw: bytes | str) -> AgentEvent | None:
     writer = _text(record.get("inst"), 64)
     return AgentEvent(
         agent=agent.lower(), state=state, tool=tool.lower(), event=event, writer=writer
+    )
+
+
+def parse_command(raw: bytes | str) -> PetCommand | None:
+    """解析 ``pet/command`` 行；普通状态事件返回 ``None``。"""
+    text = _decode(raw).lstrip("\ufeff").strip()
+    if not text or len(text) > MAX_LINE_BYTES:
+        return None
+    try:
+        record = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    if _text(record.get("event"), 96) != "pet/command":
+        return None
+    cmd = _text(record.get("cmd"), 32).lower()
+    if cmd not in {"say", "play_animation", "notify"}:
+        return None
+    body = _text(record.get("text"), MAX_COMMAND_TEXT)
+    name = _text(record.get("name") or record.get("animation"), MAX_COMMAND_NAME)
+    try:
+        duration = int(record.get("duration_ms") or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    duration = max(0, min(MAX_COMMAND_MS, duration))
+    if cmd == "play_animation" and not name:
+        return None
+    if cmd != "play_animation" and not body:
+        return None
+    agent = _text(record.get("agent") or "dsh", 32)
+    return PetCommand(
+        cmd=cmd,
+        text=body,
+        name=name,
+        duration_ms=duration,
+        agent=agent.lower(),
+        writer=writer_of(agent, _text(record.get("inst"), 64)),
     )
 
 

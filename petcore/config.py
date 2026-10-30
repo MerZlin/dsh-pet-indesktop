@@ -86,11 +86,18 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "ai_service",
         "ai_model",
         "ai_system_prompt",
+        "ai_persona",
         "ai_vision_enabled",
         "ai_temperature",
         "ai_look_screen_auto_open",
         "ai_thinking",
         "ai_reasoning_effort",
+        "ai_animation_enabled",
+        "ai_animation_thinking",
+        "ai_animation_min_seconds",
+        "ai_memory_enabled",
+        "ai_memory_inject",
+        "ai_memory_max_entries",
         "ai_web_search",
         "ai_web_engine",
         "ai_web_results",
@@ -112,6 +119,7 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "ai_agent_events_enabled",
         "ai_agent_custom_agents",
         "ai_agent_animation_enabled",
+        "ai_agent_command_enabled",
         "ai_agent_activity_bubbles",
         "ai_agent_done_notice",
         "ai_agent_min_interval_seconds",
@@ -141,6 +149,8 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "chat_follow_pet",
         "chat_background",
         "chat_accent",
+        "chat_font_size",
+        "chat_font_family",
         "last_settings_page",
         "menu_hidden",
         "menu_layout",
@@ -173,6 +183,16 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "speech_local_format",
         "speech_local_timeout",
         "speech_sapi_voice",
+        "asr_enabled",
+        "asr_engine",
+        "asr_endpoint",
+        "asr_model",
+        "asr_language",
+        "asr_device",
+        "asr_auto_send",
+        "asr_max_seconds",
+        "asr_timeout",
+        "ai_voice_reply",
         "voice_chime_enabled",
         "voice_chime_schedule",
         "voice_chime_times",
@@ -242,11 +262,18 @@ DEFAULTS: dict[str, Any] = {
     "ai_service": "",
     "ai_model": "",
     "ai_system_prompt": "",
+    "ai_persona": "",
     "ai_vision_enabled": True,
     "ai_temperature": 0.7,
     "ai_look_screen_auto_open": False,
     "ai_thinking": "auto",
     "ai_reasoning_effort": "high",
+    "ai_animation_enabled": True,
+    "ai_animation_thinking": True,
+    "ai_animation_min_seconds": 2.0,
+    "ai_memory_enabled": True,
+    "ai_memory_inject": 3,
+    "ai_memory_max_entries": 500,
     "ai_web_search": False,
     "ai_web_engine": "baidu",
     "ai_web_results": 5,
@@ -268,6 +295,7 @@ DEFAULTS: dict[str, Any] = {
     "ai_agent_events_enabled": True,
     "ai_agent_custom_agents": [],
     "ai_agent_animation_enabled": True,
+    "ai_agent_command_enabled": True,
     "ai_agent_activity_bubbles": True,
     "ai_agent_done_notice": True,
     "ai_agent_min_interval_seconds": 2.0,
@@ -305,6 +333,9 @@ DEFAULTS: dict[str, Any] = {
     "chat_follow_pet": False,
     "chat_background": "",
     "chat_accent": "",
+    # 0 = 跟随 ui_font_size；字体族空 = 系统默认。两者只作用于对话窗。
+    "chat_font_size": 0,
+    "chat_font_family": "",
     "click_squash_enabled": True,
     "click_squash_ms": 220,
     "click_squash_bounces": 1,
@@ -331,6 +362,12 @@ DEFAULTS: dict[str, Any] = {
     "anim_weight_turn": 10,
     "anim_weight_act": 40,
     "anim_weight_move": 20,
+    # 待机随机动作总开关；关闭后动作池不自播，右键手动播放不受影响。
+    "anim_random_auto": True,
+    # 动画策略名单：分类 id（idle/random/...）或动画名。
+    # auto_off = 仅手动；blocked = 完全禁用（自动与菜单都拦）。
+    "anim_auto_off": [],
+    "anim_blocked": [],
     "active_pets": [0],
     "spawn_inherit_size": True,
     "spawn_scale": 0.72,
@@ -418,6 +455,16 @@ DEFAULTS: dict[str, Any] = {
     "speech_local_format": "mp3",
     "speech_local_timeout": 30.0,
     "speech_sapi_voice": "",
+    "asr_enabled": True,
+    "asr_engine": "sapi",
+    "asr_endpoint": "",
+    "asr_model": "",
+    "asr_language": "zh",
+    "asr_device": 0,
+    "asr_auto_send": False,
+    "asr_max_seconds": 30,
+    "asr_timeout": 30.0,
+    "ai_voice_reply": False,
     "menu_hidden": [],
     "menu_order": [],
     "menu_layout": None,
@@ -657,6 +704,26 @@ def _head_pat_names(value: Any) -> list[str]:
             continue
         result.append(name)
         if len(result) >= 64:
+            break
+    return result
+
+
+def _animation_tokens(value: Any) -> list[str]:
+    """动画策略名单：分类 id 或动画名，去重、限长、不存路径。
+
+    名字是跨角色保留的（切角色后不丢设置），所以这里不按当前角色过滤。
+    """
+    if not isinstance(value, (list, tuple)):
+        return []
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        token = item.strip()[:160]
+        if not token or token in result:
+            continue
+        result.append(token)
+        if len(result) >= 256:
             break
     return result
 
@@ -1226,6 +1293,15 @@ class Config:
             normalized[key] = int(
                 round(_number(normalized.get(key), float(DEFAULTS[key]), 0.0, 100.0))
             )
+        normalized["anim_random_auto"] = _bool(
+            normalized.get("anim_random_auto"), True
+        )
+        normalized["anim_auto_off"] = _animation_tokens(
+            normalized.get("anim_auto_off")
+        )
+        normalized["anim_blocked"] = _animation_tokens(
+            normalized.get("anim_blocked")
+        )
         normalized["active_pets"] = _pets(normalized.get("active_pets"))
         normalized["spawn_inherit_size"] = _bool(normalized.get("spawn_inherit_size"), True)
         normalized["spawn_scale"] = _number(
@@ -1439,6 +1515,29 @@ class Config:
         normalized["speech_sapi_voice"] = (
             str(normalized.get("speech_sapi_voice") or "").strip()[:64]
         )
+        normalized["asr_enabled"] = _bool(normalized.get("asr_enabled"), True)
+        asr_engine = str(normalized.get("asr_engine") or "sapi").strip().lower()
+        normalized["asr_engine"] = (
+            asr_engine if asr_engine in {"sapi", "http"} else "sapi"
+        )
+        normalized["asr_endpoint"] = (
+            str(normalized.get("asr_endpoint") or "").strip()[:500]
+        )
+        normalized["asr_model"] = str(normalized.get("asr_model") or "").strip()[:128]
+        normalized["asr_language"] = (
+            str(normalized.get("asr_language") or "zh").strip()[:16] or "zh"
+        )
+        normalized["asr_device"] = int(
+            round(_number(normalized.get("asr_device"), 0.0, 0.0, 32.0))
+        )
+        normalized["asr_auto_send"] = _bool(normalized.get("asr_auto_send"), False)
+        normalized["asr_max_seconds"] = int(
+            round(_number(normalized.get("asr_max_seconds"), 30.0, 3.0, 60.0))
+        )
+        normalized["asr_timeout"] = _number(
+            normalized.get("asr_timeout"), 30.0, 5.0, 120.0
+        )
+        normalized["ai_voice_reply"] = _bool(normalized.get("ai_voice_reply"), False)
         frameseq = str(normalized.get("frameseq") or "auto")
         normalized["frameseq"] = frameseq if frameseq in {"auto", "off", "only"} else "auto"
         normalized["allow_feature_mods"] = _bool(normalized.get("allow_feature_mods"), False)
@@ -1455,6 +1554,7 @@ class Config:
         normalized["ai_service"] = str(normalized.get("ai_service") or "").strip()
         normalized["ai_model"] = str(normalized.get("ai_model") or "").strip()
         normalized["ai_system_prompt"] = str(normalized.get("ai_system_prompt") or "")[:4000]
+        normalized["ai_persona"] = str(normalized.get("ai_persona") or "").strip()[:64]
         normalized["ai_vision_enabled"] = _bool(
             normalized.get("ai_vision_enabled"), True
         )
@@ -1471,6 +1571,24 @@ class Config:
         effort = str(normalized.get("ai_reasoning_effort") or "high")
         normalized["ai_reasoning_effort"] = (
             effort if effort in {"low", "high", "max"} else "high"
+        )
+        normalized["ai_animation_enabled"] = _bool(
+            normalized.get("ai_animation_enabled"), True
+        )
+        normalized["ai_animation_thinking"] = _bool(
+            normalized.get("ai_animation_thinking"), True
+        )
+        normalized["ai_animation_min_seconds"] = _number(
+            normalized.get("ai_animation_min_seconds"), 2.0, 0.5, 30.0
+        )
+        normalized["ai_memory_enabled"] = _bool(
+            normalized.get("ai_memory_enabled"), True
+        )
+        normalized["ai_memory_inject"] = int(
+            round(_number(normalized.get("ai_memory_inject"), 3.0, 1.0, 8.0))
+        )
+        normalized["ai_memory_max_entries"] = int(
+            round(_number(normalized.get("ai_memory_max_entries"), 500.0, 50.0, 2000.0))
         )
         normalized["ai_web_search"] = _bool(normalized.get("ai_web_search"), False)
         engine = str(normalized.get("ai_web_engine") or "baidu")
@@ -1533,6 +1651,9 @@ class Config:
         )
         normalized["ai_agent_animation_enabled"] = _bool(
             normalized.get("ai_agent_animation_enabled"), True
+        )
+        normalized["ai_agent_command_enabled"] = _bool(
+            normalized.get("ai_agent_command_enabled"), True
         )
         normalized["ai_agent_activity_bubbles"] = _bool(
             normalized.get("ai_agent_activity_bubbles"), True
@@ -1627,6 +1748,15 @@ class Config:
         normalized["chat_accent"] = str(
             normalized.get("chat_accent") or ""
         ).strip()[:32]
+        chat_font_size = int(
+            round(_number(normalized.get("chat_font_size"), 0.0, 0.0, 24.0))
+        )
+        normalized["chat_font_size"] = (
+            0 if chat_font_size <= 0 else max(10, chat_font_size)
+        )
+        normalized["chat_font_family"] = str(
+            normalized.get("chat_font_family") or ""
+        ).strip()[:64]
         normalized["menu_hidden"] = _text_list(normalized.get("menu_hidden"))
         normalized["menu_order"] = _text_list(normalized.get("menu_order"))
         layout = normalized.get("menu_layout")

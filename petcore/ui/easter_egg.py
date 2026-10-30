@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, Qt
@@ -209,6 +210,7 @@ class EasterEggController(QObject):
         self._window = window
         self._popups: list[EasterEggPopup] = []
         self._open_count = 0
+        self._rng = random.Random()
 
     def _config(self):
         return getattr(self._window, "config", None)
@@ -244,7 +246,9 @@ class EasterEggController(QObject):
                 readable.append(path)
         return readable
 
-    def selected_image(self, images: list[Path] | None = None) -> Path | None:
+    def selected_image(
+        self, images: list[Path] | None = None, rng: random.Random | None = None
+    ) -> Path | None:
         candidates = list(images if images is not None else self.images())
         if not candidates:
             return None
@@ -258,7 +262,8 @@ class EasterEggController(QObject):
                         return avatar
                 except OSError:
                     pass
-        return candidates[0]
+        picker = rng if rng is not None else self._rng
+        return picker.choice(candidates)
 
     def live_popups(self) -> list[EasterEggPopup]:
         self._prune()

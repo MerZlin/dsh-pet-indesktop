@@ -4885,3 +4885,72 @@ return → 识别永久停摆；设置页「识别诊断」也一直转圈。
   真静音 2 秒后仍会判暂停。
 - 卡死的 reader daemon 线程无法回收（Python 不能杀线程）；重试上限内最多 2 条，
   进程退出即释放。
+
+## L137 — 2026-10-30 — 用户反馈八组需求：动画治理 / 聊天语义 / 语音 / API / DSH / 记忆
+
+**主题**：把 2026-10-30 的用户反馈拆成八组落地：动画随机开关与分类、聊天语义动作、
+聊天字体/人设/表情随机、语音输入与语音对话、API 本地模型与 opencode 预设、
+DSH 双向通道与同窗 DSH 页、长期记忆与联网口径。v4.4.0 发布线保持冻结，全部落在
+`petcore/`。
+
+**实现**
+- 动画治理：新增 `petcore/engine/animation_policy.py`（12 类、`auto_off`/`blocked`、
+  `anim_random_auto`）；`BehaviorDirector` 按策略过滤四类候选；`PetWindow` 的待机/
+  点击/拖拽/摸头/手动/事件入口统一走闸门；菜单按 `manual_allowed` 过滤；设置页
+  「互动与物理 → 动画」加总开关、概率、动画树与「全部允许/仅手动/禁用」。
+- 聊天语义：新增 `ai.chat/host/animation_semantics.py`（关键词规则 + 中文名匹配 +
+  防重复）；首个 delta 播思考动作、done 按完整回复播语义动作，受
+  `ai_animation_enabled` / `ai_animation_thinking` / `ai_animation_min_seconds` 控制，
+  隐藏/循环/接管态不抢；`ai.agent` 六态动作池（thinking/attention/success/error）
+  保留 8s 地板与「还在播就不重发」。
+- 聊天 UI：`chat/styles.py` 的字号改为基准字号比例派生 + 字体族占位，新增
+  `chat_font_size`/`chat_font_family`（只作用对话窗，`apply_appearance` 实时推）；
+  新增 6 个人设预设 JSON + `ai_persona` 解析（预设 / custom / 未知回退）；
+  `easter_egg.selected_image()` 改用注入 RNG 的 `rng.choice`（修「随机只放第一张」）。
+- 语音：新增 `platform/mic.py`（WinMM waveIn，零新依赖）、`net/asr.py`（OpenAI 兼容
+  multipart）、`speech/asr.py`（HTTP / Windows System.Speech 兜底）、
+  `ui/asr_channel.py`（单次录音线程 + 信号）；对话窗/快速气泡加话筒，
+  `asr_auto_send` 控制是否直接提交；`ai_voice_reply` 用现有 TTS 朗读回复；
+  `page_voice.py` 加「语音输入」段；TTS 本地段标题改为「自定义 / 本地部署 TTS」。
+- API：`ApiService` 增 `models_path`/`extra_headers`/`allow_lan_http`/`preset`；
+  `api/headers.py` 对 opencode 主机补自己的 UA + 稳定 `x-opencode-session`；
+  `api/models.py` 拉 `/v1/models`；内置 DeepSeek 默认 + OpenCode 免费（可选）+
+  Go/Ollama/LM Studio/llama.cpp/vLLM 预设；首次启动 `ApiStore` 空文件时播种
+  DeepSeek + OpenCode 免费；页内可拉模型、填自定义头、允许私网 http。
+- DSH：新增 `integrations/dsh-pet-channel`（HTTP+SSE+审批+`pet_control` 工具与
+  `/pet say|play|notify` 兜底，命令写 `dsh-petcmd-*.jsonl`）；`petcore/net/dsh.py`
+  客户端；`ui/chat/dsh_controller.py` + `dsh_view.py`，聊天窗内「AI / DSH」切换；
+  历史只读镜像 + 「带入 AI 对话」按钮；`ai.agent` 消费 `pet/command`（动作名校验、
+  1s 限流、隐藏态不播）；设置页「常规 → DSH 连接」安装/检查；`dsh_install.py`
+  备份 `package.json` 后写 dependencies/bundles 并建目录联接。
+- 记忆：新增 `ai.chat/host/memory.py`（global/character 两域 JSONL、中文 bigram
+  检索、上限淘汰）；用户说「记住…」写入，提交时按问题取 top-K 注入 system；
+  设置页「长期记忆」开关/注入条数/上限/打开目录/清空当前角色。
+
+**验证**
+- 聚焦：`test_petcore_animation_policy.py`（12）、`test_petcore_playback.py` 策略 4 条、
+  `test_petcore_ai_animation.py`（10）、`test_petcore_ai_persona.py`（4）、
+  `test_petcore_asr.py`（12）、`test_petcore_api_presets.py`（10）、
+  `test_petcore_dsh.py`（8）、`test_petcore_ai_memory.py`（6）全绿；
+  `test_petcore_agent_mod.py` 102、`test_petcore_chat_ui.py` 等既有套件全绿。
+- 全量 petcore 子套件：`pytest -q tests/test_petcore_*.py` = **2560 passed / 1 skipped**
+  （196.60 s）。全量 `pytest -q` 在 66% 处原生崩溃（exit 139，崩点旧版
+  `test_quick_chat.py::test_switch_character...`）；该用例单独跑通过，
+  `test_petcore_music_* + test_quick_chat` 组合 216 passed，按旧套件顺序性环境问题登记。
+- `ruff check petcore/ examples/petcore-mods tests/`、`python -m petcore --check`、
+  docs/architecture/CI 门禁通过。
+- 真机：WinMM 录音 2 秒得到 63,662 字节 RIFF/WAV；系统识别对已知 TTS 语音
+  （“你好今天天气怎么样”，UTF-8 hex `e4bda0…e6a0b7`）识别正确；opencode 免费端点
+  带官方要求的头仍返回 `429 FreeUsageLimitError`（Retry-After 34556s）；
+  Ollama/LM Studio/llama.cpp/vLLM 端口均未启动。
+- 微基准：106 段素材行为掷骰 27.9µs/次；语义匹配 59.2µs/次；500 条记忆检索
+  ≈4.8ms/次（每轮一次）。
+
+**未验证 / 风险**
+- DSH 真机双向未连测：本机 DSH 桌面端未运行；通道插件只做了 `node --check` +
+  `verify_import.mjs`，Python 客户端对本地 fake HTTP/SSE 服务验证。
+- opencode 免费档按用户选择保留为**可选**预设；DeepSeek 仍默认。上游若继续 429，
+  UI 文案会说明「仅限 OpenCode 客户端/需 Go」。
+- 本地 ASR HTTP 端点未起服务；只验证了 Windows System.Speech 兜底。
+- 未构建安装包（SAC 强模式下新 exe 会被拦）；PyInstaller spec/build 脚本已加
+  `integrations` 数据目录。

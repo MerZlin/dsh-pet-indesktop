@@ -6,6 +6,7 @@ import sys
 from PySide6.QtGui import QActionGroup, QGuiApplication, QIcon
 from PySide6.QtWidgets import QMenu
 
+from ..engine.animation_policy import AnimationPolicy, policy_from_values
 from ..engine.enums import AnimatType, GraphType
 from ..engine.geometry import SCALE_STEPS
 from ..platform import autostart as autostart_mod
@@ -50,6 +51,37 @@ def _action_icon() -> QIcon:
 def _unique_names(names) -> list[str]:
     seen: set[str] = set()
     return [name for name in names if not (name in seen or seen.add(name))]
+
+
+def _window_policy(window) -> AnimationPolicy:
+    config = getattr(window, "config", None)
+    if config is None:
+        return AnimationPolicy()
+    try:
+        return policy_from_values(
+            auto_off=config.get("anim_auto_off") or (),
+            blocked=config.get("anim_blocked") or (),
+            random_auto=config.get("anim_random_auto", True),
+        )
+    except Exception:
+        return AnimationPolicy()
+
+
+def _visible_names(window, names) -> list[str]:
+    """菜单只列「允许播放」的动画；名单按名字匹配当前角色的素材。"""
+    catalog = getattr(window, "catalog", None)
+    if catalog is None:
+        return list(names)
+    policy = _window_policy(window)
+    spec_names: dict[str, list] = {}
+    for spec in getattr(catalog, "animations", ()) or ():
+        spec_names.setdefault(spec.name, []).append(spec)
+    visible: list[str] = []
+    for name in names:
+        specs = spec_names.get(name)
+        if not specs or any(policy.manual_allowed(spec) for spec in specs):
+            visible.append(name)
+    return visible
 
 
 def _name_prefix(name: str) -> str | None:
@@ -185,7 +217,7 @@ def _add_lazy_group(
     *,
     group_by_prefix: bool = False,
 ) -> bool:
-    unique = _unique_names(names)
+    unique = _visible_names(window, _unique_names(names))
     if not unique:
         return False
     submenu = add_submenu(menu, label)
@@ -224,6 +256,13 @@ def _populate_animations(window, menu: QMenu) -> None:
         ],
     )
     added |= _add_lazy_group(menu, "点击回应", window, catalog.names_for(GraphType.TOUCH_BODY))
+    added |= _add_lazy_group(
+        menu,
+        "拖拽/悬起",
+        window,
+        catalog.names_for(GraphType.RAISED_STATIC)
+        + catalog.names_for(GraphType.RAISED_DYNAMIC),
+    )
     # Keep menu discovery aligned with PetWindow's GraphType lookup.  These
     # groups are optional per character; missing resources simply stay hidden.
     for graph, label in (

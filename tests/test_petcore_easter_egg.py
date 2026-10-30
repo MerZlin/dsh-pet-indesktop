@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import random
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -401,3 +402,23 @@ def test_default_bubble_mode_plays_a_gif(app, pet_window, tmp_path: Path) -> Non
 
     bubble.hide()
     assert animated.is_running is False
+
+
+def test_selected_image_is_random_and_avatar_stays_fixed(
+    app, window, tmp_path: Path
+) -> None:
+    folder = tmp_path / "eggs"
+    folder.mkdir()
+    first = _write_image(folder / "a.png")
+    second = _write_image(folder / "b.png")
+    window.config.set("easter_egg_image_dir", str(folder))
+    controller = EasterEggController(window)
+    images = controller.images()
+    assert len(images) == 2
+
+    rng = random.Random(7)
+    picks = {controller.selected_image(images, rng=rng) for _ in range(30)}
+    assert picks == {first, second}
+
+    window.config.set("easter_egg_avatar", str(first))
+    assert controller.selected_image(images) == first

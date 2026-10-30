@@ -132,6 +132,7 @@ jobs:
         run: |
           node --test tests/test_bridge_hardfailure.js tests/test_bridge_instance_scope.js tests/test_bridge_interaction_dedup.js tests/test_bridge_manifest.js tests/test_bridge_question_callid.js tests/test_bridge_retry.js tests/test_bridge_root_control.js tests/test_bridge_user_action_guard.js
           node integrations/dsh-pet-bridge/verify_import.mjs
+          node integrations/dsh-pet-channel/verify_import.mjs
 
       # 捕获方式按 OS 分流（2026-10-12）：Linux 主套件加 --capture=tee-sys，
       # Windows/macOS 保持默认 fd 捕获 + -q。默认 fd 捕获把 fd 1/2 重定向到临时文件，

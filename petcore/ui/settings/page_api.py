@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -24,8 +25,10 @@ from PySide6.QtWidgets import (
 from ... import paths
 from ...account.service import AccountError
 from ...api.credentials import KeyringCredentials
+from ...api.models import ModelListError, list_models
+from ...api.presets import PRESETS, preset_for
 from ...api.probe import ProbeResult, probe_text
-from ...api.spec import ApiService
+from ...api.spec import ApiService, endpoint_host
 from ...api.store import ApiStore
 from ...net.errors import describe
 from ..external_links import DEEPSEEK_API_URL
@@ -45,7 +48,7 @@ DEFAULT_BALANCE = "deepseek"
 _BALANCE_CHOICES = (("none", "无"), ("deepseek", "DeepSeek"))
 _ERROR_TEXT = {
     "api_endpoint_empty": "Base URL 不能为空",
-    "api_endpoint_insecure": "远程地址只允许 https；http 只用于 localhost / 127.0.0.1",
+    "api_endpoint_insecure": "远程地址只允许 https；http 只用于 localhost 或勾选允许的局域网私网",
     "api_endpoint_userinfo": "Base URL 里不能带用户名或密码",
     "api_endpoint_query": "Base URL 里不能带 ? 或 #",
     "api_endpoint_port": "端口号无效",
@@ -54,6 +57,14 @@ _ERROR_TEXT = {
     "api_chat_path_invalid": "Chat Path 必须以 / 开头",
     "api_timeout_invalid": "超时必须在 1–300 秒之间",
     "api_balance_protocol_invalid": "余额协议无效",
+    "api_models_path_invalid": "模型列表路径必须以 / 开头",
+    "api_header_invalid": "自定义请求头格式不对（每行 name: value，值不能为空）",
+    "api_header_secret": "请求头里不能放 Authorization/Cookie：密钥只进钥匙串",
+    "api_header_too_many": "自定义请求头最多 16 条",
+    "unconfigured": "还没有填写地址",
+    "auth": "服务需要鉴权",
+    "network": "连不上服务",
+    "empty": "服务没有返回模型",
 }
 
 
@@ -104,6 +115,31 @@ class _ProbeWorker(QRunnable):
             result = ProbeResult("protocol")
         try:
             self.signals.finished.emit(result)
+        except RuntimeError:
+            pass
+
+
+class _ModelSignals(QObject):
+    finished = Signal(object)
+
+
+class _ModelWorker(QRunnable):
+    def __init__(self, service: ApiService, api_key: str, signals: _ModelSignals):
+        super().__init__()
+        self._service = service
+        self._api_key = api_key
+        self.signals = signals
+
+    def run(self) -> None:
+        try:
+            models = list_models(self._service, self._api_key)
+            payload = (True, models)
+        except ModelListError as exc:
+            payload = (False, exc.reason)
+        except Exception:  # noqa: BLE001 - 异常不许穿出 QRunnable
+            payload = (False, "protocol")
+        try:
+            self.signals.finished.emit(payload)
         except RuntimeError:
             pass
 
@@ -168,11 +204,27 @@ class ApiSettingsPage(SettingsPage):
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(9)
 
+        self.preset_combo = QComboBox(panel)
+        for preset in PRESETS:
+            self.preset_combo.addItem(preset.name, preset.id)
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+
         self.name_edit = self._line("例如 DeepSeek")
         self.base_url_edit = self._line("https://api.example.com")
         self.chat_path_edit = self._line("/v1/chat/completions")
+        self.models_path_edit = self._line("/v1/models")
         self.model_edit = self._line("例如 deepseek-chat")
         self.vision_edit = self._line("可留空；视觉模型名")
+        self.model_combo = QComboBox(panel)
+        self.model_combo.setMinimumWidth(240)
+        self.model_combo.currentIndexChanged.connect(self._on_model_selected)
+        self.models_button = make_button("拉取模型", panel)
+        self.models_button.clicked.connect(self._fetch_models)
+        self.allow_lan_check = make_checkbox(panel)
+        self.headers_edit = QPlainTextEdit(panel)
+        self.headers_edit.setPlaceholderText("每行一个 name: value；通常留空")
+        self.headers_edit.setMaximumHeight(72)
+        self.headers_edit.setMinimumWidth(300)
         self.key_edit = self._line("留空表示不修改", password=True)
         self.verify_ssl_check = make_checkbox(panel)
         self.timeout_spin = QSpinBox(panel)
@@ -201,16 +253,37 @@ class ApiSettingsPage(SettingsPage):
             QLabel("在「互动与物理 → 点击与音效 → 余额提示」里设置", panel),
             "按宠物保存；峰谷提示的文案与颜色也在那一页。",
         )
+        self._form_row(form, "内置预设", self.preset_combo, "选一个填入地址、路径与模型；不会覆盖名称和已保存的 Key。")
         self._form_row(form, "名称", self.name_edit)
-        self._form_row(form, "Base URL", self.base_url_edit, "远程地址只允许 https；本机可用 http://localhost。")
+        self._form_row(form, "Base URL", self.base_url_edit, "远程地址只允许 https；本机可用 http://127.0.0.1；局域网需勾选下方允许。")
         self._form_row(form, "Chat Path", self.chat_path_edit, "拼在 Base URL 后面，形如 /v1/chat/completions。")
+        self._form_row(form, "模型列表路径", self.models_path_edit, "用于「拉取模型」；通常 /v1/models。")
         self._form_row(
             form,
             "模型",
             self.model_edit,
             "聊天与探测使用的模型名；默认 deepseek-v4-flash，如账号不支持可改成 deepseek-chat。",
         )
+        model_row = QWidget(panel)
+        model_layout = QHBoxLayout(model_row)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.setSpacing(8)
+        model_layout.addWidget(self.model_combo, 1)
+        model_layout.addWidget(self.models_button)
+        self._form_row(form, "模型列表", model_row, "从 /v1/models 拉取；选中后填入上面的模型名。")
         self._form_row(form, "视觉模型", self.vision_edit, "识屏等能力使用；留空表示该服务不支持。")
+        self._form_row(
+            form,
+            "允许局域网 http",
+            self.allow_lan_check,
+            "只对 10./172.16-31./192.168. 私网地址生效；明文传输，确认对端可信。",
+        )
+        self._form_row(
+            form,
+            "自定义请求头",
+            self.headers_edit,
+            "每行 name: value；用于 opencode 等需要额外头的服务。Authorization/Cookie 不允许写在这里。",
+        )
         self._form_row(form, "校验 SSL", self.verify_ssl_check, "关闭前请确认对端可信；只影响该服务。")
         self._form_row(form, "超时", self.timeout_spin, "单次请求的上限，1–300 秒。")
         self._form_row(form, "余额协议", self.balance_combo, "决定余额查询走哪套接口；未知服务选「无」。")
@@ -403,8 +476,21 @@ class ApiSettingsPage(SettingsPage):
         self.name_edit.setText(service.name)
         self.base_url_edit.setText(service.base_url)
         self.chat_path_edit.setText(service.chat_path)
+        self.models_path_edit.setText(service.models_path)
         self.model_edit.setText(service.model)
         self.vision_edit.setText(service.vision_model)
+        self.allow_lan_check.setChecked(bool(service.allow_lan_http))
+        self.headers_edit.setPlainText(
+            "\n".join(f"{key}: {value}" for key, value in service.extra_headers.items())
+        )
+        preset_index = self.preset_combo.findData(service.preset)
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentIndex(preset_index if preset_index >= 0 else -1)
+        self.preset_combo.blockSignals(False)
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItem("（先拉取模型列表）", "")
+        self.model_combo.blockSignals(False)
         self.verify_ssl_check.setChecked(bool(service.verify_ssl))
         self.timeout_spin.setValue(int(service.timeout))
         self.balance_combo.setCurrentIndex(
@@ -439,18 +525,111 @@ class ApiSettingsPage(SettingsPage):
             index += 1
         return f"api{index}"
 
+    def _parse_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        for line in self.headers_edit.toPlainText().splitlines():
+            text = line.strip()
+            if not text or text.startswith("#"):
+                continue
+            if ":" not in text:
+                raise ValueError("api_header_invalid")
+            name, value = text.split(":", 1)
+            name = name.strip()
+            value = value.strip()
+            if not name or not value:
+                raise ValueError("api_header_invalid")
+            headers[name] = value
+        return headers
+
     def _form_service(self) -> ApiService:
         return ApiService(
             service_id=self._current_id(),
             name=self.name_edit.text(),
             base_url=self.base_url_edit.text(),
             chat_path=self.chat_path_edit.text() or DEFAULT_CHAT_PATH,
+            models_path=self.models_path_edit.text() or "/v1/models",
             model=self.model_edit.text(),
             vision_model=self.vision_edit.text(),
             verify_ssl=self.verify_ssl_check.isChecked(),
             timeout=int(self.timeout_spin.value()),
             balance_protocol=str(self.balance_combo.currentData() or "none"),
+            extra_headers=self._parse_headers(),
+            allow_lan_http=self.allow_lan_check.isChecked(),
+            preset=str(self.preset_combo.currentData() or ""),
         )
+
+    def _on_preset_changed(self, _index: int) -> None:
+        preset = preset_for(self.preset_combo.currentData())
+        self.base_url_edit.setText(preset.base_url)
+        self.chat_path_edit.setText(preset.chat_path)
+        self.models_path_edit.setText(preset.models_path)
+        self.model_edit.setText(preset.model)
+        self.vision_edit.setText(preset.vision_model)
+        self.allow_lan_check.setChecked(preset.allow_lan_http)
+        self.balance_combo.setCurrentIndex(
+            max(0, self.balance_combo.findData(preset.balance_protocol))
+        )
+        self.status_label.setText(preset.note)
+
+    def _model_key(self, service: ApiService) -> str:
+        key = self.key_edit.text().strip()
+        if key:
+            return key
+        try:
+            return str(self.credentials.get(OWNER, service.service_id) or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _fetch_models(self, *_args) -> None:
+        try:
+            service = self._form_service().validate()
+        except ValueError as exc:
+            self.status_label.setText(f"无法拉取：{_error_text(exc)}")
+            return
+        self.models_button.setEnabled(False)
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItem("正在拉取…", "")
+        self.model_combo.blockSignals(False)
+        signals = _ModelSignals()
+        signals.finished.connect(self._on_models_done)
+        self._model_signals = signals
+        self.status_label.setText("正在拉取模型列表…")
+        QThreadPool.globalInstance().start(
+            _ModelWorker(service, self._model_key(service), signals)
+        )
+
+    def _on_models_done(self, payload) -> None:
+        self.models_button.setEnabled(True)
+        ok, value = payload
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        if not ok:
+            self.model_combo.addItem("未检测到模型", "")
+            self.model_combo.blockSignals(False)
+            self.status_label.setText(f"拉取模型失败：{_error_text(value)}")
+            return
+        for name in value:
+            self.model_combo.addItem(name, name)
+        current = self.model_edit.text().strip()
+        index = self.model_combo.findData(current) if current else 0
+        self.model_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.model_combo.blockSignals(False)
+        self.status_label.setText(f"已拉取 {len(value)} 个模型；选中后会填入模型名。")
+
+    def _on_model_selected(self, _index: int) -> None:
+        name = str(self.model_combo.currentData() or "")
+        if name:
+            self.model_edit.setText(name)
+
+    @staticmethod
+    def _requires_key(service: ApiService) -> bool:
+        host = endpoint_host(service.base_url)
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return False
+        if host == "opencode.ai" or host.endswith(".opencode.ai"):
+            return False
+        return True
 
     def _sync_buttons(self) -> None:
         self.remove_button.setEnabled(self._selected_id() is not None)
@@ -544,10 +723,8 @@ class ApiSettingsPage(SettingsPage):
         if not service.model:
             self.status_label.setText("无法测试：请先填写模型名。")
             return
-        key = self.key_edit.text().strip()
-        if not key:
-            key = self.credentials.get(OWNER, service.service_id) or ""
-        if not key:
+        key = self._model_key(service)
+        if not key and self._requires_key(service):
             self.status_label.setText("无法测试：请先填写 API Key。")
             return
         self._probe_running = True
@@ -604,6 +781,11 @@ class ApiSettingsPage(SettingsPage):
             text = "连接成功"
         else:
             text = f"连接失败：{describe(result.reason)}"
+            host = endpoint_host(self.base_url_edit.text())
+            if result.reason in ("rate_limit", "auth") and (
+                host == "opencode.ai" or host.endswith(".opencode.ai")
+            ):
+                text += "；该免费模型仅限 OpenCode 客户端，请订阅 Go 或切换 DeepSeek/本地模型"
         if result.http_status:
             text += f"（HTTP {result.http_status}）"
         if result.retry_after:
@@ -613,7 +795,10 @@ class ApiSettingsPage(SettingsPage):
     def dirty(self) -> bool:
         if bool(self.key_edit.text().strip()):
             return True
-        return self._baseline is None or self._form_service() != self._baseline
+        try:
+            return self._baseline is None or self._form_service() != self._baseline
+        except ValueError:
+            return True
 
     def confirm_save(self) -> bool:
         if not self.dirty():

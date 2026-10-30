@@ -116,6 +116,8 @@ class AgentLinkPage(SettingsPage):
         # ------------------------------------------------------ 动画与气泡
         self.animation = make_checkbox(self)
         self.animation.setChecked(bool(config.get("ai_agent_animation_enabled", True)))
+        self.commands = make_checkbox(self)
+        self.commands.setChecked(bool(config.get("ai_agent_command_enabled", True)))
         self.activity = make_checkbox(self)
         self.activity.setChecked(bool(config.get("ai_agent_activity_bubbles", True)))
         self.done = make_checkbox(self)
@@ -142,6 +144,11 @@ class AgentLinkPage(SettingsPage):
             "过程气泡",
             self.activity,
             "按工具名报进度（正在跑命令 / 正在读文件…），同 Agent 10 秒最多一条。",
+        )
+        behavior.add_row(
+            "接受 DSH 指令",
+            self.commands,
+            "DSH 通过 pet_control 工具或 /pet say|play 让桌宠播动作/冒泡；1 秒最多一条，动作名必须存在。",
         )
         behavior.add_row(
             "完成通知",
@@ -252,6 +259,7 @@ class AgentLinkPage(SettingsPage):
             (self.dsh, "ai_agent_dsh_enabled"),
             (self.events, "ai_agent_events_enabled"),
             (self.animation, "ai_agent_animation_enabled"),
+            (self.commands, "ai_agent_command_enabled"),
             (self.activity, "ai_agent_activity_bubbles"),
             (self.done, "ai_agent_done_notice"),
             (self.sound, "ai_agent_sound_enabled"),
@@ -379,6 +387,7 @@ class AgentLinkPage(SettingsPage):
             self.dsh.isChecked(),
             self.events.isChecked(),
             self.animation.isChecked(),
+            self.commands.isChecked(),
             self.activity.isChecked(),
             self.done.isChecked(),
             self.sound.isChecked(),
@@ -399,6 +408,7 @@ class AgentLinkPage(SettingsPage):
             "ai_agent_dsh_enabled": self.dsh.isChecked(),
             "ai_agent_events_enabled": self.events.isChecked(),
             "ai_agent_animation_enabled": self.animation.isChecked(),
+            "ai_agent_command_enabled": self.commands.isChecked(),
             "ai_agent_activity_bubbles": self.activity.isChecked(),
             "ai_agent_done_notice": self.done.isChecked(),
             "ai_agent_sound_enabled": self.sound.isChecked(),
@@ -426,6 +436,7 @@ class AgentLinkPage(SettingsPage):
             self.dsh,
             self.events,
             self.animation,
+            self.commands,
             self.activity,
             self.done,
             self.sound,
@@ -443,6 +454,9 @@ class AgentLinkPage(SettingsPage):
             self.events.setChecked(bool(values.get("ai_agent_events_enabled", True)))
             self.animation.setChecked(
                 bool(values.get("ai_agent_animation_enabled", True))
+            )
+            self.commands.setChecked(
+                bool(values.get("ai_agent_command_enabled", True))
             )
             self.activity.setChecked(
                 bool(values.get("ai_agent_activity_bubbles", True))

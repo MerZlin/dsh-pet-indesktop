@@ -102,6 +102,8 @@ $pyiArgs = @(
     "--icon", "$root/assets/icon.ico",
     "--paths", $root,
     "--add-data", "$root/assets;assets",
+    # DSH 桥接/通道插件随包分发；设置页「安装/更新 DSH 通道」从这里拷贝。
+    "--add-data", "$root/integrations;integrations",
     # 右键菜单默认布局随包分发；PyInstaller 只收集 .py，漏掉这份 JSON 会让
     # 菜单退化成「桌宠设置/退出」（代码侧有内置兜底，但打包仍必须带文件）。
     "--add-data", "$root/petcore/menu_templates;petcore/menu_templates",

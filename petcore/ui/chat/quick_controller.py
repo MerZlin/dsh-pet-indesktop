@@ -12,6 +12,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, Qt, Signal
 
+from .controller import asr_reason_text
 from .quick import QuickChatBubble
 
 logger = logging.getLogger("petcore.ui.chat.quick")
@@ -39,6 +40,12 @@ class QuickChatController(QObject):
         self.host = host
         self._states: dict[tuple[str, int], _QuickState] = {}
         self._submit_registry: dict[str, QuickSubmit] = {}
+        self._recording_key: tuple[str, int] | None = None
+        self._asr = getattr(host, "asr", None)
+        if self._asr is not None:
+            self._asr.recording_changed.connect(self._on_asr_recording)
+            self._asr.finished.connect(self._on_asr_finished)
+            self._asr.failed.connect(self._on_asr_failed)
         self._token_received.connect(
             self._apply_token, Qt.ConnectionType.QueuedConnection
         )
@@ -167,9 +174,65 @@ class QuickChatController(QObject):
         bubble.open_full_requested.connect(
             lambda k=key: self.open_full_chat(k[0], pet_slot=k[1])
         )
+        bubble.record_requested.connect(lambda k=key: self._start_recording(k))
+        bubble.record_stopped.connect(lambda k=key: self._stop_recording(k))
+        if self._asr is None:
+            bubble.record_button.hide()
         state = _QuickState(owner=owner, slot=slot, bubble=bubble)
         self._states[key] = state
         return state
+
+    def _start_recording(self, key: tuple[str, int]) -> None:
+        asr = self._asr
+        state = self._states.get(key)
+        if asr is None or state is None:
+            return
+        if self._recording_key is not None:
+            state.bubble.set_recording(False, "上一段语音还没结束")
+            return
+        self._recording_key = key
+        if not asr.start():
+            self._recording_key = None
+            state.bubble.set_recording(False, "麦克风不可用或正在识别")
+            return
+        state.bubble.set_recording(True, "正在录音…再点一次停止")
+
+    def _stop_recording(self, key: tuple[str, int]) -> None:
+        if self._recording_key == key and self._asr is not None:
+            self._asr.stop()
+
+    def _on_asr_recording(self, recording: bool) -> None:
+        key = self._recording_key
+        state = self._states.get(key) if key is not None else None
+        if state is None:
+            return
+        state.bubble.set_recording(
+            bool(recording), "" if recording else "正在识别…"
+        )
+
+    def _on_asr_finished(self, text: str) -> None:
+        key = self._recording_key
+        self._recording_key = None
+        state = self._states.get(key) if key is not None else None
+        if state is None:
+            return
+        state.bubble.set_recording(False)
+        config = getattr(self.host, "config", None)
+        auto_send = False
+        if config is not None:
+            try:
+                auto_send = bool(config.get("asr_auto_send", False))
+            except Exception:  # noqa: BLE001
+                auto_send = False
+        state.bubble.insert_transcript(str(text or ""), auto_send=auto_send)
+
+    def _on_asr_failed(self, reason: str) -> None:
+        key = self._recording_key
+        self._recording_key = None
+        state = self._states.get(key) if key is not None else None
+        if state is None:
+            return
+        state.bubble.set_recording(False, asr_reason_text(reason))
 
     def _on_submit(self, key: tuple[str, int], text: str) -> None:
         text = str(text or "").strip()

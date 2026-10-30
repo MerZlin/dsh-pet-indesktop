@@ -1,0 +1,11 @@
+{
+  "meta": {
+    "title": "Pet Channel",
+    "description": "Let a desktop pet drive this agent over a local, token-guarded HTTP channel."
+  },
+  "config": {
+    "port": "Loopback port the channel listens on.",
+    "askApproval": "Ask the pet before runs that need approval.",
+    "sandboxMode": "Sandbox mode applied to sessions created by the pet."
+  }
+}

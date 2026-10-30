@@ -22,6 +22,32 @@ from .window import ChatWindow
 
 logger = logging.getLogger("petcore.ui.chat")
 
+#: ASR 失败原因 → 用户能读的一行（不显示异常文本）。
+_ASR_REASON_TEXT = {
+    "disabled": "语音输入已在设置里关闭",
+    "unsupported": "这台机器没有可用的系统语音识别",
+    "no_device": "没有检测到麦克风",
+    "busy": "上一段语音还在录制",
+    "open": "麦克风被其它程序占用",
+    "record": "录音失败",
+    "unconfigured": "还没有填写本地识别服务地址",
+    "insecure": "本地识别服务只允许 127.0.0.1 或 https",
+    "network": "识别服务连不上",
+    "timeout": "识别超时",
+    "auth": "识别服务需要鉴权",
+    "rate_limit": "识别请求过于频繁",
+    "protocol": "识别服务返回了无法识别的响应",
+    "empty": "没有识别出内容",
+    "unavailable": "系统识别不可用",
+    "too_large": "录音太长，无法识别",
+    "not_recording": "没有在录音",
+    "cancelled": "已取消录音",
+}
+
+
+def asr_reason_text(reason: object) -> str:
+    return _ASR_REASON_TEXT.get(str(reason or ""), "语音输入失败")
+
 
 @dataclass
 class _ChatState:
@@ -57,6 +83,12 @@ class ChatController(QObject):
         self._states: dict[tuple[str, int], _ChatState] = {}
         self._submit_registry: dict[str, Callable[[str, int], None]] = {}
         self._stop_registry: dict[str, Callable[[int], None]] = {}
+        self._recording_key: tuple[str, int] | None = None
+        self._asr = getattr(host, "asr", None)
+        if self._asr is not None:
+            self._asr.recording_changed.connect(self._on_asr_recording)
+            self._asr.finished.connect(self._on_asr_finished)
+            self._asr.failed.connect(self._on_asr_failed)
         self.token_received.connect(self._apply_token)
         self.reasoning_received.connect(self._apply_reasoning)
         self.status_received.connect(self._apply_status)
@@ -215,6 +247,8 @@ class ChatController(QObject):
             if follow is None
             else bool(follow)
         )
+        target_font_size = self._font_size()
+        target_font_family = self._font_family()
         wanted_owner = None if owner is None else str(owner)
         for (key_owner, _slot), state in self._states.items():
             if wanted_owner is not None and key_owner != wanted_owner:
@@ -235,6 +269,10 @@ class ChatController(QObject):
                     window.set_always_on_top(target_on_top)
                 if window.follows_pet() != target_follow:
                     window.set_follow_pet(target_follow)
+                if window.font_size() != target_font_size:
+                    window.set_font_size(target_font_size)
+                if window.font_family() != target_font_family:
+                    window.set_font_family(target_font_family)
             except RuntimeError:
                 logger.debug("chat window is already gone", exc_info=True)
 
@@ -333,6 +371,8 @@ class ChatController(QObject):
         window = ChatWindow(
             title=self._title(state.owner, state.slot),
             font_size=self._font_size(),
+            font_family=self._font_family(),
+            dsh=getattr(self.host, "dsh", None),
             character_id=self._character_for(state.slot),
             accent=str(self._config_get("chat_accent", "") or ""),
             background=str(self._config_get("chat_background", "") or ""),
@@ -349,6 +389,10 @@ class ChatController(QObject):
         )
         window.closed.connect(lambda s=key: self._on_closed(s))
         window.pin_toggled.connect(self._on_pin_toggled)
+        window.record_requested.connect(lambda key=key: self._start_recording(key))
+        window.record_stopped.connect(lambda key=key: self._stop_recording(key))
+        if self._asr is None:
+            window.composer.record_button.hide()
         try:
             sessions = state.store.list_sessions()
         except OSError:
@@ -364,9 +408,18 @@ class ChatController(QObject):
 
     def _font_size(self) -> int:
         try:
+            override = int(self._config_get("chat_font_size", 0) or 0)
+        except (TypeError, ValueError):
+            override = 0
+        if override > 0:
+            return override
+        try:
             return int(self._config_get("ui_font_size", 13))
         except (TypeError, ValueError):
             return 13
+
+    def _font_family(self) -> str:
+        return str(self._config_get("chat_font_family", "") or "").strip()
 
     def _save(self, state: _ChatState) -> None:
         try:
@@ -525,6 +578,58 @@ class ChatController(QObject):
                 state.window.load_messages(loaded.messages)
         state.active = False
         self._refresh_history(state)
+
+    # ---------------------------------------------------------------- 语音输入
+    def _window_for_key(self, key: tuple[str, int]) -> ChatWindow | None:
+        state = self._states.get(key)
+        return state.window if state is not None else None
+
+    def _start_recording(self, key: tuple[str, int]) -> None:
+        asr = self._asr
+        window = self._window_for_key(key)
+        if asr is None or window is None:
+            return
+        if self._recording_key is not None:
+            window.set_recording(False, "上一段语音还没结束")
+            return
+        self._recording_key = key
+        if not asr.start():
+            self._recording_key = None
+            window.set_recording(False, "麦克风不可用或正在识别")
+            return
+        window.set_recording(True, "正在录音…再点一次停止")
+
+    def _stop_recording(self, key: tuple[str, int]) -> None:
+        if self._recording_key != key or self._asr is None:
+            return
+        self._asr.stop()
+
+    def _on_asr_recording(self, recording: bool) -> None:
+        key = self._recording_key
+        if key is None:
+            return
+        window = self._window_for_key(key)
+        if window is None:
+            return
+        window.set_recording(bool(recording), "" if recording else "正在识别…")
+
+    def _on_asr_finished(self, text: str) -> None:
+        key = self._recording_key
+        self._recording_key = None
+        window = self._window_for_key(key) if key is not None else None
+        if window is None:
+            return
+        window.set_recording(False)
+        auto_send = bool(self._config_get("asr_auto_send", False))
+        window.insert_transcript(str(text or ""), auto_send=auto_send)
+
+    def _on_asr_failed(self, reason: str) -> None:
+        key = self._recording_key
+        self._recording_key = None
+        window = self._window_for_key(key) if key is not None else None
+        if window is None:
+            return
+        window.set_recording(False, asr_reason_text(reason))
 
     def _on_closed(self, key: tuple[str, int]) -> None:
         state = self._states.get(key)

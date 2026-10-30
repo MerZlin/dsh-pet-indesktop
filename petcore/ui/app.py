@@ -319,6 +319,14 @@ class CoreHost:
         self.mod_dirs = mod_dirs
         self.scheduler = QtScheduler()
         self.api_store = ApiStore(self.root)
+        if not self.api_store.path.exists():
+            try:
+                from ..api.presets import seed_services
+
+                for preset_service in seed_services():
+                    self.api_store.upsert(preset_service)
+            except Exception:  # noqa: BLE001 - 播种失败不阻塞启动
+                logger.warning("api service seed failed", exc_info=True)
         self.api_credentials = KeyringCredentials()
         self.account = AccountService(self.api_store, self.api_credentials)
         self.balance_presenter = BalancePresenter(
@@ -337,6 +345,14 @@ class CoreHost:
         self.speech = SpeechService(
             self.root, config=self.config, credentials=self.api_credentials
         )
+        from ..speech.asr import AsrService
+        from .asr_channel import AsrChannel
+
+        self.asr_service = AsrService(self.config)
+        self.asr = AsrChannel(self.asr_service, self.config)
+        from ..net.dsh import DshClient
+
+        self.dsh = DshClient()
         from ..community import CommunityService
 
         self.community = CommunityService(self.root, credentials=self.api_credentials)
@@ -1505,6 +1521,12 @@ class CoreHost:
 
     def pause_for_session(self) -> None:
         """锁屏/睡眠：停播放与碰撞（窗口不隐藏，解锁后原地续播）。"""
+        asr = getattr(self, "asr", None)
+        if asr is not None:
+            try:
+                asr.cancel()
+            except Exception:  # noqa: BLE001
+                logger.debug("pause asr failed", exc_info=True)
         manager = getattr(self, "pets", None)
         if manager is not None:
             try:
@@ -1544,6 +1566,12 @@ class CoreHost:
         if self.island_field is not None:
             self.island_field.reset()
         self.balance_presenter.shutdown()
+        asr = getattr(self, "asr", None)
+        if asr is not None:
+            try:
+                asr.shutdown()
+            except Exception:  # noqa: BLE001
+                logger.debug("asr shutdown failed", exc_info=True)
         self._update_executor.shutdown(wait=False, cancel_futures=True)
         self.worker_host.shutdown_all()
         report = self.market_jobs.shutdown_all(2000)

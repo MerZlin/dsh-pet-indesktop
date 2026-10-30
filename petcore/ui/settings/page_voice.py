@@ -23,7 +23,14 @@ from PySide6.QtWidgets import (
 from ...contracts.speech import SpeechRequest
 from ...net.errors import describe as describe_net_error
 from ...net.tts import PROVIDER_SPECS
-from .base import SettingsPage, make_button, make_slider, make_spin, value_field
+from .base import (
+    SettingsPage,
+    make_button,
+    make_checkbox,
+    make_slider,
+    make_spin,
+    value_field,
+)
 
 logger = logging.getLogger("petcore.ui.settings.voice")
 
@@ -49,6 +56,14 @@ CONFIG_KEYS = {
     "local_model": "speech_local_model",
     "local_format": "speech_local_format",
     "local_timeout": "speech_local_timeout",
+    "asr_enabled": "asr_enabled",
+    "asr_engine": "asr_engine",
+    "asr_endpoint": "asr_endpoint",
+    "asr_model": "asr_model",
+    "asr_language": "asr_language",
+    "asr_auto_send": "asr_auto_send",
+    "asr_max_seconds": "asr_max_seconds",
+    "asr_timeout": "asr_timeout",
     "voice_edge": "speech_voice",
     "voice_sapi": "speech_sapi_voice",
     "voice_doubao": "speech_doubao_voice",
@@ -88,6 +103,7 @@ class VoicePage(SettingsPage):
         self._building = True
         self._build_backend()
         self._build_local()
+        self._build_asr()
         self._build_secrets()
         self._build_cache()
         self.add_note(
@@ -244,7 +260,7 @@ class VoicePage(SettingsPage):
         return slider, value
 
     def _build_local(self) -> None:
-        card = self.section("本地部署模型（HTTP）")
+        card = self.section("自定义 / 本地部署 TTS（HTTP）")
         self.local_endpoint = QLineEdit(self)
         self.local_endpoint.setMinimumWidth(300)
         self.local_endpoint.setPlaceholderText("http://127.0.0.1:9880")
@@ -299,6 +315,89 @@ class VoicePage(SettingsPage):
         self.local_model.textChanged.connect(self._on_changed)
         self.local_format.currentIndexChanged.connect(self._on_changed)
         self.local_timeout.valueChanged.connect(self._on_changed)
+
+    def _build_asr(self) -> None:
+        card = self.section("语音输入")
+        self.asr_enabled = make_checkbox(self)
+        self.asr_enabled.setChecked(bool(self.config().get("asr_enabled", True)))
+        self.asr_enabled.toggled.connect(self._on_changed)
+        card.add_row(
+            "启用语音输入",
+            self.asr_enabled,
+            "对话窗/快速对话的话筒按钮；关闭后不录音、不识别。",
+        )
+
+        self.asr_engine = QComboBox(self)
+        self.asr_engine.addItem("系统识别（Windows，免配置）", "sapi")
+        self.asr_engine.addItem("本地 ASR 服务（OpenAI 兼容）", "http")
+        self._select(self.asr_engine, str(self.config().get("asr_engine") or "sapi"))
+        self.asr_engine.currentIndexChanged.connect(self._on_asr_engine_changed)
+        card.add_row(
+            "识别引擎",
+            self.asr_engine,
+            "系统识别跟随 Windows 中文语言包；本地服务质量更好，需要自己起服务。",
+        )
+
+        self.asr_endpoint = QLineEdit(self)
+        self.asr_endpoint.setMinimumWidth(300)
+        self.asr_endpoint.setPlaceholderText(
+            "http://127.0.0.1:8000/v1/audio/transcriptions"
+        )
+        self.asr_endpoint.setText(str(self.config().get("asr_endpoint") or ""))
+        self.asr_endpoint.textChanged.connect(self._on_changed)
+        card.add_row(
+            "本地服务地址",
+            self.asr_endpoint,
+            "OpenAI 兼容 /v1/audio/transcriptions；只直连，不走系统代理。",
+            expand=True,
+        )
+
+        self.asr_model = QLineEdit(self)
+        self.asr_model.setPlaceholderText("whisper-1 / FunASR 模型名（可留空）")
+        self.asr_model.setText(str(self.config().get("asr_model") or ""))
+        self.asr_model.textChanged.connect(self._on_changed)
+        card.add_row("模型名", self.asr_model, "作为 multipart 的 model 字段发送；留空由服务端默认。")
+
+        self.asr_language = QLineEdit(self)
+        self.asr_language.setPlaceholderText("zh")
+        self.asr_language.setText(str(self.config().get("asr_language") or "zh"))
+        self.asr_language.setMaximumWidth(100)
+        self.asr_language.textChanged.connect(self._on_changed)
+        card.add_row("语言", self.asr_language, "通常保持 zh。")
+
+        self.asr_auto_send = make_checkbox(self)
+        self.asr_auto_send.setChecked(bool(self.config().get("asr_auto_send", False)))
+        self.asr_auto_send.toggled.connect(self._on_changed)
+        card.add_row(
+            "识别后自动发送",
+            self.asr_auto_send,
+            "关闭时只把文字填进输入框，由你确认后发送。",
+        )
+
+        self.asr_max_seconds = QSpinBox(self)
+        self.asr_max_seconds.setRange(3, 60)
+        self.asr_max_seconds.setSuffix(" 秒")
+        self.asr_max_seconds.setValue(int(self.config().get("asr_max_seconds") or 30))
+        self.asr_max_seconds.valueChanged.connect(self._on_changed)
+        card.add_row("最长录音", self.asr_max_seconds, "到点自动停止并开始识别。")
+
+        self.asr_timeout = QSpinBox(self)
+        self.asr_timeout.setRange(5, 120)
+        self.asr_timeout.setSuffix(" 秒")
+        self.asr_timeout.setValue(int(float(self.config().get("asr_timeout") or 30)))
+        self.asr_timeout.valueChanged.connect(self._on_changed)
+        card.add_row("识别超时", self.asr_timeout, "本地服务首次加载模型可能较慢。")
+
+        self._sync_asr_rows()
+
+    def _on_asr_engine_changed(self, *_args) -> None:
+        self._sync_asr_rows()
+        self._on_changed()
+
+    def _sync_asr_rows(self, *_args) -> None:
+        http = str(self.asr_engine.currentData() or "sapi") == "http"
+        for widget in (self.asr_endpoint, self.asr_model, self.asr_language, self.asr_timeout):
+            widget.setEnabled(http)
 
     def _build_secrets(self) -> None:
         card = self.section("在线后端凭据")
@@ -442,6 +541,14 @@ class VoicePage(SettingsPage):
             "local_model": str(config.get("speech_local_model") or ""),
             "local_format": str(config.get("speech_local_format") or "mp3"),
             "local_timeout": int(float(config.get("speech_local_timeout") or 30)),
+            "asr_enabled": bool(config.get("asr_enabled", True)),
+            "asr_engine": str(config.get("asr_engine") or "sapi"),
+            "asr_endpoint": str(config.get("asr_endpoint") or ""),
+            "asr_model": str(config.get("asr_model") or ""),
+            "asr_language": str(config.get("asr_language") or "zh"),
+            "asr_auto_send": bool(config.get("asr_auto_send", False)),
+            "asr_max_seconds": int(config.get("asr_max_seconds") or 30),
+            "asr_timeout": int(float(config.get("asr_timeout") or 30)),
             "voice_edge": str(config.get("speech_voice") or ""),
             "voice_sapi": str(config.get("speech_sapi_voice") or ""),
             "voice_doubao": str(config.get("speech_doubao_voice") or ""),
@@ -462,6 +569,14 @@ class VoicePage(SettingsPage):
             "local_model": self.local_model.text().strip(),
             "local_format": str(self.local_format.currentData() or "mp3"),
             "local_timeout": int(self.local_timeout.value()),
+            "asr_enabled": bool(self.asr_enabled.isChecked()),
+            "asr_engine": str(self.asr_engine.currentData() or "sapi"),
+            "asr_endpoint": self.asr_endpoint.text().strip(),
+            "asr_model": self.asr_model.text().strip(),
+            "asr_language": self.asr_language.text().strip() or "zh",
+            "asr_auto_send": bool(self.asr_auto_send.isChecked()),
+            "asr_max_seconds": int(self.asr_max_seconds.value()),
+            "asr_timeout": int(self.asr_timeout.value()),
             "voice_edge": str(self.config().get("speech_voice") or ""),
             "voice_sapi": str(self.config().get("speech_sapi_voice") or ""),
             "voice_doubao": str(self.config().get("speech_doubao_voice") or ""),
@@ -483,7 +598,12 @@ class VoicePage(SettingsPage):
         }.get(self._backend(), "voice_edge")
 
     def _write(self, key: str, value) -> None:
-        if key == "speech_rate" or key == "speech_volume" or key == "speech_local_timeout":
+        if key in {
+            "speech_rate",
+            "speech_volume",
+            "speech_local_timeout",
+            "asr_timeout",
+        }:
             value = float(value)
         config = self.config()
         try:
@@ -527,6 +647,9 @@ class VoicePage(SettingsPage):
             (self.local_endpoint, "local_endpoint"),
             (self.local_path, "local_path"),
             (self.local_model, "local_model"),
+            (self.asr_endpoint, "asr_endpoint"),
+            (self.asr_model, "asr_model"),
+            (self.asr_language, "asr_language"),
         ):
             field.blockSignals(True)
             field.setText(str(values.get(key) or ""))
@@ -549,6 +672,15 @@ class VoicePage(SettingsPage):
             self.local_path.setText(self._initial["local_path"])
             self.local_model.setText(self._initial["local_model"])
             self.local_timeout.setValue(int(self._initial["local_timeout"]))
+            self.asr_enabled.setChecked(bool(self._initial["asr_enabled"]))
+            self._select(self.asr_engine, self._initial["asr_engine"])
+            self.asr_endpoint.setText(self._initial["asr_endpoint"])
+            self.asr_model.setText(self._initial["asr_model"])
+            self.asr_language.setText(self._initial["asr_language"])
+            self.asr_auto_send.setChecked(bool(self._initial["asr_auto_send"]))
+            self.asr_max_seconds.setValue(int(self._initial["asr_max_seconds"]))
+            self.asr_timeout.setValue(int(self._initial["asr_timeout"]))
+            self._sync_asr_rows()
             self._sync_voice_options()
         finally:
             self._building = False
@@ -724,4 +856,10 @@ class VoicePage(SettingsPage):
             "本地模型",
             "本地部署",
             "缓存",
+            "语音输入",
+            "麦克风",
+            "录音",
+            "识别",
+            "asr",
+            "whisper",
         ]

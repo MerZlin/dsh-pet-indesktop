@@ -22,12 +22,14 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpacerItem,
     QStackedLayout,
+    QStackedWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from . import themes
+from .dsh_view import DshView
 from .icons import tool_icon
 from .styles import DEFAULT_ACCENT, clamp_font_size, modern_stylesheet, safe_accent
 from .widgets import (
@@ -56,12 +58,16 @@ class ChatWindow(QDialog):
     session_selected = Signal(str)
     closed = Signal()
     pin_toggled = Signal(bool)
+    record_requested = Signal()
+    record_stopped = Signal()
 
     def __init__(
         self,
         *,
         title: str = "AI 对话",
         font_size: int = 13,
+        font_family: str = "",
+        dsh=None,
         character_id: str = "default",
         accent: str = DEFAULT_ACCENT,
         background: str = "",
@@ -74,6 +80,8 @@ class ChatWindow(QDialog):
         super().__init__(parent)
         self.character_id = str(character_id or "default")
         self._font_size = clamp_font_size(font_size)
+        self._font_family = str(font_family or "").strip()
+        self._dsh_client = dsh
         self._base_accent = safe_accent(accent)
         self.accent_color = self._base_accent
         self._bg_value = str(background or "").strip()
@@ -280,6 +288,12 @@ class ChatWindow(QDialog):
     def background_value(self) -> str:
         return self._bg_value
 
+    def font_size(self) -> int:
+        return self._font_size
+
+    def font_family(self) -> str:
+        return self._font_family
+
     def has_background(self) -> bool:
         return self._bg_pixmap is not None
 
@@ -287,6 +301,18 @@ class ChatWindow(QDialog):
     def set_font_size(self, size: int) -> None:
         self._font_size = clamp_font_size(size)
         self._style()
+
+    def set_font_family(self, family: str) -> None:
+        self._font_family = str(family or "").strip()
+        self._style()
+
+    def set_recording(self, recording: bool, hint: str = "") -> None:
+        self.composer.set_recording(bool(recording), hint)
+
+    def insert_transcript(self, text: str, *, auto_send: bool = False) -> None:
+        self.composer.insert_text(text)
+        if auto_send:
+            self.composer.send_requested.emit()
 
     def set_accent(self, accent: str) -> None:
         self._base_accent = safe_accent(accent)
@@ -331,7 +357,11 @@ class ChatWindow(QDialog):
         overlay = ""
         if self._bg_pixmap is not None:
             overlay = themes.build_modern_custom_overlay_qss(self.accent_color)
-        self.setStyleSheet(modern_stylesheet(self.accent_color, self._font_size, overlay))
+        self.setStyleSheet(
+            modern_stylesheet(
+                self.accent_color, self._font_size, overlay, self._font_family
+            )
+        )
         self._set_background_surface_transparency(self._bg_pixmap is not None)
         self._apply_header_avatar_style()
         self.update()
@@ -518,6 +548,14 @@ class ChatWindow(QDialog):
         self.sidebar_toggle_button.setIcon(tool_icon(self.sidebar_toggle_button, "sidebar", 17))
         self.sidebar_toggle_button.setToolTip("显示或隐藏会话侧栏")
         self.sidebar_toggle_button.setAccessibleName("显示或隐藏会话侧栏")
+        self.view_button = QToolButton(self.title_bar)
+        self.view_button.setObjectName("view-toggle-button")
+        self.view_button.setText("DSH")
+        self.view_button.setCheckable(True)
+        self.view_button.setToolTip("切换到 DSH 对话")
+        self.view_button.setAccessibleName("切换 AI / DSH 对话")
+        self.view_button.clicked.connect(self._on_view_toggled)
+        title_layout.addWidget(self.view_button)
         title_layout.addWidget(self.sidebar_toggle_button)
         self.pin_button = QToolButton(self.title_bar)
         self.pin_button.setObjectName("window-pin-button")
@@ -541,10 +579,23 @@ class ChatWindow(QDialog):
         title_layout.addWidget(self.close_button)
         chat_main_layout.addWidget(self.title_bar)
 
+        self.view_stack = QStackedWidget(chat_main)
+        self.view_stack.setObjectName("chat-view-stack")
+        self.ai_view = QWidget(self.view_stack)
+        self.ai_view.setObjectName("chat-ai-view")
+        ai_layout = QVBoxLayout(self.ai_view)
+        ai_layout.setContentsMargins(0, 0, 0, 0)
+        ai_layout.setSpacing(0)
+        self.view_stack.addWidget(self.ai_view)
+        self.dsh_view = DshView(self._dsh_client, self.view_stack)
+        self.dsh_view.context_ready.connect(self._use_dsh_context)
+        self.view_stack.addWidget(self.dsh_view)
+        chat_main_layout.addWidget(self.view_stack, 1)
+
         self.content_top_spacer = QSpacerItem(
             0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
         )
-        chat_main_layout.addSpacerItem(self.content_top_spacer)
+        ai_layout.addSpacerItem(self.content_top_spacer)
 
         self.scroll = QScrollArea(chat_main)
         self.scroll.setObjectName("message-scroll")
@@ -588,7 +639,7 @@ class ChatWindow(QDialog):
         self.scroll.setAutoFillBackground(True)
         self.scroll.viewport().installEventFilter(self)
         self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        chat_main_layout.addWidget(self.scroll)
+        ai_layout.addWidget(self.scroll)
 
         self.composer_card = QFrame(chat_main)
         self.composer_card.setObjectName("floating-composer")
@@ -605,11 +656,11 @@ class ChatWindow(QDialog):
         self.input = self.composer.input
         self.send_button = self.composer.send
         self.send = self.send_button
-        chat_main_layout.addWidget(self.composer_card)
+        ai_layout.addWidget(self.composer_card)
         self.content_bottom_spacer = QSpacerItem(
             0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
         )
-        chat_main_layout.addSpacerItem(self.content_bottom_spacer)
+        ai_layout.addSpacerItem(self.content_bottom_spacer)
 
         self.sidebar_scrim = SidebarScrim(self.phone_shell)
         self.sidebar_scrim.setObjectName("sidebar-scrim")
@@ -623,6 +674,29 @@ class ChatWindow(QDialog):
         self._flush_timer.setInterval(FLUSH_INTERVAL_MS)
         self._flush_timer.timeout.connect(self._flush_stream)
 
+    def _on_view_toggled(self, checked: bool) -> None:
+        self.set_view("dsh" if checked else "ai")
+
+    def set_view(self, view: str) -> None:
+        dsh = str(view or "").lower() == "dsh"
+        self.view_stack.setCurrentWidget(self.dsh_view if dsh else self.ai_view)
+        self.view_button.blockSignals(True)
+        self.view_button.setChecked(dsh)
+        self.view_button.blockSignals(False)
+        self.view_button.setText("AI" if dsh else "DSH")
+        self.view_button.setToolTip("切回 AI 对话" if dsh else "切换到 DSH 对话")
+        if dsh:
+            self.dsh_view.activate()
+        else:
+            self.dsh_view.deactivate()
+
+    def current_view(self) -> str:
+        return "dsh" if self.view_stack.currentWidget() is self.dsh_view else "ai"
+
+    def _use_dsh_context(self, text: str) -> None:
+        self.set_view("ai")
+        self.composer.insert_text(str(text or ""))
+
     def _connect(self) -> None:
         self.minimize_button.clicked.connect(self.showMinimized)
         self.close_button.clicked.connect(self.close)
@@ -634,6 +708,8 @@ class ChatWindow(QDialog):
         self.session_list.currentRowChanged.connect(self._on_session_row_changed)
         self.session_list.itemClicked.connect(self._on_session_item_clicked)
         self.composer.send_requested.connect(self._on_send_requested)
+        self.composer.record_requested.connect(self.record_requested)
+        self.composer.record_stopped.connect(self.record_stopped)
 
     # ---------------------------------------------------------------- 侧栏
     def set_history(self, sessions, current_id: str = "") -> None:
@@ -1180,11 +1256,14 @@ class ChatWindow(QDialog):
         # 而不是停在上次关闭时的位置。
         if not event.spontaneous():
             self._bottom(always=True)
+            if self.current_view() == "dsh":
+                self.dsh_view.activate()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         """关闭=隐藏并复用窗口：收尾流式状态，保留会话供下次打开。"""
         self._flush_timer.stop()
         self._follow_timer.stop()
+        self.dsh_view.deactivate()
         self.closed.emit()
         self.hide()
         event.ignore()

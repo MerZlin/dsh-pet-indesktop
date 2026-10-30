@@ -97,6 +97,13 @@ def _draw(name: str, painter: QPainter, color: QColor) -> None:
         painter.drawArc(QRectF(2.4, 2.4, 11.2, 11.2), 35 * 16, 285 * 16)
         painter.drawLine(QPointF(10.8, 2.8), QPointF(13.8, 3.2))
         painter.drawLine(QPointF(13.8, 3.2), QPointF(12.4, 6.0))
+    elif name == "mic":
+        painter.drawRoundedRect(QRectF(6.0, 2.0, 4.0, 7.0), 2.0, 2.0)
+        path.moveTo(3.8, 7.6)
+        path.cubicTo(3.8, 12.8, 12.2, 12.8, 12.2, 7.6)
+        painter.drawPath(path)
+        painter.drawLine(QPointF(8.0, 12.3), QPointF(8.0, 14.2))
+        painter.drawLine(QPointF(6.0, 14.2), QPointF(10.0, 14.2))
     else:
         painter.drawEllipse(QPointF(8.0, 8.0), 5.5, 5.5)
 

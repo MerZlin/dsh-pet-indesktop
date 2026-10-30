@@ -345,3 +345,34 @@ def test_dispose_cancels_preview_owner(app, tmp_path: Path) -> None:
     page.dispose()
     assert "core.settings.voice" in host.ports.speech.cancelled
     page.deleteLater()
+
+
+def test_asr_settings_write_and_discard(app, tmp_path: Path) -> None:
+    host = FakeHost(tmp_path)
+    page = VoicePage(host)
+    try:
+        assert page.asr_engine.currentData() == "sapi"
+        assert page.asr_endpoint.isEnabled() is False
+
+        page.asr_engine.setCurrentIndex(page.asr_engine.findData("http"))
+        assert page.asr_endpoint.isEnabled() is True
+        page.asr_endpoint.setText("http://127.0.0.1:8000/v1/audio/transcriptions")
+        page.asr_model.setText("whisper-1")
+        page.asr_auto_send.setChecked(True)
+        page.asr_max_seconds.setValue(20)
+
+        assert host.config.get("asr_engine") == "http"
+        assert host.config.get("asr_endpoint").endswith("/v1/audio/transcriptions")
+        assert host.config.get("asr_model") == "whisper-1"
+        assert host.config.get("asr_auto_send") is True
+        assert host.config.get("asr_max_seconds") == 20
+        assert page.dirty() is True
+
+        page.discard_changes()
+        assert host.config.get("asr_engine") == "sapi"
+        assert page.asr_engine.currentData() == "sapi"
+        assert page.asr_endpoint.text() == ""
+        assert page.asr_endpoint.isEnabled() is False
+        assert page.dirty() is False
+    finally:
+        page.deleteLater()

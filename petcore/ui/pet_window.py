@@ -23,7 +23,8 @@ from ..engine.behavior import (
     normalize_weights,
 )
 from ..engine.catalog import GraphCatalog
-from ..engine.enums import AnimatType, GraphType
+from ..engine.animation_policy import AnimationPolicy, policy_from_values
+from ..engine.enums import AnimatType, GraphType, ModeType
 from ..engine.head_pat import (
     HEAD_PAT_DEFAULT_MODE,
     HeadPatTracker,
@@ -335,7 +336,9 @@ class PetWindow(QWidget):
         self.catalog = GraphCatalog(character.animations)
         self.player = AnimationPlayer(self.catalog)
         self.director = BehaviorDirector(
-            self.catalog, weights_provider=self._behavior_weights
+            self.catalog,
+            weights_provider=self._behavior_weights,
+            policy_provider=self._animation_policy,
         )
         self.state.current = None
         self.state.dragging = False
@@ -445,6 +448,8 @@ class PetWindow(QWidget):
 
     def _play_idle(self) -> None:
         spec = self.player.play(GraphType.IDEL, animat=AnimatType.B_LOOP)
+        if spec is not None and not self._animation_policy().auto_allowed(spec):
+            spec = None
         if spec is None:
             action = self.director.idle() or self.director.choose()
             spec = action.spec if action is not None else None
@@ -629,6 +634,27 @@ class PetWindow(QWidget):
             config.get("anim_weight_act"),
             config.get("anim_weight_move"),
         )
+
+    def _animation_policy(self) -> AnimationPolicy:
+        config = self.config
+        return policy_from_values(
+            auto_off=config.get("anim_auto_off") or (),
+            blocked=config.get("anim_blocked") or (),
+            random_auto=config.get("anim_random_auto", True),
+        )
+
+    def _pick_manual(self, graph: GraphType, animat: AnimatType) -> AnimationSpec | None:
+        """按「允许播放」策略挑一个手动入口素材（点击/拖拽/抛掷/摸头）。"""
+        policy = self._animation_policy()
+        specs = [
+            spec
+            for spec in self.catalog.specs_for(graph)
+            if spec.animat is animat and policy.manual_allowed(spec)
+        ]
+        if not specs:
+            return None
+        normal = [spec for spec in specs if spec.mode is ModeType.NOMAL]
+        return self.director.rng.choice(normal or specs)
 
     def _gap_active(self) -> bool:
         return self._gap_until > 0.0 and time.monotonic() < self._gap_until
@@ -1191,7 +1217,16 @@ class PetWindow(QWidget):
         local = position.toPoint()
         x, y, inside = self._head_pat_hit(local)
         busy = self._head_pat_is_busy()
-        candidates = () if busy else self._head_pat_candidates()
+        policy = self._animation_policy()
+        candidates = (
+            ()
+            if busy
+            else tuple(
+                spec
+                for spec in self._head_pat_candidates()
+                if policy.manual_allowed(spec)
+            )
+        )
         if not candidates and not busy:
             self._head_pat_tracker.reset()
             if not self._head_pat_no_spec_logged:
@@ -1326,7 +1361,7 @@ class PetWindow(QWidget):
             self._cancel_animation_gap()
             self._cancel_move_plan()
             self.motion.begin_drag(self.x(), self.y())
-            spec = self.catalog.find_for(GraphType.RAISED_STATIC, AnimatType.SINGLE)
+            spec = self._pick_manual(GraphType.RAISED_STATIC, AnimatType.SINGLE)
             if spec is not None:
                 self._play_spec(spec, "drag")
         x, y = self._clamp_position(
@@ -1357,7 +1392,7 @@ class PetWindow(QWidget):
         self._cancel_animation_gap()
         self._cancel_move_plan()
         self.motion.begin_drag(self.x(), self.y())
-        spec = self.catalog.find_for(GraphType.RAISED_STATIC, AnimatType.SINGLE)
+        spec = self._pick_manual(GraphType.RAISED_STATIC, AnimatType.SINGLE)
         if spec is not None:
             self._play_spec(spec, "drag")
 
@@ -1541,12 +1576,12 @@ class PetWindow(QWidget):
         self._edge_probe.on_release(True)
 
     def _play_throw_animation(self) -> None:
-        spec = self.catalog.find_for(GraphType.RAISED_DYNAMIC, AnimatType.B_LOOP)
+        spec = self._pick_manual(GraphType.RAISED_DYNAMIC, AnimatType.B_LOOP)
         if spec is None:
-            spec = self.catalog.find_for(GraphType.RAISED_DYNAMIC, AnimatType.SINGLE)
+            spec = self._pick_manual(GraphType.RAISED_DYNAMIC, AnimatType.SINGLE)
         if spec is None:
             # 主分支回退到 drag 悬空素材；没有才回 idle。
-            spec = self.catalog.find_for(GraphType.RAISED_STATIC, AnimatType.SINGLE)
+            spec = self._pick_manual(GraphType.RAISED_STATIC, AnimatType.SINGLE)
         if spec is not None:
             self._play_spec(spec, "throw" if spec.graph is GraphType.RAISED_DYNAMIC else "drag")
         else:
@@ -1577,7 +1612,7 @@ class PetWindow(QWidget):
                     self._notify_click()
                 return
             self.effects.arm_spin_after_click()
-        spec = self.catalog.find_for(GraphType.TOUCH_BODY, AnimatType.SINGLE)
+        spec = self._pick_manual(GraphType.TOUCH_BODY, AnimatType.SINGLE)
         if spec is not None:
             self._play_spec(spec, "click")
         # 点击素材可能同步解码；Q 弹在切换之后再起表，保证 220ms 真的可见。
@@ -1961,6 +1996,8 @@ class PetWindow(QWidget):
         )
         if spec is None:
             return False
+        if not self._animation_policy().manual_allowed(spec):
+            return False
         self._play_spec(spec, self._kind_for_spec(spec))
         self._loop_active = bool(loop)
         return True
@@ -2007,8 +2044,14 @@ class PetWindow(QWidget):
             ordered = sorted(specs, key=lambda item: item.name)
             if 0 <= variant < len(ordered):
                 spec = ordered[variant]
+        policy = self._animation_policy()
         if spec is None:
-            spec = self.director.rng.choice(specs)
+            allowed = [item for item in specs if policy.manual_allowed(item)]
+            if not allowed:
+                return False
+            spec = self.director.rng.choice(allowed)
+        if not policy.manual_allowed(spec):
+            return False
         self._cancel_animation_gap()
         self._play_spec(spec, "act")
         return True

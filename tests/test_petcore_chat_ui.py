@@ -374,9 +374,26 @@ def test_font_size_and_background_follow_config(controller) -> None:
     assert "rgba(248, 250, 253, 218)" in window.styleSheet()
 
     window.set_font_size(99)
-    assert "#20242b; font-size: 18px;" in window.styleSheet()
+    assert "#20242b; font-size: 24px;" in window.styleSheet()
     window.set_font_size(1)
     assert "#20242b; font-size: 10px;" in window.styleSheet()
+
+
+def test_chat_font_override_is_chat_only_and_live(controller) -> None:
+    controller.host.config.set("ui_font_size", 13)
+    controller.host.config.set("chat_font_size", 20)
+    controller.host.config.set("chat_font_family", "Microsoft YaHei")
+    window = _open(controller)
+
+    assert "#20242b; font-size: 20px;" in window.styleSheet()
+    assert 'font-family: "Microsoft YaHei", sans-serif;' in window.styleSheet()
+    assert controller.host.config.get("ui_font_size") == 13
+
+    controller.host.config.set("chat_font_size", 16)
+    controller.host.config.set("chat_font_family", "")
+    controller.apply_appearance()
+    assert "#20242b; font-size: 16px;" in window.styleSheet()
+    assert 'font-family: "SF Pro Text"' in window.styleSheet()
 
 
 def test_pin_button_toggles_always_on_top(controller) -> None:
@@ -533,3 +550,40 @@ def test_apply_appearance_rebinds_a_recreated_pet_window(controller) -> None:
     finally:
         pet.deleteLater()
         replacement.deleteLater()
+
+
+def test_composer_mic_button_emits_record_signals(controller) -> None:
+    window = _open(controller)
+    requested: list[bool] = []
+    stopped: list[bool] = []
+    window.record_requested.connect(lambda: requested.append(True))
+    window.record_stopped.connect(lambda: stopped.append(True))
+
+    window.composer.record_button.click()
+    assert requested == [True]
+
+    window.set_recording(True, "正在录音…")
+    assert window.composer.record_button.isChecked() is True
+    window.composer.record_button.click()
+    assert stopped == [True]
+    window.set_recording(False)
+    assert window.composer.record_button.isChecked() is False
+
+
+def test_view_toggle_switches_to_dsh_and_back(controller) -> None:
+    window = _open(controller)
+    assert window.current_view() == "ai"
+    window.set_view("dsh")
+    assert window.current_view() == "dsh"
+    assert window.view_button.text() == "AI"
+    window.set_view("ai")
+    assert window.current_view() == "ai"
+    assert window.view_button.text() == "DSH"
+
+
+def test_dsh_context_is_inserted_into_ai_composer(controller) -> None:
+    window = _open(controller)
+    window.set_view("dsh")
+    window._use_dsh_context("DSH：你好")
+    assert window.current_view() == "ai"
+    assert "DSH：你好" in window.composer.input.toPlainText()

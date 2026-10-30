@@ -22,6 +22,8 @@ class ApiMetadata:
     timeout: int = 60
     balance_protocol: str = "none"
     version: str = ""
+    models_path: str = "/v1/models"
+    extra_headers: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

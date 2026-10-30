@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from ..net.errors import PROTOCOL, classify_exception, classify_http_status, http_error
 from ..net.http import urlopen
+from .headers import extra_headers as merge_extra_headers
 
 OK = "ok"
 
@@ -40,7 +41,14 @@ def probe_text(service, api_key: str, *, timeout: float | None = None) -> ProbeR
     context = None
     if not bool(getattr(service, "verify_ssl", True)):
         context = _insecure_context()
-    request = _build_request(f"{base_url}{chat_path}", model, str(api_key or ""))
+    request = _build_request(
+        f"{base_url}{chat_path}",
+        model,
+        str(api_key or ""),
+        base_url=base_url,
+        version=str(getattr(service, "version", "") or ""),
+        extra_headers=dict(getattr(service, "extra_headers", {}) or {}),
+    )
     try:
         response = urlopen(request, timeout=float(seconds), context=context)
     except urllib.error.HTTPError as exc:
@@ -64,7 +72,15 @@ def probe_text(service, api_key: str, *, timeout: float | None = None) -> ProbeR
     return ProbeResult(classify_http_status(status), http_status=status)
 
 
-def _build_request(url: str, model: str, api_key: str) -> urllib.request.Request:
+def _build_request(
+    url: str,
+    model: str,
+    api_key: str,
+    *,
+    base_url: str = "",
+    version: str = "",
+    extra_headers: dict[str, str] | None = None,
+) -> urllib.request.Request:
     body = json.dumps(
         {
             "model": model,
@@ -73,11 +89,16 @@ def _build_request(url: str, model: str, api_key: str) -> urllib.request.Request
             "stream": False,
         }
     ).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = merge_extra_headers(
+        base_url or url, version=version, headers=extra_headers
+    )
+    headers.update(
+        {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+    )
     return urllib.request.Request(url, data=body, headers=headers, method="POST")
 
 

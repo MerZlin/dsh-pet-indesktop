@@ -689,6 +689,8 @@ class AttachmentChip(QFrame):
 class ChatComposer(QFrame):
     send_requested = Signal()
     notice = Signal(str)  # 附件超限等需要明确提示用户的事件
+    record_requested = Signal()
+    record_stopped = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -728,6 +730,12 @@ class ChatComposer(QFrame):
         )
         self.attach_button.clicked.connect(self.choose_attachments)
         footer.addWidget(self.attach_button)
+        self.record_button = tool_button(
+            self.toolbar, "composer-record-button", "mic", "语音输入"
+        )
+        self.record_button.setCheckable(True)
+        self.record_button.clicked.connect(self._toggle_record)
+        footer.addWidget(self.record_button)
         self.hint = QLabel("内容会保存到当前角色的本地会话")
         self.hint.setObjectName("composer-hint")
         footer.addWidget(self.hint)
@@ -765,6 +773,43 @@ class ChatComposer(QFrame):
             self._update_enabled()
         if warnings:
             self._flash_notice("；".join(warnings))
+
+    def _toggle_record(self, checked: bool) -> None:
+        if checked:
+            self.record_requested.emit()
+        else:
+            self.record_stopped.emit()
+
+    def set_recording(self, recording: bool, hint: str = "") -> None:
+        self.record_button.blockSignals(True)
+        self.record_button.setChecked(bool(recording))
+        self.record_button.blockSignals(False)
+        self.record_button.setProperty("recording", bool(recording))
+        self.record_button.setIcon(
+            tool_icon(
+                self.record_button,
+                "stop" if recording else "mic",
+                17,
+                dark=bool(recording),
+            )
+        )
+        label = "停止录音" if recording else "语音输入"
+        self.record_button.setToolTip(label)
+        self.record_button.setAccessibleName(label)
+        style = self.record_button.style()
+        style.unpolish(self.record_button)
+        style.polish(self.record_button)
+        if hint:
+            self._flash_notice(hint)
+
+    def insert_text(self, text: str) -> None:
+        value = str(text or "").strip()
+        if not value:
+            return
+        current = self.input.toPlainText()
+        prefix = "" if not current or current.endswith((" ", "\n")) else " "
+        self.input.insertPlainText(prefix + value)
+        self.input.setFocus()
 
     def _flash_notice(self, message: str) -> None:
         """超限提示：发出信号并在输入区底部提示栏短暂显示。"""

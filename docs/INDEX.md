@@ -144,6 +144,8 @@
 
 ## PR 报告存档
 
+- [用户反馈八组需求：动画治理 / 聊天语义 / 语音 / API / DSH / 记忆（2026-10-30）](PR-REPORT-USER-FEEDBACK-BATCH-2026-10-30.md)：动画 12 类分类 + 随机动作总开关 + 逐动画「仅手动/禁用」；AI 回复语义动作与 DSH 六态动作；聊天字体族/字号与 6 个人设预设；WinMM 录音 + 本地 ASR/系统兜底 + 语音对话；API 本地模型预设与 opencode 可选免费档；同窗 DSH 页 + `pet_control` + 历史只读/带入；长期记忆 global/character 两域；附「桌宠卡死」分析不成立的证据。**改动画策略、聊天窗布局/字体、语音输入、API 预设、DSH 通道或记忆前必读**。
+
 - [桌宠身份上限 16 → 99 + 碰撞粗筛（2026-10-29 第五批）](PR-REPORT-PETCORE-MAX-PETS-2026-10-29.md)：`config.MAX_PETS = 99` 成为单一真值（`active_pets` 归一化、旧 slot 迁移、`PetManager`、设置页共用），`collide()` 入口加 `rects_may_touch()` 轴对齐粗筛、`PetManager` 按拍缓存身体矩形——99 只的碰撞拍从 **28.4ms 降到 1.2ms**。**改身份上限、`engine/collision.py` 的几何入口或 `_tick_collision` 前必读**。
 
 - [对话网络重试 + 音乐暂停收词 + 重置设置移植 + 语音出声（2026-10-29 第四批）](PR-REPORT-PETCORE-NETWORK-MUSIC-RESET-TTS-2026-10-29.md)：对话传输在「正文/思维链都还没吐」的 `network`/`tls` 抖动上自动重发一次（`HTTPError`/超时/协议错误从不重试），进程级「固定直连」改成 300s 过期，对话超时改取 `api.json`，`ai.chat` 的 reason 文案补全中文；音乐暂停时窗口源只认另一台播放器并立刻收掉歌词气泡（新增 `PresentationPort.hide(owner)`）；移植「重置本宠设置 / 重置全局设置」两枚侧栏按钮（`petcore/settings_reset.py`，按键作用域、保身份与位置、失败回滚）；修 TTS 整句静默（播放音量取 `SpeechResult.volume`，不再把 `None` 交给 `float()`）。**改 `api/chat.py` 的重试/超时、`net/http.py` 路由口径、音乐暂停判定、设置重置作用域或语音播放前必读**。

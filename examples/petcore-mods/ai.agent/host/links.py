@@ -28,6 +28,16 @@ BREAK_ANIMATIONS = ("轻快记录", "漂浮踏步")
 MAIN_KEYWORDS = ("代码", "工作", "写", "打字", "敲")
 BREAK_KEYWORDS = ("记录", "踏步", "伸懒腰")
 
+#: 六态各自的动作池。精确名不存在时按关键词回退，再回退到主动作池。
+THINKING_ANIMATIONS = ("思考", "想", "托腮", "发呆")
+THINKING_KEYWORDS = ("思考", "想", "托腮", "发呆", "沉思")
+ATTENTION_ANIMATIONS = ("招手", "惊讶", "举手", "歪头")
+ATTENTION_KEYWORDS = ("招手", "惊讶", "举手", "歪头", "注意")
+SUCCESS_ANIMATIONS = ("开心", "欢呼", "笑", "庆祝")
+SUCCESS_KEYWORDS = ("开心", "欢呼", "笑", "庆祝")
+ERROR_ANIMATIONS = ("难过", "垂头", "哭", "沮丧")
+ERROR_KEYWORDS = ("难过", "垂头", "哭", "沮丧")
+
 #: busy → 非 busy 的稳定确认窗口：过滤 working→idle→working 抖动。
 DONE_CONFIRM_MS = 800
 #: 同一 Agent 完成通知的最小间隔（最后一道保险）。
@@ -133,16 +143,18 @@ class LinkEngine:
         if event.state in BUSY_STATES:
             if prev_raw not in BUSY_STATES:
                 self._sound(agent, "start", now)
-            self._on_busy(agent, folded_before, now)
+            self._on_busy(agent, folded_before, now, event.state)
         elif event.state == "error":
             if prev_raw in BUSY_STATES:
                 self._schedule_done(agent, cause="error")
             else:
                 self._important(ERROR_TEXT)
                 self._sound(agent, "error", now)
+            self._play_state_animation("error", now)
         elif event.state == "attention":
             if prev_raw not in BUSY_STATES:
                 self._important(ATTENTION_TEXT)
+            self._play_state_animation("attention", now)
         if folded_before in BUSY_STATES and folded_after not in BUSY_STATES:
             self._schedule_done(agent, cause=self._failure_cause(agent))
         if folded_before not in BUSY_STATES and folded_after in BUSY_STATES:
@@ -174,16 +186,25 @@ class LinkEngine:
         last = self._applied.get(agent)
         return bool(last is not None and (now - last[1]) < prefs.min_interval)
 
-    def _on_busy(self, agent: str, folded_before: str, now: float) -> None:
+    def _on_busy(
+        self, agent: str, folded_before: str, now: float, state: str = "working"
+    ) -> None:
         prefs = self._prefs()
         if folded_before in BUSY_STATES and self._throttled(agent, now):
             return
         self._applied[agent] = ("working", now)
         if not prefs.animation or not self._bridge.visible():
             return
+        self._play_state_animation(state, now)
+
+    def _play_state_animation(self, state: str, now: float) -> None:
+        """按六态播一次动作；隐藏/关闭/还在播/旋转地板内一律不发。"""
+        prefs = self._prefs()
+        if not prefs.animation or not self._bridge.visible():
+            return
         if not self._should_request(now):
             return
-        name = self._next_animation()
+        name = self._next_animation(state)
         if not name:
             return
         self._last_anim_name = name
@@ -224,10 +245,23 @@ class LinkEngine:
                 return False
         return True
 
-    def _next_animation(self) -> str:
+    def _next_animation(self, state: str = "working") -> str:
         acts = tuple(self._bridge.animations() or ())
         if not acts:
             return ""
+        state_pools = {
+            "thinking": (THINKING_ANIMATIONS, THINKING_KEYWORDS),
+            "attention": (ATTENTION_ANIMATIONS, ATTENTION_KEYWORDS),
+            "success": (SUCCESS_ANIMATIONS, SUCCESS_KEYWORDS),
+            "error": (ERROR_ANIMATIONS, ERROR_KEYWORDS),
+        }
+        exact, keywords = state_pools.get(state, ((), ()))
+        if exact:
+            names = [name for name in exact if name in acts]
+            if not names:
+                names = [name for name in acts if any(key in name for key in keywords)]
+            if names:
+                return names[0]
         main = [name for name in MAIN_ANIMATIONS if name in acts]
         if not main:
             main = [name for name in acts if any(key in name for key in MAIN_KEYWORDS)]
@@ -309,6 +343,7 @@ class LinkEngine:
             self._bridge.say(DONE_ERROR_TEXT, important=True)
             self._sound(agent, "error", now)
             return
+        self._play_state_animation("success", now)
         self._bridge.say(DONE_TEXT, important=True)
         self._sound(agent, "done", now)
         if self._bridge.visible():

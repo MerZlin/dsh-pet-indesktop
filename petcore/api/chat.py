@@ -20,6 +20,7 @@ from ..contracts.api import ApiRequest, WebSearchOptions
 from ..net import errors
 from ..net import websearch
 from ..net.http import urlopen
+from .headers import extra_headers
 
 logger = logging.getLogger("petcore.api.chat")
 
@@ -229,10 +230,17 @@ def _build_request(
 ) -> urllib.request.Request:
     url = request.base_url.rstrip("/") + request.metadata.chat_path
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": accept,
-    }
+    headers = extra_headers(
+        request.base_url,
+        version=str(getattr(request.metadata, "version", "") or ""),
+        headers=dict(getattr(request.metadata, "extra_headers", {}) or {}),
+    )
+    headers.update(
+        {
+            "Content-Type": "application/json",
+            "Accept": accept,
+        }
+    )
     if request.api_key:
         headers["Authorization"] = f"Bearer {request.api_key}"
     return urllib.request.Request(url, data=body, headers=headers, method="POST")

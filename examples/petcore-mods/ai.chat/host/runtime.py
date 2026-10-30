@@ -15,19 +15,25 @@ from __future__ import annotations
 
 import base64
 import logging
+import random
+import re
 import threading
 import time
+from pathlib import Path
 
 from petcore.contracts.api import WebSearchOptions
+from petcore.contracts.speech import SpeechRequest
 
+from .animation_semantics import choose_animation, choose_thinking
 from .constants import LOOK_SCREEN_COOLDOWN_S, MAX_HISTORY, OWNER, QUICK_HISTORY
+from .memory import MemoryStore, extract_memory, format_context
+from .persona_presets import load_presets, resolve_prompt
 from .proactive import PRE_CUE_MS, PRE_CUE_TEXT, ProactiveWatcher
 from .prompts import (
     ask_messages,
     chat_messages,
     look_screen_messages,
     ocr_messages,
-    system_prompt,
     translate_messages,
 )
 
@@ -82,6 +88,9 @@ class AiChatRuntime:
         self._look_busy: set[int] = set()
         self._last_look: dict[int, float] = {}
         self._proactive = ProactiveWatcher(self)
+        self._chat_anim_rng = random.Random()
+        self._last_chat_anim_at = 0.0
+        self._last_chat_anim_name = ""
 
     # ---------------------------------------------------------------- 配置
     def _config_value(self, key: str, default=None):
@@ -156,6 +165,22 @@ class AiChatRuntime:
             type(cause).__name__ if cause is not None else "-",
         )
 
+    def _failure_detail(self, exc: BaseException, service_id: str, reason: str) -> str:
+        detail = str(exc)[:200]
+        if reason not in ("rate_limit", "auth"):
+            return detail
+        try:
+            metadata = self._api().metadata(service_id)
+            base_url = str(getattr(metadata, "base_url", "") or "")
+        except Exception:  # noqa: BLE001
+            return detail
+        if "opencode.ai" in base_url:
+            return (
+                detail
+                + "（该免费模型仅限 OpenCode 客户端；请切换 DeepSeek 或本地模型）"
+            )[:300]
+        return detail
+
     def _require_service(self, service_id: str) -> None:
         """发请求前先把「没有服务」说清楚（内部错误），别让它变成一次链路失败。"""
         if service_id:
@@ -177,9 +202,11 @@ class AiChatRuntime:
         return character_id or "桌宠"
 
     def _prompt(self) -> str:
-        return system_prompt(
-            str(self._config_value("ai_system_prompt", "") or ""),
+        return resolve_prompt(
+            self._config_value("ai_persona", ""),
+            self._config_value("ai_system_prompt", ""),
             self._character_name(),
+            load_presets(),
         )
 
     def _vision_enabled(self) -> bool:
@@ -251,6 +278,191 @@ class AiChatRuntime:
             return max(0, int(slot))
         except (TypeError, ValueError):
             return self._active_slot()
+
+    # ------------------------------------------------------------ 对话动作
+    def _presentation(self):
+        return getattr(self.context.ports, "presentation", None)
+
+    def _animation_names(self) -> tuple[str, ...]:
+        pets = getattr(self.context.ports, "pets", None)
+        if pets is None:
+            return ()
+        try:
+            handle = pets.active() or pets.primary()
+        except Exception:
+            handle = None
+        lister = getattr(handle, "animations", None)
+        if not callable(lister):
+            return ()
+        try:
+            return tuple(lister())
+        except Exception:
+            return ()
+
+    def _animation_min_seconds(self) -> float:
+        try:
+            value = float(self._config_value("ai_animation_min_seconds", 2.0) or 2.0)
+        except (TypeError, ValueError):
+            value = 2.0
+        return max(0.5, min(30.0, value))
+
+    def _play_chat_animation(
+        self,
+        reply_text: str,
+        user_text: str = "",
+        *,
+        thinking: bool = False,
+        force: bool = False,
+    ) -> None:
+        """回复生成时/完成后播一个语义动作；隐藏、循环、接管态一律不抢。"""
+        if not bool(self._config_value("ai_animation_enabled", True)):
+            return
+        if thinking and not bool(self._config_value("ai_animation_thinking", True)):
+            return
+        presentation = self._presentation()
+        if presentation is None:
+            return
+        visible = getattr(presentation, "visible", None)
+        if callable(visible):
+            try:
+                if not visible():
+                    return
+            except Exception:
+                return
+        state = None
+        query = getattr(presentation, "animation_state", None)
+        if callable(query):
+            try:
+                state = query()
+            except Exception:
+                state = None
+        if state is not None and (
+            bool(getattr(state, "loop", False))
+            or bool(getattr(state, "locked", False))
+        ):
+            return
+        now = time.monotonic()
+        if (
+            not force
+            and not thinking
+            and now - self._last_chat_anim_at < self._animation_min_seconds()
+        ):
+            return
+        names = self._animation_names()
+        name = (
+            choose_thinking(names, rng=self._chat_anim_rng)
+            if thinking
+            else choose_animation(
+                reply_text,
+                user_text,
+                names,
+                rng=self._chat_anim_rng,
+                previous=self._last_chat_anim_name,
+            )
+        )
+        if not name:
+            return
+        player = getattr(presentation, "play_animation", None)
+        if not callable(player):
+            return
+        try:
+            played = player(name)
+        except Exception:
+            return
+        if played is False:
+            return
+        self._last_chat_anim_at = now
+        self._last_chat_anim_name = name
+
+    @staticmethod
+    def _last_user_text(messages) -> str:
+        for item in reversed(list(messages or ())):
+            if isinstance(item, dict) and item.get("role") == "user":
+                content = item.get("content")
+                if isinstance(content, str):
+                    return content[:2000]
+        return ""
+
+    @staticmethod
+    def _speech_text(text: str) -> str:
+        value = str(text or "")
+        value = re.sub(r"```.*?```", " ", value, flags=re.S)
+        value = re.sub(r"`([^`]*)`", r"\1", value)
+        value = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", value)
+        value = re.sub(r"[*_#>~]+", "", value)
+        return " ".join(value.split())[:500]
+
+    def _speak_reply(self, text: str) -> None:
+        if not bool(self._config_value("ai_voice_reply", False)):
+            return
+        speech = getattr(self.context.ports, "speech", None)
+        speaker = getattr(speech, "speak", None)
+        if not callable(speaker):
+            return
+        clean = self._speech_text(text)
+        if not clean:
+            return
+
+        def on_error(error) -> None:
+            reason = str(getattr(error, "reason", "") or "speech")
+            logger.info("ai voice reply failed: reason=%s", reason)
+
+        try:
+            speaker(SpeechRequest(text=clean), on_error=on_error)
+        except Exception:  # noqa: BLE001 - 朗读失败不影响文字回答
+            logger.info("ai voice reply failed: reason=internal")
+
+    # ---------------------------------------------------------------- 长期记忆
+    def _memory_store(self):
+        ports = getattr(self.context, "ports", None)
+        storage = getattr(ports, "storage", None)
+        data_dir = getattr(storage, "data_dir", None)
+        if not callable(data_dir):
+            return None
+        try:
+            root = Path(data_dir("ai.chat")) / "memory"
+        except Exception:  # noqa: BLE001 - 存储不可用就退化成无记忆
+            return None
+        try:
+            max_entries = int(self._config_value("ai_memory_max_entries", 500) or 500)
+        except (TypeError, ValueError):
+            max_entries = 500
+        return MemoryStore(
+            root,
+            str(self._config_value("character", "") or "default"),
+            max_entries=max_entries,
+        )
+
+    def _memory_context(self, text: str) -> str:
+        if not bool(self._config_value("ai_memory_enabled", True)):
+            return ""
+        store = self._memory_store()
+        if store is None:
+            return ""
+        try:
+            limit = int(self._config_value("ai_memory_inject", 3) or 3)
+        except (TypeError, ValueError):
+            limit = 3
+        try:
+            entries = store.search_all(text, limit=max(1, min(8, limit)))
+        except Exception:  # noqa: BLE001 - 坏文件不该让对话失败
+            return ""
+        return format_context(entries) if entries else ""
+
+    def _remember_text(self, text: str) -> None:
+        if not bool(self._config_value("ai_memory_enabled", True)):
+            return
+        content = extract_memory(text)
+        if not content:
+            return
+        store = self._memory_store()
+        if store is None:
+            return
+        scope = "global" if str(text).strip().startswith(("全局", "永久")) else "character"
+        try:
+            store.add(content, scope=scope)
+        except OSError:
+            logger.warning("memory write failed")
 
     # ---------------------------------------------------------------- 入口
     def open_chat(self, slot: int | None = None) -> None:
@@ -389,7 +601,11 @@ class AiChatRuntime:
             for item in attachments
             if item.get("image_data_url")
         ]
+        self._remember_text(text)
         messages = chat_messages(self._prompt(), history, text, images, limit=MAX_HISTORY)
+        memory = self._memory_context(text)
+        if memory:
+            messages.insert(1, {"role": "system", "content": memory})
         self._start(slot, messages)
 
     def _on_quick_submit(self, text: str, slot: int) -> None:
@@ -409,9 +625,13 @@ class AiChatRuntime:
             history = quick.history(OWNER, pet_slot=slot)
         except Exception:
             history = []
+        self._remember_text(text)
         messages = chat_messages(
             self._prompt(), history, text, [], limit=QUICK_HISTORY
         )
+        memory = self._memory_context(text)
+        if memory:
+            messages.insert(1, {"role": "system", "content": memory})
         self._start_quick(slot, messages)
 
     def _on_ask(self, question: str, image_png: bytes, history: list[dict], slot: int) -> str:
@@ -513,12 +733,21 @@ class AiChatRuntime:
         service_id = self._service_id()
         model = str(self._config_value("ai_model", "") or "")
         temperature = self._temperature()
+        user_text = self._last_user_text(messages)
 
         def run() -> None:
             partial: list[str] = []
+            first_token = [False]
 
             def delta(value: str) -> None:
                 partial.append(value)
+                if not first_token[0]:
+                    first_token[0] = True
+                    self._later(
+                        lambda: self._play_chat_animation(
+                            "", user_text, thinking=True
+                        )
+                    )
                 self._request_callback(self._quick_cancels, slot, cancel,
                     lambda: quick.token(OWNER, value, pet_slot=slot))
 
@@ -547,7 +776,7 @@ class AiChatRuntime:
                 )
             except Exception as exc:  # noqa: BLE001
                 reason = self._failure_reason(exc, service_id)
-                detail = str(exc)[:200]
+                detail = self._failure_detail(exc, service_id, reason)
 
                 def failed():
                     if cancel.is_set():
@@ -565,8 +794,15 @@ class AiChatRuntime:
                 self._request_callback(self._quick_cancels, slot, cancel, failed, final=True)
             else:
                 final = "".join(partial) if cancel.is_set() or getattr(result, "cancelled", False) else str(getattr(result, "text", "") or "".join(partial))
+
+                def finished():
+                    quick.done(OWNER, final, pet_slot=slot)
+                    if not cancel.is_set():
+                        self._play_chat_animation(final, user_text, force=True)
+                        self._speak_reply(final)
+
                 self._request_callback(self._quick_cancels, slot, cancel,
-                    lambda: quick.done(OWNER, final, pet_slot=slot), final=True)
+                    finished, final=True)
 
         threading.Thread(target=run, name=f"ai-quick-{slot}", daemon=True).start()
 
@@ -583,12 +819,21 @@ class AiChatRuntime:
         service_id = self._service_id()
         model = str(self._config_value("ai_model", "") or "")
         temperature = self._temperature()
+        user_text = self._last_user_text(messages)
 
         def run() -> None:
             partial: list[str] = []
+            first_token = [False]
 
             def delta(value: str) -> None:
                 partial.append(value)
+                if not first_token[0]:
+                    first_token[0] = True
+                    self._later(
+                        lambda: self._play_chat_animation(
+                            "", user_text, thinking=True
+                        )
+                    )
                 self._request_callback(self._cancels, slot, cancel,
                     lambda: chat.token(OWNER, value, pet_slot=slot))
 
@@ -617,7 +862,7 @@ class AiChatRuntime:
                 )
             except Exception as exc:  # noqa: BLE001
                 reason = self._failure_reason(exc, service_id)
-                detail = str(exc)[:200]
+                detail = self._failure_detail(exc, service_id, reason)
 
                 def failed():
                     if cancel.is_set():
@@ -639,8 +884,15 @@ class AiChatRuntime:
                 if getattr(result, "incomplete", False) and final:
                     # 半条回答必须让用户看得见（AUD-15）：否则下次翻会话会以为这就是全部。
                     final += "\n\n（这次回答没有正常结束，内容可能不完整。请重试或重新提问。）"
+
+                def finished():
+                    chat.done(OWNER, final, pet_slot=slot)
+                    if not cancel.is_set():
+                        self._play_chat_animation(final, user_text, force=True)
+                        self._speak_reply(final)
+
                 self._request_callback(self._cancels, slot, cancel,
-                    lambda: chat.done(OWNER, final, pet_slot=slot), final=True)
+                    finished, final=True)
 
         thread = threading.Thread(target=run, name=f"ai-chat-{slot}", daemon=True)
         self._threads[slot] = thread
