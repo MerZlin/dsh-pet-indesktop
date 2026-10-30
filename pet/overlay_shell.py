@@ -86,6 +86,7 @@ from collections import deque
 from pathlib import Path
 
 _IS_MACOS = sys.platform == "darwin"
+_IS_WINDOWS = sys.platform == "win32"
 
 import shiboken6
 from PySide6.QtCore import (
@@ -1680,10 +1681,12 @@ class OverlayShell(QObject):
 
     @staticmethod
     def _window_physical_origin(overlay) -> QPoint:
-        """窗口的**原生（物理）**左上角；取不到时退回逻辑原点。
+        """Windows 窗口的**原生（物理）**左上角；取不到时退回逻辑原点。
 
         混合 DPI 下逻辑原点不能当物理用：Qt 官方文档的 islands-of-screens ——
-        屏的位置不随缩放变，逻辑桌面不是连续平面。跨窗换算必须走物理坐标。
+        屏的位置不随缩放变，逻辑桌面不是连续平面。**仅 Windows** 的跨窗换算
+        需要这个物理原点；macOS/Linux 的窗口原点本来就是逻辑坐标（见
+        :meth:`_window_transfer_space`），不要拿它当物理像素再乘 DPR。
         """
         fallback = overlay.geometry().topLeft()
         try:
@@ -1698,16 +1701,38 @@ class OverlayShell(QObject):
             return fallback
         return QPoint(rect.left, rect.top)
 
-    def _sprite_pos_in(self, sprite, source_overlay, target_overlay) -> QPointF:
-        """这只的左上角换算到 ``target_overlay`` 的局部逻辑坐标（跨 DPI 正确）。
+    @staticmethod
+    def _window_transfer_space(overlay) -> tuple[QPoint, float]:
+        """跨窗坐标换算用的 ``(原点, 缩放)``。
 
-        物理 = 源窗物理原点 + d_src × 源局部；目标局部 = (物理 − 目标窗物理原点)/d_dst。
-        少了这里的两处 DPR 比例，换窗本身就会位移几百像素——实机的"瞬移"。
+        Windows：Qt 窗口局部坐标是逻辑像素，原生窗口原点是物理像素，必须用
+        GetWindowRect 的原点 + 该窗 DPR 换算——这是 :meth:`_window_physical_origin`
+        的既有语义，保持不变。
+
+        macOS：Cocoa 的窗口 frame、NSScreen 几何与 Qt 几何**同为点（point）**，
+        Retina 的 2x 只作用于 backing store。把点再乘 DPR 会把 2304×1296 的
+        外接屏当成 4608×2592 的"物理"区域，跨屏判定与落点整体错位（实机：
+        内建屏中部的宠一 tick 就被判到外接屏、松手后跳到外接屏顶部）。这里
+        必须回 (逻辑原点, 1.0)。
+
+        X11/Linux：没有 GetWindowRect，同样只能退回逻辑原点；拿
+        ``devicePixelRatioF()`` 乘逻辑坐标会制造同一类错位，缩放固定 1.0。
         """
-        p_src = self._window_physical_origin(source_overlay)
-        p_dst = self._window_physical_origin(target_overlay)
-        d_src = float(source_overlay.devicePixelRatioF()) or 1.0
-        d_dst = float(target_overlay.devicePixelRatioF()) or 1.0
+        if _IS_WINDOWS:
+            return (OverlayShell._window_physical_origin(overlay),
+                    float(overlay.devicePixelRatioF()) or 1.0)
+        return QPoint(overlay.geometry().topLeft()), 1.0
+
+    def _sprite_pos_in(self, sprite, source_overlay, target_overlay) -> QPointF:
+        """这只的左上角换算到 ``target_overlay`` 的局部逻辑坐标。
+
+        统一走 :meth:`_window_transfer_space`：Windows 是「物理 = 源窗物理原点 +
+        d_src × 源局部，目标局部 = (物理 − 目标窗物理原点)/d_dst」；macOS/Linux
+        的窗口原点与 Qt 几何同为逻辑坐标，缩放恒 1.0。两边都少不得这一层中间
+        坐标系，否则换窗本身就会位移几百像素（实机的"瞬移"）。
+        """
+        p_src, d_src = self._window_transfer_space(source_overlay)
+        p_dst, d_dst = self._window_transfer_space(target_overlay)
         phys = QPointF(p_src.x() + sprite.pos.x() * d_src,
                        p_src.y() + sprite.pos.y() * d_src)
         return QPointF((phys.x() - p_dst.x()) / d_dst,
@@ -5172,12 +5197,10 @@ class OverlayShell(QObject):
         """
         if not self._hosts or host is None:
             return None
-        p_src = self._window_physical_origin(host.overlay)
-        d_src = float(host.overlay.devicePixelRatioF()) or 1.0
+        p_src, d_src = self._window_transfer_space(host.overlay)
         left = top = right = bottom = None
         for other in self._hosts:
-            origin = self._window_physical_origin(other.overlay)
-            d_dst = float(other.overlay.devicePixelRatioF()) or 1.0
+            origin, d_dst = self._window_transfer_space(other.overlay)
             geometry = other.overlay.geometry()
             width_px = geometry.width() * d_dst
             height_px = geometry.height() * d_dst
@@ -5227,16 +5250,16 @@ class OverlayShell(QObject):
 
     def _place_sprite_in_physical_screen(self, sprite, host=None, *,
                                          persist: bool = False) -> bool:
-        """按**物理**身体中心把这只交到它现在所在那块屏的窗（多窗的归属落地）。
+        """按**身体中心**把这只交到它现在所在那块屏的窗（多窗的归属落地）。
 
-        拖拽期间不调用（跨缝靠投影）；松手后的收尾与每拍兜底都走这里，因此不依赖
-        某个窗口的 grab 收尾钩子有没有被触发。
+        中心坐标走 :meth:`_window_transfer_space` 的同一套口径（Windows 物理像素 /
+        macOS、Linux 逻辑点）。拖拽期间不调用（跨缝靠投影）；松手后的收尾与每拍
+        兜底都走这里，因此不依赖某个窗口的 grab 收尾钩子有没有被触发。
         """
         own = host or self._host_of(sprite)
         if own is None or sprite is None:
             return False
-        p_src = self._window_physical_origin(own.overlay)
-        d_src = float(own.overlay.devicePixelRatioF()) or 1.0
+        p_src, d_src = self._window_transfer_space(own.overlay)
         # body_rect() 已经是**局部绝对**矩形（已含 pos），不要再加一次 pos
         body = sprite.body_rect()
         cx = p_src.x() + (body.x() + body.width() / 2.0) * d_src
@@ -5244,8 +5267,7 @@ class OverlayShell(QObject):
         for other in self._hosts:
             if other is own:
                 continue
-            origin = self._window_physical_origin(other.overlay)
-            d_dst = float(other.overlay.devicePixelRatioF()) or 1.0
+            origin, d_dst = self._window_transfer_space(other.overlay)
             area = QRect(origin.x(), origin.y(),
                          int(other.overlay.geometry().width() * d_dst),
                          int(other.overlay.geometry().height() * d_dst))
@@ -5254,8 +5276,11 @@ class OverlayShell(QObject):
             local = self._sprite_pos_in(sprite, own.overlay, other.overlay)
             own.overlay.remove_sprite(sprite, release_clip=False)
             other.overlay.add_sprite(sprite)
-            sprite.set_pos(local)
+            # 必须先换活动区再落位：``set_pos`` 按当前 ``_clamp_rects`` 钳制，
+            # 先写会被**源窗**的活动区截断（实机：外接屏松手后落点被钳回内建屏
+            # 的底边，看起来像"跳回自带屏"）。
             other.apply_activity(sprite)
+            sprite.set_pos(local)
             sprite.home_screen = other.screen
             # ``remove_sprite`` 会删掉该 sprite 的**全部**位置监听，跟随器又缓存着
             # 旧窗原点：不补这两步，气泡会停在旧位置、以后也不再跟宠走（实机表现
@@ -5343,22 +5368,22 @@ class OverlayShell(QObject):
         source = self._host_of(sprite)
         if source is None or target_host is None:
             return False
-        origin_src = source.overlay.geometry().topLeft()
-        origin_dst = target_host.overlay.geometry().topLeft()
         if global_pos is not None:
             grab = getattr(sprite, "_drag_offset", None)
-            local = QPointF(global_pos) - QPointF(origin_dst)
+            local = QPointF(global_pos) - QPointF(
+                target_host.overlay.geometry().topLeft())
             if grab is not None:
                 local -= QPointF(grab)
         else:
-            body = sprite.body_rect()
-            local = QPointF(origin_src.x() + body.x() - origin_dst.x(),
-                            origin_src.y() + body.y() - origin_dst.y())
+            # 源窗局部 → 全局 → 目标窗局部（跨 DPI 走统一的换算口径）
+            local = self._sprite_pos_in(sprite, source.overlay, target_host.overlay)
         if source is not target_host:
             source.overlay.remove_sprite(sprite, release_clip=False)
             target_host.overlay.add_sprite(sprite)
-        sprite.set_pos(local)
+        # 同 ``_place_sprite_in_physical_screen``：先换域再落位，否则 set_pos
+        # 会被源窗活动区截断。
         target_host.apply_activity(sprite)
+        sprite.set_pos(local)
         sprite.home_screen = target_host.screen
         if source is not target_host:
             # 换窗必然摘掉了位置监听（见 ``_place_sprite_in_physical_screen`` 同款

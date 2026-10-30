@@ -271,9 +271,9 @@ def _clamped_sprite(body_box, bounds=QRect(0, 0, 800, 600)):
 
 def test_body_box_clamp_right_edge_overflow_allowed(body_box):
     sprite = _clamped_sprite(body_box)
-    sprite.set_pos(QPointF(900, 435))
+    sprite.set_pos(QPointF(900, 420))
     # 身体右缘贴 bounds.right：pos.x = 800 - 50 - 150 = 600
-    assert sprite.pos == QPointF(600, 435)
+    assert sprite.pos == QPointF(600, 420)
     body = sprite._body_local_rect()
     body_right = sprite.pos.x() + body.x() + body.width() - 1
     assert body_right == sprite.bounds.toRect().right()
@@ -295,16 +295,17 @@ def test_body_box_clamp_left_top(body_box):
 def test_body_box_clamp_bottom(body_box):
     sprite = _clamped_sprite(body_box)
     sprite.set_pos(QPointF(100, 900))
-    # 身体底缘贴 bounds.bottom：pos.y = 600 - 30 - 135 = 435
-    assert sprite.pos == QPointF(100, 435)
-    assert sprite.rect().bottom() > sprite.bounds.toRect().bottom()
+    # 身体底缘贴 bounds.bottom - 画布 PAD：pos.y = 600 - 30 - 135 - 15 = 420
+    assert sprite.pos == QPointF(100, 420)
+    # 画布透明余量完整落在域内，脚/裙摆不再被窗口底边裁掉
+    assert sprite.rect().bottom() == sprite.bounds.toRect().bottom()
 
 
 def test_set_bounds_reclamps_current_pos(body_box):
     sprite = PetSprite(FakeLibrary(FakeClip()), scale=0.5, pos=QPointF(900, 900))
     assert sprite.pos == QPointF(900, 900)             # 无 bounds：不钳
     sprite.set_bounds(QRect(0, 0, 800, 600))           # 设域立即补钳
-    assert sprite.pos == QPointF(600, 435)
+    assert sprite.pos == QPointF(600, 420)
 
 
 def test_no_bounds_no_clamp(body_box):
@@ -331,11 +332,11 @@ def test_no_body_box_falls_back_to_full_rect_clamp(no_body_box):
 
 def test_velocity_integration_is_clamped(body_box):
     sprite = _clamped_sprite(body_box)
-    sprite.set_pos(QPointF(500, 435))
+    sprite.set_pos(QPointF(500, 420))
     sprite.set_velocity(QPointF(10000, 0))             # 高速推出右界
     sprite.advance(1.0)
     # 积分走 set_pos：身体停在界内，不冲出
-    assert sprite.pos == QPointF(600, 435)
+    assert sprite.pos == QPointF(600, 420)
     body = sprite._body_local_rect()
     assert sprite.pos.x() + body.x() + body.width() <= 800
 
@@ -348,7 +349,7 @@ def test_drag_on_move_is_clamped(body_box):
     sprite.begin_drag()                                # 过阈值升级（on_move 才跟随）
     sprite.on_move(QPointF(5000, 5000))                # 拖出界
     # on_move 走 set_pos：光标 - 偏移后的请求位置被钳回
-    assert sprite.pos == QPointF(600, 435)
+    assert sprite.pos == QPointF(600, 420)
 
 
 def test_clamp_when_body_wider_than_bounds(body_box):

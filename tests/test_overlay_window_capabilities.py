@@ -28,6 +28,27 @@ from pet.overlay_shell import OverlayShell
 app = QApplication.instance() or QApplication([])
 
 
+def test_macos_plain_window_default_and_opt_out(monkeypatch):
+    """macOS 默认 NSWindow；可用 TOOL_WINDOW=1 / NSWINDOW=0 回退 NSPanel。"""
+    import pet.overlay_window as overlay_window
+
+    for key in ("DSH_PET_MACOS_TOOL_WINDOW", "DSH_PET_MACOS_NSWINDOW"):
+        monkeypatch.delenv(key, raising=False)
+    assert overlay_window._macos_uses_plain_window("darwin") is True
+    assert overlay_window._macos_uses_plain_window("win32") is False
+    assert overlay_window._macos_uses_plain_window("linux") is False
+
+    monkeypatch.setenv("DSH_PET_MACOS_TOOL_WINDOW", "1")
+    assert overlay_window._macos_uses_plain_window("darwin") is False
+
+    monkeypatch.delenv("DSH_PET_MACOS_TOOL_WINDOW")
+    monkeypatch.setenv("DSH_PET_MACOS_NSWINDOW", "0")
+    assert overlay_window._macos_uses_plain_window("darwin") is False
+
+    monkeypatch.setenv("DSH_PET_MACOS_NSWINDOW", "1")
+    assert overlay_window._macos_uses_plain_window("darwin") is True
+
+
 # ---------------------------------------------------------------- 假件
 class FakeClock:
     def __init__(self):

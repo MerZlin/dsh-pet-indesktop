@@ -913,13 +913,13 @@ def test_clamp_into_bounds_respects_body_box(monkeypatch):
 
     monkeypatch.setattr(catalog, "character_body_box", lambda _cid, *a, **k: (100, 60, 400, 330))
     lib = _make_library()
-    sprite = _make_sprite(lib, pos=(600, 435))   # 身体右缘 600+50+150=800 贴界、下缘 435+30+135=600 贴界
+    sprite = _make_sprite(lib, pos=(600, 420))   # 右缘 800 贴界；身体下缘 585 + 画布 PAD 15 = 600
     bounds = QRect(0, 0, 800, 600)
     c = BehaviorController(bounds, rng=ScriptedRng())
 
     c._clamp_into_bounds(sprite)
 
-    assert sprite.pos == QPointF(600, 435)       # 合法贴边位不被拉回
+    assert sprite.pos == QPointF(600, 420)       # 合法贴边位不被拉回
     assert sprite.rect().right() > bounds.right()  # 画布透明边允许越界
 
 
@@ -935,7 +935,7 @@ def test_clamp_into_bounds_body_box_pulls_back_only_overflow(monkeypatch):
 
     c._clamp_into_bounds(sprite)
 
-    assert sprite.pos == QPointF(600, 435)       # 钳到身体框贴边即停
+    assert sprite.pos == QPointF(600, 420)       # 钳到身体框贴边（含画布 PAD）即停
 
 
 # ---------------------------------------------------------------- D9：acts 随机动作池

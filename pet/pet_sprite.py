@@ -411,6 +411,25 @@ class PetSprite(QObject):
             max(1, int(round((y2 - y1) * s))),
         )
 
+    def _body_bottom_pad(self, body: QRect | None = None) -> int:
+        """画布底与 body_box 底之间的透明余量（逻辑像素，已含 scale）。
+
+        母版 640×360 的脚底在 y=330、画布底 360：旧窗路径
+        ``window_placement.stable_body_local_rect`` 用 ``catalog.PAD`` 把这段
+        余量留在窗口内，脚踩在窗口底线**之上**。overlay 路径此前按“帧即画布
+        对齐左上角”省掉了这段修正（见 :meth:`_body_local_rect` 的说明），
+        于是 body_box 底被钳到窗口底线，脚/裙摆最后一截落到窗口外被裁掉
+        （实机：所有屏幕最下边脚被藏住）。
+
+        钳制/贴地判定把域底边抬高这段 pad：可见脚底停在窗口底线之上，
+        画布透明余量完整落在窗口内——与旧窗/PetWindow 的口径一致。
+        未声明 body_box（回退全画布）或 body_box 已到画布底时返回 0。
+        """
+        if body is None:
+            body = self._body_local_rect()
+        canvas_h = self._logical_size()[1]
+        return max(0, canvas_h - (body.y() + body.height()))
+
     @staticmethod
     def _clamp_axis(value: float, lo: float, hi: float, off: float, span: float) -> float:
         """把 value 钳到使 [value+off, value+off+span] 完整落在 [lo, hi] 内。
@@ -543,7 +562,7 @@ class PetSprite(QObject):
         body = self._body_local_rect()
         ground = self._clamp_axis(
             math.inf, domain.top(), domain.top() + domain.height(),
-            body.y(), body.height())
+            body.y(), body.height() + self._body_bottom_pad(body))
         return self.pos.y() >= ground - 1.0
 
     def set_pos(self, pos: QPointF) -> None:
@@ -580,8 +599,10 @@ class PetSprite(QObject):
             targets = (outer,)
         if targets:
             body = self._body_local_rect()
+            bottom_pad = self._body_bottom_pad(body)
             if len(targets) > 1 and self._rect_covered(
-                    QRectF(x + body.x(), y + body.y(), body.width(), body.height()),
+                    QRectF(x + body.x(), y + body.y(), body.width(),
+                           body.height() + bottom_pad),
                     targets):
                 pass  # 缝上/屏内：合法，不动
             else:
@@ -590,7 +611,7 @@ class PetSprite(QObject):
                     cx = self._clamp_axis(x, b.left(), b.left() + b.width(),
                                           body.x(), body.width())
                     cy = self._clamp_axis(y, b.top(), b.top() + b.height(),
-                                          body.y(), body.height())
+                                          body.y(), body.height() + bottom_pad)
                     d = (cx - x) * (cx - x) + (cy - y) * (cy - y)
                     if best is None or d < best[0]:
                         best = (d, cx, cy)

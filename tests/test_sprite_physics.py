@@ -596,14 +596,36 @@ def test_sprite_bounds_inset_by_body_box(monkeypatch):
     """V-2：抛掷反弹边界按身体框内缩（旧口径按整 canvas，反弹发生在透明边上）。
 
     body_box=(100,60,400,330) × scale 0.5 → 局部身体框 QRect(50,30,150,135)；
-    bounds (0,0,800,600) → 左上角活动范围 (-50,-30,600,435)。
+    画布 PAD=180-165=15；bounds (0,0,800,600) → 左上角活动范围
+    (-50,-30,600,420)。
     """
     from pet import catalog
 
     monkeypatch.setattr(catalog, "character_body_box", lambda _cid, *a, **k: (100, 60, 400, 330))
     sprite = _make_sprite()
     c = ThrowPhysicsController(BOUNDS)
-    assert c._sprite_bounds(sprite) == (-50.0, -30.0, 600.0, 435.0)
+    assert c._sprite_bounds(sprite) == (-50.0, -30.0, 600.0, 420.0)
+
+
+def test_set_pos_reserves_canvas_bottom_pad(monkeypatch):
+    """脚底不贴窗口底线：body_box 底到画布底的透明余量要留在钳制域内。
+
+    640×360 母版脚底 y=330、画布底 360；overlay 此前没有旧窗路径的 PAD 修正，
+    body_box 底被钳到窗口底线，所有屏幕最下边脚/裙摆被窗口裁掉。scale=0.5 时
+    body_box=(100,60,400,330) → 局部身体框 (50,30,150,135)，画布底 180，
+    pad=180-165=15；bounds 底 600 → 身体框底最多到 585，画布底正好 600。
+    """
+    from pet import catalog
+
+    monkeypatch.setattr(catalog, "character_body_box", lambda *a, **k: (100, 60, 400, 330))
+    sprite = _make_sprite()
+    sprite.set_bounds(BOUNDS)
+    sprite.set_pos(QPointF(100.0, 10_000.0))
+
+    body = sprite.body_rect()
+    assert body.y() + body.height() == int(BOUNDS.bottom()) - 15
+    assert sprite.pos.y() + sprite.rect().height() == BOUNDS.bottom()
+    assert sprite._at_ground()
 
 
 # ---------------------------------------------------------------- 落地首帧：预热 + 飞行期 pin

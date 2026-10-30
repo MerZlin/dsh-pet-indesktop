@@ -727,7 +727,7 @@ def test_rotated_sprite_at_misses_off_pixel_inside_bounds():
 
 # ---------------------------------------------------------------- macOS 失活可见性
 def test_overlay_tool_window_stays_visible_when_application_deactivates(monkeypatch):
-    """回归：overlay 合成窗带 ``Qt.Tool``，Cocoa 在应用失活时会自动 order out 它。
+    """回归：overlay 合成窗（macOS 默认 ``Qt.Window``，可回退 ``Qt.Tool``）在应用失活时不得被 Cocoa order out。
 
     真机症状（macOS，overlay 默认拓扑）：切到任何其他应用后整只桌宠从桌面消失，
     点 Dock 图标把应用激活回来才重现——窗口只是被移出屏幕，进程并没退出。
@@ -752,16 +752,22 @@ def test_overlay_tool_window_stays_visible_when_application_deactivates(monkeypa
         overlay.deleteLater()
 
 
-def test_overlay_window_keeps_qt_tool_flag():
-    """前提守卫：上面那条修复只在窗口仍是 ``Qt.Tool`` 时才有意义。
+def test_overlay_window_uses_expected_macos_window_type():
+    """守卫 overlay 的 macOS 窗口类型：默认 Window（NSWindow），可回退 Tool（NSPanel）。
 
-    若将来有人把 overlay 改成普通 ``Window``（例：为捕获软件可枚举），
-    macOS 失活隐藏的问题会自然消失，但同时也不该再依赖那个属性——
-    这条用例让那次改动必须显式面对它，而不是悄悄绕过。
+    ``Qt.Tool`` → NSPanel，Space 转场里会被 AppKit order out（1.5–2s 空白）；
+    默认 ``Qt.Window`` → QNSWindow。回退到 Tool 时，必须重新面对上面的
+    ``WA_MacAlwaysShowToolWindow`` 失活可见性修复，不能悄悄绕过。
     """
+    import pet.overlay_window as overlay_window
+
     overlay = OverlayWindow()
     try:
-        assert overlay.windowFlags() & Qt.WindowType.Tool
+        window_type = overlay.windowFlags() & Qt.WindowType.WindowType_Mask
+        if overlay_window._macos_uses_plain_window():
+            assert window_type == Qt.WindowType.Window
+        else:
+            assert window_type == Qt.WindowType.Tool
     finally:
         overlay.close()
         overlay.deleteLater()

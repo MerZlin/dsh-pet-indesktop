@@ -1699,7 +1699,11 @@ class BehaviorController:
         lo_x = float(self.bounds.x()) - off_x
         lo_y = float(self.bounds.y()) - off_y
         max_x = lo_x + self.bounds.width() - body.width()
-        max_y = lo_y + self.bounds.height() - body.height()
+        # 与 PetSprite.set_pos 同口径：body_box 底到画布底的透明余量也留在
+        # 域内，脚/裙摆不被窗口底边裁掉。
+        pad_fn = getattr(sprite, "_body_bottom_pad", None)
+        body_pad = int(pad_fn()) if callable(pad_fn) else 0
+        max_y = lo_y + self.bounds.height() - body.height() - body_pad
         x = min(max(sprite.pos.x(), lo_x), float(max(lo_x, max_x)))
         y = min(max(sprite.pos.y(), lo_y), float(max(lo_y, max_y)))
         if x != sprite.pos.x() or y != sprite.pos.y():

@@ -37,6 +37,7 @@ Phase 4 M-2：仿真推进（行为/碰撞/抛掷物理）与 tick 时钟、M-1 
 
 from __future__ import annotations
 
+import os
 import sys
 
 import shiboken6
@@ -68,6 +69,29 @@ if sys.platform == "win32":
 ALPHA_HIT_THRESHOLD = 16
 
 
+def _macos_uses_plain_window(platform: str | None = None) -> bool:
+    """macOS 合成窗是否用 Qt.Window（NSWindow）而不是 Qt.Tool（NSPanel）。
+
+    Space/三指切换时 AppKit 会把 panel（Qt.Tool）当辅助面板 order out 再
+    order in；full-screen overlay 的整窗内容在 1.5–2s 的转场里不可见。母项目
+    Electron 的 BrowserWindow 是普通 NSWindow，转场里保持可见；实测
+    Qt.Window 还修正了内建屏 overlay 被 AppKit 挪到 x=-280 的原点偏移。
+
+    macOS 默认走 NSWindow。回退到旧的 NSPanel 行为（二分/兼容）用任一环境
+    变量：``DSH_PET_MACOS_TOOL_WINDOW=1`` 或 ``DSH_PET_MACOS_NSWINDOW=0``；
+    ``DSH_PET_MACOS_NSWINDOW=1`` 仍显式强制 NSWindow（旧实验开关兼容）。
+    非 macOS 恒 False。
+    """
+    platform = sys.platform if platform is None else platform
+    if platform != "darwin":
+        return False
+    if os.environ.get("DSH_PET_MACOS_TOOL_WINDOW") == "1":
+        return False
+    if os.environ.get("DSH_PET_MACOS_NSWINDOW") == "0":
+        return False
+    return True
+
+
 class OverlayWindow(QWidget):
     """全屏透明合成窗：sprites 有序列表即 z-order（尾部最上）。"""
 
@@ -76,8 +100,14 @@ class OverlayWindow(QWidget):
         super().__init__(parent)
         # macOS 关窗口系统阴影（issue #229：外圈黑边，普通模式与直播捕获模式都要关）：
         # 标志只能在 flags 构造处给（见 platform_mac._mac_no_window_shadow_flag）。
+        # macOS 默认 Qt.Window → QNSWindow：Qt.Tool 是 NSPanel，Space 转场里
+        # 可能被 AppKit order out（整窗空白 1.5–2s）；普通 NSWindow 与母项目
+        # Electron 的 BrowserWindow 同类。回退见 _macos_uses_plain_window。
+        window_type = (Qt.WindowType.Window
+                       if _macos_uses_plain_window()
+                       else Qt.WindowType.Tool)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint
-                            | Qt.WindowType.Tool
+                            | window_type
                             | Qt.WindowType.WindowStaysOnTopHint
                             # The overlay is a visual/input surface, never the
                             # keyboard owner.  Without these two hints, a
@@ -92,8 +122,9 @@ class OverlayWindow(QWidget):
         # 用户正在输入的窗口被踢失活）。Windows 已有 WS_EX_NOACTIVATE 等价物，
         # 这条属性三平台语义一致（不抢激活），一并声明。
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        # macOS：本窗带 Qt.Tool，Cocoa 在应用失活时会自动把它 order out。真机表现是
-        # 「切到别的应用后整只桌宠从桌面消失，点 Dock 图标把应用激活回来才重现」——
+        # macOS：本窗可能是 Qt.Tool（回退分支）；Cocoa 在应用失活时会自动把它
+        # order out。真机表现是「切到别的应用后整只桌宠从桌面消失，点 Dock 图标
+        # 把应用激活回来才重现」——
         # 窗口只是被移出屏幕，进程并没有退出，所以 Dock 图标还在（真机实测：切到
         # Finder 时本进程在屏窗口 2→0，切回 →1）。
         # legacy ``PetWindow`` 一直带着这条修复（pet/window.py，同一 helper），overlay

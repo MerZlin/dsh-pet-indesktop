@@ -135,7 +135,11 @@ class ThrowPhysicsController:
         top = bounds.top() - off_y
         # sprite 比区域还大时 right/bottom 会小于 left/top：钳回，防死循环
         right = max(left, bounds.right() - off_x - body.width())
-        bottom = max(top, bounds.bottom() - off_y - body.height())
+        # 与 PetSprite.set_pos 同口径：body_box 底到画布底的透明余量也留在域内，
+        # 脚/裙摆不被窗口底边裁掉（实机：所有屏幕最下边脚被藏住）。
+        pad_fn = getattr(sprite, "_body_bottom_pad", None)
+        body_pad = int(pad_fn()) if callable(pad_fn) else 0
+        bottom = max(top, bounds.bottom() - off_y - body.height() - body_pad)
         return left, top, right, bottom
 
     def _advance_thrown(self, sprite, dt: float) -> None:
