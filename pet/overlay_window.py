@@ -98,6 +98,9 @@ class OverlayWindow(QWidget):
     def __init__(self, screen: QScreen | None = None, parent: QWidget | None = None,
                  *, driver: TickDriver | None = None) -> None:
         super().__init__(parent)
+        # 截图「包含桌宠」时用它把桌宠窗从 WindowHider 的候选里认出来；
+        # 动态属性不会随 setWindowFlags/原生窗重建丢失。
+        self.setProperty("dshPetOverlay", True)
         # macOS 关窗口系统阴影（issue #229：外圈黑边，普通模式与直播捕获模式都要关）：
         # 标志只能在 flags 构造处给（见 platform_mac._mac_no_window_shadow_flag）。
         # macOS 默认 Qt.Window → QNSWindow：Qt.Tool 是 NSPanel，Space 转场里

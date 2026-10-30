@@ -921,12 +921,21 @@ def add_network_info(menu: QMenu, pet, *, icons: bool = True):
 SCREEN_CAPTURE_LABEL = "截图提问"
 
 
-def add_screen_capture_menu(menu: QMenu, pet, *, icons: bool = True):
-    """「截图」= 单一**直接**菜单项（不进子菜单）：点了就进框选。
+def _menu_screens() -> list:
+    """当前屏幕列表；独立成函数便于测试注入（offscreen 只有一块假屏）。"""
+    try:
+        from PySide6.QtGui import QGuiApplication
+        return list(QGuiApplication.screens())
+    except Exception:
+        return []
 
-    交互模型（2026-10-14 实机反馈后重做）：菜单只负责**开始框选**；框完松手，
-    覆盖层动作条给出「提取文字 / 翻译 / 截图问答 / 复制图像 / 取消」由用户当场选。
-    原来还套一层只装一个叶子的子菜单——实机反馈：一个选项没必要（平铺直出）。
+
+def add_screen_capture_menu(menu: QMenu, pet, *, icons: bool = True):
+    """「截图」主项 + 多屏时的「选择屏幕截图」子菜单。
+
+    主项保持 2026-10-14 的**直接入口**：点一下就按光标所在屏开始框选，不强迫
+    用户先过一层菜单；只有真正多屏时才追加「选择屏幕截图」子菜单，用来截另一块
+    屏或勾选「包含桌宠」。
 
     截图栈（控制器/覆盖层/编排件）仍只有真触发时才装载——本函数不 import
     ``screen_capture.actions``，装载点在动作回调里（``actions_for``）。
@@ -934,8 +943,47 @@ def add_screen_capture_menu(menu: QMenu, pet, *, icons: bool = True):
     callback = getattr(pet, "on_screen_capture", None)
     if not callable(callback):
         return None  # 宿主没接这套面（纯桌宠变体）= 能力不可用，整组不出现
-    return add_action(menu, SCREEN_CAPTURE_LABEL, "size" if icons else None,
-                      callback, close_on_trigger=True)
+    action = add_action(menu, SCREEN_CAPTURE_LABEL, "size" if icons else None,
+                        callback, close_on_trigger=True)
+
+    screens = _menu_screens()
+    if len(screens) <= 1:
+        return action
+
+    # 多屏：主项仍是光标屏；子菜单显式列屏，解决右键菜单必然出现在宠物
+    # 所在屏、无法截另一块屏的问题。子菜单项同样走 close_on_trigger 的
+    # 延迟派发，菜单收起后再开始采集。
+    screen_menu = add_submenu(menu, "选择屏幕截图")
+    for index, screen in enumerate(screens):
+        name = str(screen.name() or "").strip() or f"屏幕 {index + 1}"
+        geo = screen.geometry()
+        label = f"{name}（{geo.width()}×{geo.height()}）"
+        add_action(
+            screen_menu, label, None,
+            lambda _checked=False, chosen=screen: callback(screen=chosen),
+            close_on_trigger=True,
+        )
+
+    # 「包含桌宠」：默认仍隐藏自家窗口（干净截图）；勾上后这次采集保留桌宠，
+    # 方便把宠物本身截进去。状态存在宿主 config，下一轮菜单直接复用。
+    cfg = getattr(pet, "cfg", None) or getattr(pet, "_config", None)
+    if cfg is not None and callable(getattr(cfg, "get", None)):
+        screen_menu.addSeparator()
+        keep = add_action(screen_menu, "截图包含桌宠", None)
+        keep.setCheckable(True)
+        keep.setChecked(bool(cfg.get("screen_capture_keep_pet", False)))
+
+        def _toggle_keep_pet(enabled: bool, cfg=cfg) -> None:
+            try:
+                cfg.set("screen_capture_keep_pet", bool(enabled))
+                save = getattr(cfg, "save", None)
+                if callable(save):
+                    save()
+            except Exception:
+                log.debug("截图：保存包含桌宠开关失败", exc_info=True)
+
+        keep.toggled.connect(_toggle_keep_pet)
+    return action
 
 
 def add_balance(menu: QMenu, pet, *, icons: bool = True):

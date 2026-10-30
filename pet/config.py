@@ -1161,6 +1161,7 @@ class Config:
             "lock_position": False,  # 锁定位置：桌宠不可拖动（点击仍有效）
             "shift_drag": False,  # 按住 SHIFT+左键才能拖动
             "pet_opacity": 100,  # 桌宠窗口不透明度 10-100
+            "screen_capture_keep_pet": False,  # 截图时保留桌宠（默认隐藏自家窗口）
             "context_menu_layout": None,
             "context_menu_appearance": dict(DEFAULT_CONTEXT_MENU_APPEARANCE),
             "menu_easter_egg": dict(DEFAULT_MENU_EASTER_EGG),
@@ -1536,6 +1537,7 @@ class Config:
             "lock_position",
             "shift_drag",
             "pet_opacity",
+            "screen_capture_keep_pet",
             "context_menu_appearance",
             "quick_launch_apps",
             "menu_easter_egg",

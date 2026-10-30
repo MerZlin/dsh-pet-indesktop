@@ -1013,7 +1013,7 @@ def test_one_translate_operation_keeps_one_icon_across_its_two_loading_cards(qap
         cancelled = Signal(str)
         failed = Signal(str)
 
-        def start(self) -> bool:
+        def start(self, **_kwargs) -> bool:
             return True
 
     class _FakeHost:

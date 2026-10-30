@@ -362,6 +362,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
     def __init__(self, lib: MovieLibrary, config: Config,
                  broker_facade=None, *, clock=None, agent_link_manager=None, proactive_watcher=None) -> None:
         super().__init__()
+        self.setProperty("dshPetOverlay", True)
         self.lib = lib
         self.cfg = config
         # 4.4b：进程级共享子系统（agent_link / proactive / 全屏 watcher）常建，
@@ -3543,10 +3544,11 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         手动视觉模块停用：空操作——不采集屏幕、不建编排件、不开覆盖层
         （注册表 ``_callback_available`` 只看"可调"，故闸必须在落点）。
         """
-        def _run() -> None:
+        def _run(screen=None) -> None:
             if not feature_activation_mod.is_active('vision'):
                 return
-            self._screen_capture().run()
+            keep_pet = bool(self.cfg.get('screen_capture_keep_pet', False))
+            self._screen_capture().run(screen=screen, keep_pet=keep_pet)
 
         return _run
 

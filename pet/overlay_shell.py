@@ -3525,10 +3525,11 @@ class OverlayShell(QObject):
         手动视觉模块停用：空操作（不采集、不建编排件、不开覆盖层）——
         ``_callback_available`` 只看"可调"，闸必须在落点。
         """
-        def _run() -> None:
+        def _run(screen=None) -> None:
             if not feature_activation.is_active("vision"):
                 return
-            self._screen_capture().run()
+            keep_pet = bool(self._config.get("screen_capture_keep_pet", False))
+            self._screen_capture().run(screen=screen, keep_pet=keep_pet)
 
         return _run
 

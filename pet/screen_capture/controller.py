@@ -207,6 +207,10 @@ class ScreenCaptureController(QObject):
         self._hider = hider
         self._grabber = grabber if grabber is not None else grab_screen_image
         self._overlay_factory = overlay_factory if overlay_factory is not None else SelectionOverlay
+        #: 构造期注入的固定屏（测试/宿主显式指定）；生产路径为 None，每次采集
+        #: 重新按光标解析。不能把首次解析结果缓存在 ``self._screen`` 里——否则
+        #: 用户在另一块屏上再次截图时，仍会回到第一次那块屏。
+        self._injected_screen = screen
         self._screen = screen
         #: hide→grab 之间的等帧器（``(screen) -> ms``）；``None`` = 不等。
         #: 真机探针靠它跑"修前/修后"对照（同一份源码，只换这一个注入件）。
@@ -226,8 +230,12 @@ class ScreenCaptureController(QObject):
 
     # ---------------------------------------------------------------- 入口
 
-    def start(self) -> bool:
-        """开始一次采集；已在采集中返回 False（不重复隐藏、不叠第二层覆盖层）。"""
+    def start(self, *, screen=None, keep_pet: bool = False) -> bool:
+        """开始一次采集；已在采集中返回 False（不重复隐藏、不叠第二层覆盖层）。
+
+        ``screen``：本次要抓的屏（菜单里显式选择）；``None`` = 光标所在屏。
+        ``keep_pet``：为 True 时不隐藏桌宠窗口，让桌宠进入冻结帧（用户想截自己）。
+        """
         if self._session.phase is not CapturePhase.IDLE:
             log.debug("快速识屏：上一轮还没收口，忽略本次触发 (%s)", self._session.phase.value)
             return False
@@ -237,10 +245,21 @@ class ScreenCaptureController(QObject):
         self._settle_macos_menu_close()
 
         self._session.start()
-        self._screen = self._resolve_screen()
+        self._screen = self._resolve_screen(screen)
 
         try:
-            hider = self._hider if self._hider is not None else WindowHider(visible_top_level_windows())
+            if self._hider is not None:
+                hider = self._hider
+            else:
+                windows = visible_top_level_windows()
+                if keep_pet:
+                    # 只留下桌宠自己的合成窗；气泡/岛/设置等仍藏掉，避免把
+                    # 非用户想截的界面带进底图。
+                    windows = [
+                        w for w in windows
+                        if not bool(w.property("dshPetOverlay"))
+                    ]
+                hider = WindowHider(windows)
             # 先记账再动手：hide_all 中途抛错时可能已经藏了一半，收口必须还能还回去。
             self._active_hider = hider
             hider.hide_all()
@@ -401,13 +420,16 @@ class ScreenCaptureController(QObject):
         except Exception:
             log.debug("快速识屏：等待 macOS 菜单收起失败", exc_info=True)
 
-    def _resolve_screen(self):
-        if self._screen is not None:
-            return self._screen
+    def _resolve_screen(self, screen=None):
+        if screen is not None:
+            return screen
+        if self._injected_screen is not None:
+            return self._injected_screen
         from PySide6.QtGui import QCursor, QGuiApplication
 
         # 框选要落在用户正在看的那块屏：多屏下主屏固定取 primaryScreen，
         # 会在副屏工作时把覆盖层/冻结帧甩到主屏，看起来像"跳到了空白桌面"。
+        # 每次 start 都重新按光标解析，不能复用上一次的 self._screen。
         return QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
 
     def _screen_dpr(self) -> float:

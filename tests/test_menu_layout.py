@@ -3235,3 +3235,72 @@ def test_saved_user_layout_gains_the_new_player_entries_beside_their_siblings():
     assert "music" in root_ids
     assert "music_open_kugou" not in root_ids
     assert "music_open_soda" not in root_ids
+
+
+def test_screen_capture_menu_lists_screens_and_keep_pet_toggle():
+    """「截图提问」不再只有光标屏：子菜单列屏；包含桌宠开关可持久化。"""
+    import pytest
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    QApplication.instance() or QApplication([])
+
+    from pet.context_menus.shared import add_screen_capture_menu
+
+    class _Cfg:
+        def __init__(self):
+            self.data = {}
+
+        def get(self, key, default=None):
+            return self.data.get(key, default)
+
+        def set(self, key, value):
+            self.data[key] = value
+
+        def save(self):
+            self.saved = True
+
+    class _Pet:
+        def __init__(self):
+            self.cfg = _Cfg()
+
+        def on_screen_capture(self):
+            pass
+
+    from pet.context_menus import shared as shared_mod
+
+    class _Screen:
+        def __init__(self, name, w, h):
+            self._name = name
+            self._w = w
+            self._h = h
+
+        def name(self):
+            return self._name
+
+        def geometry(self):
+            from PySide6.QtCore import QRect
+            return QRect(0, 0, self._w, self._h)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(shared_mod, "_menu_screens",
+                        lambda: [_Screen("内置屏", 1470, 956), _Screen("外接屏", 2304, 1296)])
+    try:
+        pet = _Pet()
+        menu = QMenu()
+        assert add_screen_capture_menu(menu, pet) is not None
+        submenus = [a.menu() for a in menu.actions() if a.menu() is not None]
+        assert submenus, "多屏时必须提供「选择屏幕截图」子菜单"
+    finally:
+        monkeypatch.undo()
+
+
+    screen_items = [a for a in submenus[0].actions() if a.text()]
+    assert screen_items, "子菜单必须列出至少一块屏幕"
+    assert any("×" in a.text() for a in screen_items), "屏幕项要带分辨率，重名屏可区分"
+
+    keep = [a for a in submenus[0].actions() if a.text() == "截图包含桌宠"]
+    assert len(keep) == 1 and keep[0].isCheckable()
+    keep[0].setChecked(True)
+    assert pet.cfg.data["screen_capture_keep_pet"] is True
+    assert getattr(pet.cfg, "saved", False) is True
+    menu.deleteLater()

@@ -111,7 +111,7 @@ class _FakeController(QObject):
         self.starts = 0
         self.emit_on_start = True
 
-    def start(self) -> bool:
+    def start(self, **_kwargs) -> bool:
         self.starts += 1
         if self.starts > 1:
             return False
@@ -798,7 +798,7 @@ def test_capture_failure_is_reported_and_the_watcher_comes_back():
 def test_start_exception_still_restores_the_watcher():
     """启动就抛异常（宿主侧千奇百怪）时，物理隔离同样必须对称收口。"""
     class _RaisingController(_FakeController):
-        def start(self) -> bool:
+        def start(self, **_kwargs) -> bool:
             self.starts += 1
             raise RuntimeError("宿主炸了")
 
@@ -1543,7 +1543,7 @@ class _OnDemandController(QObject):
         super().__init__()
         self.starts = 0
 
-    def start(self) -> bool:
+    def start(self, **_kwargs) -> bool:
         self.starts += 1
         return True
 

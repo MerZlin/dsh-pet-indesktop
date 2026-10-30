@@ -615,10 +615,12 @@ class ScreenCaptureActions(QObject):
 
     # ---------------------------------------------------------------- 入口
 
-    def run(self) -> bool:
+    def run(self, *, screen=None, keep_pet: bool = False) -> bool:
         """开始一次框选；已在采集中或 host 不支持时返回 False。
 
         动作不在入口定死：松手后覆盖层动作条给出动作，随 ``captured`` 带回。
+        ``screen`` = 本次显式选择的屏；``None`` = 光标所在屏。
+        ``keep_pet`` = 不隐藏桌宠窗口，让桌宠进入冻结帧。
         """
         if self._busy:
             log.debug("快速识屏：上一轮还没收口，忽略本次触发")
@@ -632,7 +634,7 @@ class ScreenCaptureActions(QObject):
         self._capture_round = self._op_seq
         self._watcher_gate.pause()
         try:
-            started = bool(self._controller.start())
+            started = bool(self._controller.start(screen=screen, keep_pet=keep_pet))
         except Exception as exc:  # 采集宿主千奇百怪，闭环不许因此塌掉
             log.exception("快速识屏：启动采集失败")
             self._watcher_gate.restore()   # 隔离必须对称：异常出口也要把 watcher 放回去

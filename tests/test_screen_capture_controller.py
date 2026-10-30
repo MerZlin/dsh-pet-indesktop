@@ -573,3 +573,40 @@ def test_start_stops_before_hiding_when_screen_recording_permission_missing(qapp
     assert controller.start() is False
     assert failed == ["screen-permission"]
     assert calls == ["permission-request"], "权限检查必须发生在 hide/抓帧/覆盖层之前"
+
+
+def test_start_can_capture_a_chosen_screen_and_keep_the_pet(qapp, monkeypatch):
+    """多屏显式选屏 + 「包含桌宠」：只保留带 dshPetOverlay 属性的窗口。"""
+    from PySide6.QtWidgets import QWidget
+
+    from pet.screen_capture import controller as controller_mod
+
+    pet_window = QWidget()
+    pet_window.setProperty("dshPetOverlay", True)
+    other_window = QWidget()
+    pet_window.show()
+    other_window.show()
+    try:
+        monkeypatch.setattr(controller_mod, "visible_top_level_windows",
+                            lambda: [pet_window, other_window])
+        chosen = _FakeScreen(80, 60)
+        frames: list = []
+        controller = ScreenCaptureController(
+            screen=None,
+            grabber=lambda screen: (frames.append(screen), _frame())[1],
+            overlay_factory=lambda frame, screen: _FakeOverlay(frame, screen, []),
+            settler=lambda _screen: 0,
+            permission_check=lambda: True,
+            permission_request=lambda: False,
+        )
+        assert controller.start(screen=chosen, keep_pet=True) is True
+        assert frames == [chosen]
+        assert controller._overlay.screen is chosen
+        assert pet_window.isVisible() is True, "包含桌宠时不能把桌宠一起藏掉"
+        assert other_window.isVisible() is False, "其它自家窗口仍要藏"
+
+        controller._overlay.cancel("esc")
+        assert other_window.isVisible() is True, "结束后必须还原被藏的其它窗口"
+    finally:
+        pet_window.close()
+        other_window.close()
