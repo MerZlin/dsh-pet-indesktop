@@ -713,3 +713,24 @@ def test_the_action_bar_gates_chat_dependent_actions_by_capability(qapp):
     for name in ("ocr", "copy"):
         assert bar.findChild(QPushButton, f"screen-capture-action-{name}").isEnabled() is True
     overlay.close()
+
+
+def test_show_joins_all_spaces_on_macos(monkeypatch, qapp):
+    """覆盖层必须在用户当前 Space 显示：否则 activateWindow 会把用户带到旧桌面。"""
+    from pet import platform_mac
+
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(platform_mac, "_mac_set_window_all_spaces",
+                        lambda wid: calls.append(("spaces", wid)) or True)
+    monkeypatch.setattr(platform_mac, "_mac_set_hides_on_deactivate",
+                        lambda wid: calls.append(("hides", wid)) or True)
+
+    overlay = SelectionOverlay(frame=_frozen_frame(200, 120), screen=_FakeScreen(200, 120),
+                               memory=SelectionMemory())
+    overlay.show()
+    qapp.processEvents()
+    try:
+        kinds = [kind for kind, _wid in calls]
+        assert "spaces" in kinds and "hides" in kinds
+    finally:
+        overlay.close()

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """看看屏幕：视觉模型推导 + 截图存档。"""
 
+import pytest
+
 from pet.chat.models import ProviderConfig
 from pet.vision import resolve_vision_model
 
@@ -35,6 +37,16 @@ def test_manual_override_wins():
 def test_manual_empty_falls_back_to_derivation():
     p = _p('deepseek-v4-flash', vision_same_as_chat=False, vision_model='  ')
     assert resolve_vision_model(p) == 'deepseek-v4-flash-vision-exp'
+
+
+def test_capture_screen_bytes_requires_screen_recording_permission(monkeypatch):
+    """macOS 权限没生效时不要截一张黑图送去模型：直接给出可执行的授权说明。"""
+    from pet import vision
+
+    monkeypatch.setattr(vision, "_mac_screen_capture_access", lambda: False)
+    with pytest.raises(vision.VisionError) as exc_info:
+        vision.capture_screen_bytes()
+    assert "屏幕录制" in str(exc_info.value)
 
 
 def test_capture_screen_bytes_in_memory(tmp_path):

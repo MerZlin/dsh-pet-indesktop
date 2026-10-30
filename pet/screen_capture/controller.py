@@ -42,6 +42,7 @@ from PySide6.QtCore import QObject, Signal
 
 from .host import WindowHider, visible_top_level_windows
 from .overlay import ACTION_ASK, ACTION_COPY, ACTION_OCR, ACTION_TRANSLATE, SelectionOverlay
+from ..platform_mac import _mac_request_screen_capture_access, _mac_screen_capture_access
 from .pixels import crop_selection, grab_screen_image, to_srgb8
 from .session import CapturePhase, CaptureSession, SelectionRect
 
@@ -195,7 +196,8 @@ class ScreenCaptureController(QObject):
     failed = Signal(str)                # 采集失败理由（含阶段前缀，便于定位）
 
     def __init__(self, parent=None, *, session=None, hider=None, grabber=None,
-                 overlay_factory=None, screen=None, settler=None) -> None:
+                 overlay_factory=None, screen=None, settler=None,
+                 permission_check=None, permission_request=None) -> None:
         super().__init__(parent)
         self._session = session if session is not None else CaptureSession()
         self._hider = hider
@@ -205,6 +207,9 @@ class ScreenCaptureController(QObject):
         #: hide→grab 之间的等帧器（``(screen) -> ms``）；``None`` = 不等。
         #: 真机探针靠它跑"修前/修后"对照（同一份源码，只换这一个注入件）。
         self._settler = settler if settler is not None else settle_before_grab
+        #: macOS 屏幕录制权限：preflight / 首次用户触发时的系统授权请求（均可注入）。
+        self._permission_check = permission_check or _mac_screen_capture_access
+        self._permission_request = permission_request or _mac_request_screen_capture_access
         self._overlay = None
         self._active_hider = None
         self._frame = None
@@ -221,6 +226,9 @@ class ScreenCaptureController(QObject):
         """开始一次采集；已在采集中返回 False（不重复隐藏、不叠第二层覆盖层）。"""
         if self._session.phase is not CapturePhase.IDLE:
             log.debug("快速识屏：上一轮还没收口，忽略本次触发 (%s)", self._session.phase.value)
+            return False
+        if not self._screen_recording_allowed():
+            self.failed.emit("screen-permission")
             return False
 
         self._session.start()
@@ -348,12 +356,32 @@ class ScreenCaptureController(QObject):
 
     # ---------------------------------------------------------------- 环境
 
+    def _screen_recording_allowed(self) -> bool:
+        """macOS 屏幕录制 preflight；未授权时弹一次系统框，仍不行就如实失败。
+
+        preflight 为 False 时绝不能继续 hide 自家窗口/显示全屏覆盖层：权限没生效时
+        抓到的冻结帧是黑图，覆盖层一 ``activateWindow`` 就会把用户带到一块空白桌面。
+        系统框每个进程只弹一次；用户拒绝后直接走失败说明，不反复骚扰。
+        """
+        try:
+            if self._permission_check():
+                return True
+            granted = bool(self._permission_request())
+            if granted and self._permission_check():
+                return True
+        except Exception:
+            log.debug("快速识屏：屏幕录制权限检查异常", exc_info=True)
+        log.warning("快速识屏：屏幕录制权限未生效（授权后需重启进程）")
+        return False
+
     def _resolve_screen(self):
         if self._screen is not None:
             return self._screen
-        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtGui import QCursor, QGuiApplication
 
-        return QGuiApplication.primaryScreen()
+        # 框选要落在用户正在看的那块屏：多屏下主屏固定取 primaryScreen，
+        # 会在副屏工作时把覆盖层/冻结帧甩到主屏，看起来像"跳到了空白桌面"。
+        return QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
 
     def _screen_dpr(self) -> float:
         dpr = getattr(self._screen, "devicePixelRatio", None)

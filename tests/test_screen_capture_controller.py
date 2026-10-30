@@ -549,3 +549,27 @@ def test_dwm_flush_is_a_noop_off_windows(monkeypatch):
     monkeypatch.setattr(controller_mod.sys, "platform", "linux")
 
     assert controller_mod._flush_dwm() is False
+
+
+def test_start_stops_before_hiding_when_screen_recording_permission_missing(qapp):
+    """macOS 权限没生效时：不藏窗口、不建覆盖层，只发一次明确失败。
+
+    这条是"空白桌面"的止血门：旧行为会先 hide 自家窗口、抓一张黑图，再把
+    全屏覆盖层 activate 到前台；用户看到的就是一块空白桌面。
+    """
+    calls: list[str] = []
+    controller = ScreenCaptureController(
+        hider=_FakeHider(calls),
+        grabber=lambda _screen: _frame(),
+        overlay_factory=lambda frame, screen: _FakeOverlay(frame, screen, calls),
+        screen=_FakeScreen(),
+        settler=lambda _screen: 0,
+        permission_check=lambda: False,
+        permission_request=lambda: (calls.append("permission-request"), False)[1],
+    )
+    failed: list[str] = []
+    controller.failed.connect(failed.append)
+
+    assert controller.start() is False
+    assert failed == ["screen-permission"]
+    assert calls == ["permission-request"], "权限检查必须发生在 hide/抓帧/覆盖层之前"

@@ -280,6 +280,20 @@ class SelectionOverlay(QWidget):
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         super().showEvent(event)
+        # macOS：覆盖层必须出现在**用户当前 Space**，否则 activateWindow 会把
+        # accessory 应用切到它原来的桌面（权限失败时那正是一块空白桌面）。
+        # 同时禁止失活自动隐藏；键鼠焦点仍由下面的 raise/activate 取得。
+        try:
+            from ..platform_mac import (
+                _mac_set_hides_on_deactivate,
+                _mac_set_window_all_spaces,
+            )
+
+            wid = int(self.winId())
+            _mac_set_hides_on_deactivate(wid)
+            _mac_set_window_all_spaces(wid)
+        except Exception:
+            log.debug("快速识屏：覆盖层 Space 行为设置失败", exc_info=True)
         # 键鼠都要吃：无激活窗口的覆盖层收不到 Esc/Enter。
         self.raise_()
         self.activateWindow()

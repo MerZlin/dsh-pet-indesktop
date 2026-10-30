@@ -229,3 +229,64 @@ def _mac_set_dock_icon_visible(visible: bool) -> None:
         msg(shared, objc.sel_registerName(b'setActivationPolicy:'), 0 if visible else 1)
     except Exception:
         pass
+
+#: 进程内只主动弹一次系统「屏幕录制」授权框：重复调用不会加权限，只会烦用户。
+_SCREEN_CAPTURE_REQUESTED = False
+
+
+def _mac_screen_capture_access() -> bool:
+    """macOS 屏幕录制权限是否**已生效**（只 preflight，不弹系统框）。
+
+    ``CGPreflightScreenCaptureAccess`` 从 10.15 起提供；非 cocoa（测试 offscreen）
+    与老系统上返回 True，让调用方照常尝试抓屏（抓不到再由空图/失败路径兜底）。
+    这个函数**不触发**授权弹窗——弹窗只由 :func:`_mac_request_screen_capture_access`
+    在用户明确触发截图时发一次。
+    """
+    if sys.platform != 'darwin':
+        return True
+    try:
+        from PySide6.QtGui import QGuiApplication
+        if QGuiApplication.platformName() != 'cocoa':
+            return True
+    except Exception:
+        pass
+    try:
+        import ctypes
+        cg = ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+        preflight = cg.CGPreflightScreenCaptureAccess
+        preflight.restype = ctypes.c_bool
+        preflight.argtypes = []
+        return bool(preflight())
+    except Exception:
+        # 符号缺失（10.15 之前）/ 框架加载失败：不伪造"已授权"，也不挡抓屏。
+        return True
+
+
+def _mac_request_screen_capture_access() -> bool:
+    """主动请求屏幕录制权限（系统弹窗）；**每个进程最多一次**。
+
+    只在用户点「截图问答/看看屏幕」且 preflight 为 False 时调用。返回 True 表示
+    系统已授权（部分 macOS 版本仍要求重启进程后抓屏才生效，调用方应提示重启）；
+    返回 False 表示用户拒绝/系统不支持。非 cocoa 恒 False。
+    """
+    global _SCREEN_CAPTURE_REQUESTED
+    if _SCREEN_CAPTURE_REQUESTED:
+        return False
+    _SCREEN_CAPTURE_REQUESTED = True
+    if sys.platform != 'darwin':
+        return False
+    try:
+        from PySide6.QtGui import QGuiApplication
+        if QGuiApplication.platformName() != 'cocoa':
+            return False
+    except Exception:
+        return False
+    try:
+        import ctypes
+        cg = ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+        request = cg.CGRequestScreenCaptureAccess
+        request.restype = ctypes.c_bool
+        request.argtypes = []
+        return bool(request())
+    except Exception:
+        return False

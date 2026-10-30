@@ -18,6 +18,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from .platform_mac import _mac_screen_capture_access
+from .screen_capture.reasons import SCREEN_RECORDING_PERMISSION_REASON
+
 # 注意：不在此处顶层 import PIL —— Image/ImageGrab 只在截屏路径
 # （capture_window_rect / capture_screen_bytes）用到，而本模块随 pet.window
 # 顶层导入常驻进程；PIL 顶层导入会让它在启动期常驻数 MB。用到的地方在
@@ -233,6 +236,9 @@ def capture_window_rect(rect: tuple[int, int, int, int] | None) -> Any:
     from PIL import ImageGrab  # 懒导入：PIL 不随模块加载常驻（见模块头注释）
     if not rect or rect[2] <= 0 or rect[3] <= 0:
         return None
+    if not _mac_screen_capture_access():
+        log.warning("窗口截图：macOS 屏幕录制权限未生效，跳过本次抓图")
+        return None
     try:
         vx, vy = 0, 0
         if sys.platform == 'win32':
@@ -277,6 +283,8 @@ def foreground_app_info() -> str:
 
 def capture_screen_bytes() -> bytes:
     """截全屏（含多显示器）→ 缩到最长边 MAX_EDGE → 内存 JPEG bytes，全程不落盘。"""
+    if not _mac_screen_capture_access():
+        raise VisionError(SCREEN_RECORDING_PERMISSION_REASON)
     import io
     from PIL import Image, ImageGrab  # 懒导入：PIL 不随模块加载常驻（见模块头注释）
     img = ImageGrab.grab(all_screens=True)

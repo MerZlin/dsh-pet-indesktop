@@ -57,7 +57,11 @@ from .controller import ScreenCaptureController, _weak_slot
 from .overlay import (
     ACTION_ASK, ACTION_COPY, ACTION_OCR, ACTION_TRANSLATE, SelectionOverlay,
 )
-from .reasons import OCR_PENDING_REASON, TRANSLATION_UNAVAILABLE_REASON
+from .reasons import (
+    OCR_PENDING_REASON,
+    SCREEN_RECORDING_PERMISSION_REASON,
+    TRANSLATION_UNAVAILABLE_REASON,
+)
 from .result_panel import SHORT_RESULT_LIMIT, ScreenResult, ScreenResultPanel
 
 # ``_weak_slot``：slice-1 的 Qt 生命周期小工具（信号槽只持弱引用，避免
@@ -680,7 +684,8 @@ class ScreenCaptureActions(QObject):
             return
         self._watcher_gate.restore()
         self._finish()
-        self.status(f"这张没截成（{reason}）")
+        text = SCREEN_RECORDING_PERMISSION_REASON if str(reason) == "screen-permission" else str(reason)
+        self.status(f"这张没截成（{text}）")
         self.failed.emit(str(reason))
 
     # ---------------------------------------------------------------- 四条链路
