@@ -204,3 +204,13 @@ PowerShell 子进程）、DSH（1 条 SSE 线程 + 1 条短命 POST 线程/操�
 另修 `MicRecorder.open()` 在 `waveInAddBuffer` 失败时漏 `unprepare`、
 `_ASR_REASON_TEXT` 缺 `unavailable/too_large/not_recording/cancelled`、
 API 页 insecure 文案仍写「只用于 localhost」。
+
+## 8. 安装包构建与实机启动（2026-10-31 追加）
+
+§5 的「未构建安装包」已经补上：0.2.0 的 onedir + Inno 安装包构建通过（内置
+`--check --strict` 冒烟全绿），并对**打包产物**做过一次真实 GUI 启动（可见窗口
+461×259、日志无报错、首次启动按预期播种 DeepSeek 与 OpenCode 两个服务）。
+
+构建命令、产物摘要与 SHA256、随包内容逐项核对、以及剩余风险（安装向导未跑完整
+交互、DSH 真机双向仍未连测、产物未签名）见 [`PETCORE-LOG.md`](PETCORE-LOG.md)
+的 L138。

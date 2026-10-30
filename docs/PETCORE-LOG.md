@@ -4954,3 +4954,134 @@ DSH 双向通道与同窗 DSH 页、长期记忆与联网口径。v4.4.0 发布�
 - 本地 ASR HTTP 端点未起服务；只验证了 Windows System.Speech 兜底。
 - 未构建安装包（SAC 强模式下新 exe 会被拦）；PyInstaller spec/build 脚本已加
   `integrations` 数据目录。
+
+## L138 — 2026-10-31 — 安装包构建与实机启动（petcore 0.2.0）
+
+**主题**：把 L137 的用户反馈批次打成可分发的 Windows 安装包，并补上 L137 登记为
+「未验证」的打包与启动证据。只出产物，不改产品代码。
+
+**产物**（输出目录被 `.gitignore` 的 `rel-*/` 忽略，不进版本库）
+
+- `rel-user-feedback-2026-10-31/dsh-pet-core-setup.exe`：305,172,872 字节，
+  SHA256 `0d84c6f0a2775221945e8622e4784b2997bb2a2653bb22ed24360d7720fe5c54`，
+  ProductVersion `0.2.0`，未签名。
+- 同目录 onedir `dsh-pet-core/`（633 MB，`dsh-pet-core.exe` 15,686,539 字节）、
+  `check.json`、Inno 用 spec。
+- 这是**最终产物**：早一版 `rel-user-feedback-2026-10-30b` 打于 L139/L140 之前
+  （设置页彩蛋提示与聊天语义词表都还是旧版），已删除，避免装错。
+
+**构建命令与环境**
+
+```
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 \
+  -Clean -Installer -OutputRoot rel-user-feedback-2026-10-31
+```
+
+PyInstaller 6.22.3 / PySide6 6.12.0 / CPython 3.12.10；Inno 压缩 120.7 s，整条构建
+约 9 min（Qt + OCR 收集 + 852 MB lzma2）。本机
+`VerifiedAndReputablePolicyState=0`（SAC 关闭），所以 `-SignThumbprint` 未传，
+未签名产物可直接运行。
+
+**随包内容核对**（列目录实测，不是推断）
+
+- `_internal/integrations/{dsh-pet-bridge,dsh-pet-channel,hermes-pet-bridge}` 齐全，
+  `dsh-pet-channel` 的 `index.js` / `cordis.patch.yml` / `locale` 都在。
+- `_internal/petcore/menu_templates/petcore-default-v1.json`、
+  `_internal/assets`（166 MB，角色 106 段动画）、
+  `_internal/resources/{presentmon,rapidocr_models}`。
+
+**打包冒烟**（`build_petcore.ps1` 内置 `--check --strict`，构建门已通过）
+
+`check.json`：`version=0.2.0`、`menu_template=json`、`characters[0].animations=106`、
+`diagnostics=[]`、`strict.problems=[]`、`self_talk_images.builtin_readable=24`。
+
+**实机启动记录**（打包产物，不是源码树）
+
+```
+dsh-pet-core\dsh-pet-core.exe --instance smoke1031b
+```
+
+- 12 s 后进程存活（PID 10624，WorkingSet 96.2 MiB）。
+- 枚举到 1 个可见窗口：标题 `dsh-pet-core-smoke1031b`，矩形 `1285,675 461x259`
+  —— GUI 真正渲染出桌宠窗口，不是「进程活着但没有窗口」。
+- `logs/petcore.log` 只有 `starting petcore 0.2.0`，无 error/traceback。
+- 首次启动播种生效：`api.json` 同时生成 `deepseek`（默认）与 `opencode-free`，
+  `preset`/`models_path`/`extra_headers`/`allow_lan_http` 四个新字段都在。
+- 测完删除 `%APPDATA%\dsh-pet-core-smoke1031b`，未触碰用户真实数据目录。
+- 同一套冒烟对 `rel-user-feedback-2026-10-30b`（更早一版）也做过一次，数字一致
+  （PID 6764 / 100.9 MB / 同一矩形）。
+
+**未验证 / 风险**
+
+- DSH 真机双向仍未连测（本机 DSH 桌面端未启动），安装包只保证插件随包分发。
+- 安装向导本身没跑完一遍：目录页预选、可选扩展勾选、卸载器（`unins000.exe`
+  由安装时现场生成）都没有真机交互验证。
+- 未签名：对外分发会触发 SmartScreen 提示；本机 SAC 关闭所以能直接运行。
+
+## L139 — 2026-10-31 — 彩蛋「指定头像」提示文案跟随随机抽图
+
+**主题**：L137 把 `EasterEggCatalog.selected_image()` 的兜底从「取首张」改成
+`rng.choice`，但设置页同一行的提示仍写「无效或留空时回退到图片目录中的首张可读
+图片」，与新行为相反。只改文案，不改行为。
+
+**改动**
+- `petcore/ui/settings/page_interaction.py`：`指定头像` 行 hint 改为
+  「无效或留空时从图片目录里随机抽一张。」（+1 行 / −1 行）。
+
+**验证**
+- `QT_QPA_PLATFORM=offscreen pytest -q tests/test_petcore_easter_egg.py
+  tests/test_petcore_settings.py tests/test_petcore_settings_coverage.py`
+  → 66 passed（16.79 s）。
+- 代码路径复核：头像有效 → 用头像；无效/留空 → `picker.choice(candidates)`。
+
+**未验证 / 风险**：无（纯文案）。
+
+## L140 — 2026-10-31 — 聊天语义动作：补齐随包素材词表 + 修生气误命中
+
+**主题**：准备安装包验收时，拿随包角色（`shenshen`，89 个随机动作）真实素材名跑了一遍
+`choose_animation`，发现 12 条规则里有 4 条在这套素材上永远落空、1 条会误播、
+1 条漏词。
+
+**修改前实测**（素材名取自 `assets/characters/shenshen/videos/random`）
+
+- `开心` / `你好` / `谢谢` / `哇` → `None`：规则词表里没有这套素材的用词
+  （雀跃庆祝、宅舞、摇摆舞、旋转展示、屈膝礼仪、被吓一跳）。
+- `我很生气` → `悠闲哼歌`：`angry` 词表里有单个「哼」，把「哼歌」判成生气。
+- `唱首歌吧` → `None`：词表只有「唱歌」，没有「唱首歌」。
+
+**改动**（`examples/petcore-mods/ai.chat/host/animation_semantics.py`，+20 / −7）
+
+- `happy` names 加 `雀跃/庆祝/宅舞/摇摆/旋转`。**不写「跳舞」**：那是 `music` 的
+  专属名，两边都认会让「开心」误播唱歌类素材，
+  `test_choose_animation_returns_none_without_material` 正是在守这条。
+- `angry` 关键词与 names 都去掉「哼」，加 `气急败坏`。
+- `greet` / `thanks` names 加 `礼仪` / `屈膝`；`surprise` 加 `吓` / `吓一跳` / `被吓`。
+- `music` 关键词加 `唱首歌` / `唱一曲`。
+- 解析顺序、打分与「绝不编造素材名」的契约不变：仍然只从
+  `PetHandle.animations()` 给的真实名字里挑，落不到就返回 `None`。
+
+**改后实测（同一套 89 个素材名）**
+
+| 用户说 | 播 |
+|---|---|
+| 今天好开心啊，笑一个 | 可爱宅舞 |
+| 困了想睡觉 | 打瞌睡被惊醒 |
+| 我饿了想吃点东西 | 吃Token |
+| 帮我看看这段代码 | 写代码 |
+| 你好呀 / 谢谢你 | 女仆屈膝礼仪 |
+| 哇居然是这样 | 被吓一跳 |
+| 摸摸头 | 可爱宅舞 |
+| 唱首歌吧 | 悠闲哼歌 |
+| 有点难过 | 工作状态-垂头叹气冒汗 |
+| 我很生气 | 玩游戏气急败坏 |
+
+**验证**
+
+- 新增 `tests/test_petcore_ai_animation.py::test_pack_vocabulary_actually_resolves`
+  与 `::test_angry_does_not_use_humming_material`——样本用的是随包素材名，不是自造词。
+- `pytest -q test_petcore_ai_animation.py test_petcore_ai_mod.py
+  test_petcore_easter_egg.py test_petcore_settings.py` → 124 passed（17.92 s）。
+- `ruff check examples/petcore-mods/ai.chat tests/test_petcore_ai_animation.py`：通过。
+
+**未验证 / 风险**：规则仍是关键词表，不是语义模型；换角色或换素材包后，若词表里没有
+对应用词仍会落空（返回 `None`，不猜一个不相关的动作）。

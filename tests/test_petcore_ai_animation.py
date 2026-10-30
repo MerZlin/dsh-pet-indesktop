@@ -177,3 +177,36 @@ def test_settings_page_saves_chat_animation_switches(qt_app, tmp_path: Path) -> 
         assert host.config.get("ai_animation_min_seconds") == 5.0
     finally:
         page.close()
+
+
+#: 随包角色 `shenshen` 动作池里真实存在的素材名 —— 这些是 review 时发现
+#: 「规则词表太窄、随包素材永远匹配不到」的样本。
+PACK_VOCAB = (
+    "工作状态-雀跃庆祝",
+    "可爱宅舞",
+    "轻快摇摆舞",
+    "小幅度原地360度旋转展示",
+    "悠闲哼歌",
+    "玩游戏气急败坏",
+    "女仆屈膝礼仪",
+    "被吓一跳",
+)
+
+
+def test_pack_vocabulary_actually_resolves() -> None:
+    pick = animation_semantics.choose_animation
+    assert pick("今天好开心啊", "", PACK_VOCAB) in {
+        "工作状态-雀跃庆祝",
+        "可爱宅舞",
+        "轻快摇摆舞",
+        "小幅度原地360度旋转展示",
+    }
+    assert pick("你好呀", "", PACK_VOCAB) == "女仆屈膝礼仪"
+    assert pick("谢谢你", "", PACK_VOCAB) == "女仆屈膝礼仪"
+    assert pick("哇，居然是这样", "", PACK_VOCAB) == "被吓一跳"
+
+
+def test_angry_does_not_use_humming_material() -> None:
+    pick = animation_semantics.choose_animation
+    assert pick("我很生气", "", ("悠闲哼歌",)) is None
+    assert pick("我很生气", "", PACK_VOCAB) == "玩游戏气急败坏"

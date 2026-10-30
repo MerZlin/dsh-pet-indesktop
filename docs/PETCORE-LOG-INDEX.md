@@ -172,3 +172,6 @@
 | L135 | 2026-10-29 | 帧表节拍回到 PreciseTimer | `create_frame_clip` 去掉 Coarse（Windows 15.625ms 颗粒把它量化成 31ms → 2x 只有 32fps）；实测 Precise 1x 23.84fps / 2x 47.62fps。 | animation、pacing、frameseq、timer、coarse、precise、2x-speed |
 | L136 | 2026-10-29 | SMTC 硬超时降级 + peak 判据 | `SmtcReader`（专用线程 + 0.5s 硬超时 + 30s 降级窗 + 自愈）；退化不走 ERROR、改判窗口源；`poll()` 在飞看门狗 + `_collect` 异常兜底；同播放器 paused 用 peak 区分"真在播/残留 Active"。 | music、smtc、timeout、degraded、watchdog、peak、recognition、self-heal |
 | L137 | 2026-10-30 | 用户反馈八组需求 | 动画策略/聊天语义/字体人设/语音ASR/API预设/DSH通道/长期记忆；新增 animation_policy、dsh-pet-channel、memory 等 | animation-policy、semantic-animation、font、persona、asr、opencode、dsh、memory |
+| L138 | 2026-10-31 | 安装包构建与实机启动（0.2.0） | 305 MB setup + 633 MB onedir；`--check --strict` 全绿；打包 exe 启动后可见窗口 461×259、日志无报错、首启播种 DeepSeek+opencode | packaging、installer、smoke、check-strict、first-run、seed、sha256 |
+| L139 | 2026-10-31 | 彩蛋头像提示文案跟随随机抽图 | `指定头像` 行 hint 从「回退首张」改成「随机抽一张」，与新 `selected_image()` 的 `rng.choice` 一致；66 passed | easter-egg、settings、hint、stale-text、rng |
+| L140 | 2026-10-31 | 聊天语义动作词表补齐 + 生气误命中 | `happy/greet/thanks/surprise` 补随包素材用词（雀跃/宅舞/礼仪/被吓一跳），`angry` 去掉歧义「哼」，`music` 加「唱首歌」；用 89 个真实素材名逐条实测，12 条规则全部可落 | semantic-animation、keyword、pack-vocabulary、angry、regression |

@@ -537,7 +537,7 @@ class InteractionPage(SettingsPage):
             egg_card.add_row(
                 "指定头像",
                 avatar_row,
-                "无效或留空时回退到图片目录中的首张可读图片。",
+                "无效或留空时从图片目录里随机抽一张。",
                 expand=True,
             )
 
