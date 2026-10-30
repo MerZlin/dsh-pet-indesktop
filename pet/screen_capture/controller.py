@@ -58,6 +58,10 @@ _VALID_ACTIONS = frozenset({ACTION_OCR, ACTION_TRANSLATE, ACTION_ASK, ACTION_COP
 _SETTLE_MAX_MS = 50.0
 #: 读不到/读出不合理的刷新率时按这个算兜底帧长。
 _DEFAULT_REFRESH_HZ = 60.0
+#: macOS 原生 NSMenu 的收起动画时长。菜单项触发后 ``menu.exec()`` 先返回，但
+#: AppKit 仍会把菜单窗口留在屏上做一小段淡出；若立刻抓冻结帧，菜单会被截进
+#: 「截图提问」的底图。等这一拍再 hide/grab，底图才是用户真正看到的界面。
+_MACOS_MENU_SETTLE_MS = 260
 
 
 def _process_pending_events() -> None:
@@ -230,6 +234,7 @@ class ScreenCaptureController(QObject):
         if not self._screen_recording_allowed():
             self.failed.emit("screen-permission")
             return False
+        self._settle_macos_menu_close()
 
         self._session.start()
         self._screen = self._resolve_screen()
@@ -373,6 +378,28 @@ class ScreenCaptureController(QObject):
             log.debug("快速识屏：屏幕录制权限检查异常", exc_info=True)
         log.warning("快速识屏：屏幕录制权限未生效（授权后需重启进程）")
         return False
+
+    def _settle_macos_menu_close(self) -> None:
+        """等 macOS 原生菜单的收起动画结束，再 hide/grab。
+
+        右键菜单的 action 是延到 ``menu.exec()`` 返回后才派发的，但 AppKit 的
+        ``NSMenu`` 窗口还有一小段淡出；0ms 就抓会把菜单（以及菜单后面的变暗）
+        一起冻进底图。用嵌套事件循环让这一拍过去，期间 GUI 仍可处理事件；
+        offscreen/非 cocoa 不等待（测试不需要为真实菜单动画买单）。
+        """
+        if sys.platform != "darwin":
+            return
+        try:
+            from PySide6.QtCore import QEventLoop, QTimer
+            from PySide6.QtGui import QGuiApplication
+
+            if QGuiApplication.platformName() != "cocoa":
+                return
+            loop = QEventLoop()
+            QTimer.singleShot(_MACOS_MENU_SETTLE_MS, loop.quit)
+            loop.exec()
+        except Exception:
+            log.debug("快速识屏：等待 macOS 菜单收起失败", exc_info=True)
 
     def _resolve_screen(self):
         if self._screen is not None:
