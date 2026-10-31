@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFontComboBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -30,7 +31,14 @@ from PySide6.QtWidgets import (
 from petcore.ui.chat.themes import theme_names
 from petcore.ui.settings.base import SettingsPage, make_button, make_checkbox
 
-from .persona_presets import CUSTOM_PERSONA, DEFAULT_PERSONA, load_presets
+from .persona_presets import (
+    CUSTOM_PERSONA,
+    DEFAULT_PERSONA,
+    PersonaPreset,
+    PersonaStore,
+    new_user_id,
+)
+from .prompts import DEFAULT_PROMPT
 
 _CUSTOM_BACKGROUND = "__custom__"
 _HEX = QRegularExpression(r"^#[0-9a-fA-F]{6}$")
@@ -117,10 +125,72 @@ class AiChatPage(SettingsPage):
         card.add_row("温度", self.temperature_spin, "越高越发散，0.7 适合日常聊天。")
 
         card2 = self.section("人格与视觉", level=3)
+        self._persona_store = PersonaStore.for_data_root(self.config().root)
+        self._personas: dict[str, PersonaPreset] = {}
+        self._builtin_personas = {item.id for item in self._persona_store.bundled()}
         self.persona_combo = QComboBox(self)
-        for preset in load_presets():
-            self.persona_combo.addItem(preset.name, preset.id)
-        self.persona_combo.addItem("自定义提示词", CUSTOM_PERSONA)
+        self.persona_combo.currentIndexChanged.connect(self._on_persona_changed)
+        card2.add_row(
+            "人设",
+            self.persona_combo,
+            "内置预设与用户人格卡都从这里选；选中后可直接改提示词，"
+            "点「保存人格卡」立即写入用户目录（不受整窗取消影响；内置预设会生成同 id 覆盖文件）。",
+        )
+        self.persona_name = QLineEdit(self)
+        self.persona_name.setMaxLength(32)
+        self.persona_name.setPlaceholderText("人格名称（保存人格卡时使用）")
+        card2.add_row(
+            "人格名称",
+            self.persona_name,
+            "重命名内置预设会生成用户覆盖；「恢复内置」可撤销覆盖。",
+        )
+        self.persona_desc = QLabel("", self)
+        self.persona_desc.setObjectName("settingHint")
+        self.persona_desc.setWordWrap(True)
+        card2.add_row("人设说明", self.persona_desc, "")
+
+        persona_buttons = QWidget(self)
+        persona_buttons_layout = QHBoxLayout(persona_buttons)
+        persona_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        persona_buttons_layout.setSpacing(6)
+        self.persona_new_button = make_button("新建", persona_buttons)
+        self.persona_copy_button = make_button("复制当前", persona_buttons)
+        self.persona_rename_button = make_button("重命名", persona_buttons)
+        self.persona_save_button = make_button("保存人格卡", persona_buttons, primary=True)
+        self.persona_reset_button = make_button("恢复内置", persona_buttons)
+        self.persona_delete_button = make_button("删除", persona_buttons)
+        self.persona_new_button.clicked.connect(self._new_persona)
+        self.persona_copy_button.clicked.connect(self._copy_persona)
+        self.persona_rename_button.clicked.connect(self._rename_persona)
+        self.persona_save_button.clicked.connect(self._save_persona)
+        self.persona_reset_button.clicked.connect(self._reset_persona)
+        self.persona_delete_button.clicked.connect(self._delete_persona)
+        for button in (
+            self.persona_new_button,
+            self.persona_copy_button,
+            self.persona_rename_button,
+            self.persona_save_button,
+            self.persona_reset_button,
+            self.persona_delete_button,
+        ):
+            persona_buttons_layout.addWidget(button)
+        persona_buttons_layout.addStretch(1)
+        card2.add_row(
+            "人格卡",
+            persona_buttons,
+            "新建/复制/改名/保存/删除；包内预设不会被删，覆盖文件可随时恢复。",
+            expand=True,
+        )
+
+        self.prompt_edit = QPlainTextEdit(self)
+        self.prompt_edit.setPlaceholderText("留空使用默认人格")
+        self.prompt_edit.textChanged.connect(self._on_changed)
+        card2.add_row(
+            "系统提示词",
+            self.prompt_edit,
+            "每次对话开头发给模型；支持 {name} 占位。编辑后点「保存人格卡」才写入用户卡。",
+            expand=True,
+        )
         persona = str(self._initial.get("ai_persona") or "").strip()
         if not persona:
             persona = (
@@ -128,24 +198,7 @@ class AiChatPage(SettingsPage):
                 if str(self._initial.get("ai_system_prompt") or "").strip()
                 else DEFAULT_PERSONA
             )
-        index = self.persona_combo.findData(persona)
-        self.persona_combo.setCurrentIndex(index if index >= 0 else 0)
-        self.persona_combo.currentIndexChanged.connect(self._on_persona_changed)
-        card2.add_row(
-            "人设",
-            self.persona_combo,
-            "预设只替换系统提示词；选「自定义提示词」后用下面的文本框。",
-        )
-        self.persona_desc = QLabel("", self)
-        self.persona_desc.setObjectName("settingHint")
-        self.persona_desc.setWordWrap(True)
-        card2.add_row("人设说明", self.persona_desc, "")
-
-        self.prompt_edit = QPlainTextEdit(self)
-        self.prompt_edit.setPlaceholderText("留空使用默认人格")
-        self.prompt_edit.setPlainText(str(self._initial.get("ai_system_prompt") or ""))
-        self.prompt_edit.textChanged.connect(self._on_changed)
-        card2.add_row("系统提示词", self.prompt_edit, "每次对话开头发给模型；支持 {name} 占位。")
+        self._reload_personas(persona)
         self._sync_persona_rows()
 
         self.vision_check = make_checkbox(self)
@@ -839,8 +892,10 @@ class AiChatPage(SettingsPage):
         config = self.config()
         config.set("ai_service", str(self.service_combo.currentData() or ""))
         config.set("ai_model", self.model_edit.text().strip())
-        config.set("ai_system_prompt", self.prompt_edit.toPlainText().strip())
-        config.set("ai_persona", str(self.persona_combo.currentData() or ""))
+        persona_id = str(self.persona_combo.currentData() or "")
+        if persona_id == CUSTOM_PERSONA:
+            config.set("ai_system_prompt", self.prompt_edit.toPlainText().strip())
+        config.set("ai_persona", persona_id)
         config.set("ai_vision_enabled", bool(self.vision_check.isChecked()))
         config.set("ai_temperature", float(self.temperature_spin.value()))
         config.set("ai_look_screen_auto_open", bool(self.auto_open_check.isChecked()))
@@ -922,6 +977,15 @@ class AiChatPage(SettingsPage):
         return {key: self.config().get(key) for key in self._KEYS}
 
     def confirm_save(self) -> None:
+        # 当前人格卡有未保存的提示词/名称编辑时，整窗保存也应落卡；
+        # 否则“改内置提示词 → 直接点保存退出”会静默丢失。
+        persona_id = str(self.persona_combo.currentData() or "")
+        preset = self._persona()
+        if persona_id not in ("", CUSTOM_PERSONA) and preset is not None:
+            prompt = self.prompt_edit.toPlainText().strip()
+            name = self.persona_name.text().strip() or preset.name
+            if prompt != preset.prompt or name != preset.name:
+                self._save_persona()
         self._on_changed()
         self._initial = self._snapshot()
 
@@ -958,24 +1022,74 @@ class AiChatPage(SettingsPage):
         self.voice_reply_check.setChecked(bool(config.get("ai_voice_reply", False)))
         self.voice_reply_check.blockSignals(False)
 
+    def _persona(self, persona_id: str | None = None) -> PersonaPreset | None:
+        key = str(persona_id or self.persona_combo.currentData() or "")
+        return self._personas.get(key)
+
+    def _reload_personas(self, select_id: str = "") -> None:
+        self._personas = {
+            item.id: item for item in self._persona_store.load_all()
+        }
+        key = str(select_id or "")
+        self.persona_combo.blockSignals(True)
+        self.persona_combo.clear()
+        for preset in self._personas.values():
+            self.persona_combo.addItem(preset.name, preset.id)
+        self.persona_combo.addItem("自定义提示词", CUSTOM_PERSONA)
+        index = self.persona_combo.findData(key)
+        self.persona_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.persona_combo.blockSignals(False)
+        self._sync_persona_rows()
+
     def _on_persona_changed(self, *_args) -> None:
         self._sync_persona_rows()
         self._on_changed()
 
     def _sync_persona_rows(self) -> None:
         persona_id = str(self.persona_combo.currentData() or "")
-        preset = next(
-            (item for item in load_presets() if item.id == persona_id), None
-        )
-        self.prompt_edit.setEnabled(persona_id == CUSTOM_PERSONA)
-        if persona_id == CUSTOM_PERSONA:
-            self.persona_desc.setText(
-                "自定义提示词：下面文本框里的内容会发给模型（支持 {name}）。"
+        preset = self._persona(persona_id)
+        custom = persona_id == CUSTOM_PERSONA
+        self.prompt_edit.blockSignals(True)
+        if custom:
+            self.prompt_edit.setPlainText(
+                str(self.config().get("ai_system_prompt") or "")
             )
         elif preset is not None:
-            self.persona_desc.setText(preset.description or "预设人设")
+            self.prompt_edit.setPlainText(preset.prompt)
+        else:
+            self.prompt_edit.setPlainText("")
+        self.prompt_edit.blockSignals(False)
+        self.prompt_edit.setEnabled(True)
+        self.persona_name.blockSignals(True)
+        self.persona_name.setText("自定义提示词" if custom else (preset.name if preset else ""))
+        self.persona_name.blockSignals(False)
+        if custom:
+            self.persona_desc.setText(
+                "自定义提示词：下面文本框里的内容会发给模型（支持 {name}）；"
+                "想保存成可复用的人格卡，点「新建」或「复制当前」。"
+            )
+        elif preset is not None:
+            overridden = (
+                preset.id in self._builtin_personas
+                and self._persona_store.is_overridden(preset.id)
+            )
+            suffix = "（用户卡）" if preset.id not in self._builtin_personas else (
+                "（已覆盖内置）" if overridden else "（内置）"
+            )
+            self.persona_desc.setText(f"{preset.description or '人设卡'} {suffix}")
         else:
             self.persona_desc.setText("")
+        builtin_overridden = (
+            persona_id in self._builtin_personas
+            and self._persona_store.is_overridden(persona_id)
+        )
+        self.persona_copy_button.setEnabled(preset is not None)
+        self.persona_rename_button.setEnabled(not custom)
+        self.persona_save_button.setEnabled(not custom)
+        self.persona_reset_button.setEnabled(builtin_overridden)
+        self.persona_delete_button.setEnabled(
+            bool(persona_id) and persona_id not in self._builtin_personas
+        )
 
     def _sync_persona(self) -> None:
         config = self.config()
@@ -986,14 +1100,130 @@ class AiChatPage(SettingsPage):
                 if str(config.get("ai_system_prompt") or "").strip()
                 else DEFAULT_PERSONA
             )
-        index = self.persona_combo.findData(persona)
-        self.persona_combo.blockSignals(True)
-        self.persona_combo.setCurrentIndex(index if index >= 0 else 0)
-        self.persona_combo.blockSignals(False)
-        self.prompt_edit.blockSignals(True)
-        self.prompt_edit.setPlainText(str(config.get("ai_system_prompt") or ""))
-        self.prompt_edit.blockSignals(False)
-        self._sync_persona_rows()
+        self._reload_personas(persona)
+
+    def _reload_select(self, persona_id: str) -> None:
+        self._reload_personas(persona_id)
+        self.config().set("ai_persona", persona_id)
+        self._on_changed()
+        self.changed.emit()
+
+    def _new_persona(self) -> None:
+        name, ok = QInputDialog.getText(self, "新建人格卡", "人格名称：")
+        if not ok or not str(name or "").strip():
+            return
+        prompt = self.prompt_edit.toPlainText().strip() or DEFAULT_PROMPT
+        preset = PersonaPreset(
+            new_user_id(),
+            str(name).strip(),
+            "自定义人格卡",
+            prompt,
+            False,
+        )
+        try:
+            saved = self._persona_store.save(preset)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "保存失败", str(exc))
+            return
+        self._reload_select(saved.id)
+
+    def _copy_persona(self) -> None:
+        preset = self._persona()
+        if preset is None:
+            return
+        copied = PersonaPreset(
+            new_user_id(),
+            f"{preset.name} 副本"[:32],
+            preset.description,
+            self.prompt_edit.toPlainText().strip() or preset.prompt,
+            False,
+        )
+        try:
+            saved = self._persona_store.save(copied)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "保存失败", str(exc))
+            return
+        self._reload_select(saved.id)
+
+    def _rename_persona(self) -> None:
+        preset = self._persona()
+        if preset is None:
+            return
+        name, ok = QInputDialog.getText(
+            self, "重命名人格卡", "人格名称：", text=self.persona_name.text()
+        )
+        if not ok or not str(name or "").strip():
+            return
+        try:
+            saved = self._persona_store.save(
+                PersonaPreset(
+                    preset.id,
+                    str(name).strip(),
+                    preset.description,
+                    self.prompt_edit.toPlainText().strip() or preset.prompt,
+                    False,
+                )
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "保存失败", str(exc))
+            return
+        self._reload_select(saved.id)
+
+    def _save_persona(self) -> None:
+        persona_id = str(self.persona_combo.currentData() or "")
+        if persona_id == CUSTOM_PERSONA:
+            self._on_changed()
+            return
+        preset = self._persona()
+        if preset is None:
+            return
+        try:
+            saved = self._persona_store.save(
+                PersonaPreset(
+                    preset.id,
+                    self.persona_name.text().strip() or preset.name,
+                    preset.description,
+                    self.prompt_edit.toPlainText().strip(),
+                    False,
+                )
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "保存失败", str(exc))
+            return
+        self._reload_select(saved.id)
+
+    def _reset_persona(self) -> None:
+        persona_id = str(self.persona_combo.currentData() or "")
+        if persona_id not in self._builtin_personas:
+            return
+        answer = QMessageBox.question(
+            self,
+            "恢复内置人格",
+            "删除这张卡的覆盖文件，恢复包内原始名称与提示词？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._persona_store.reset_builtin(persona_id)
+        self._reload_select(persona_id)
+
+    def _delete_persona(self) -> None:
+        persona_id = str(self.persona_combo.currentData() or "")
+        if not persona_id or persona_id in self._builtin_personas:
+            return
+        preset = self._persona(persona_id)
+        answer = QMessageBox.question(
+            self,
+            "删除人格卡",
+            f"确定删除「{preset.name if preset else persona_id}」？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._persona_store.delete(persona_id)
+        self._reload_select(DEFAULT_PERSONA)
 
     def _memory_root(self):
         root = getattr(self.host, "root", None) or getattr(self.config(), "root", None)
@@ -1157,6 +1387,15 @@ class AiChatPage(SettingsPage):
             "聊天",
             "模型",
             "提示词",
+            "人设",
+            "人格",
+            "人格卡",
+            "自定义人设",
+            "字体",
+            "字号",
+            "对话窗字体",
+            "长期记忆",
+            "记忆",
             "温度",
             "截图",
             "视觉",

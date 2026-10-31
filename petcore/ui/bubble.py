@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QFontMetrics, QGuiApplication, QPixmap
+from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QPainter, QPixmap
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from ..media.images import (
@@ -17,6 +18,7 @@ from ..media.images import (
     scale_pixmap,
     screen_dpr,
 )
+from ..platform.win import apply_stream_window, apply_tool_window
 from .animated_image import AnimatedImage
 from .menu import active_menu, menu_open
 
@@ -333,6 +335,8 @@ class SpeechBubble(QWidget):
         self._was_shown = False
         self._text_scale = 1.0
         self._stream_mode = False
+        self._stream_keycolor = False
+        self._key_color = QColor("#00FF00")
         self._host_on_top = True
         self._full_text = ""
         self._subtitle = ""
@@ -470,10 +474,26 @@ class SpeechBubble(QWidget):
         """重建旗标（setWindowFlags 会隐窗，可见时要原地恢复并摆回自己的层）。"""
         was_visible = self.isVisible()
         self.setWindowFlags(self._window_flags())
+        # 构造期窗口还没 show，提前 winId() 会把宿主窗口带出 2px 边框；
+        # 等可见（或 showEvent）再补原生样式。
+        if was_visible:
+            self._apply_native_style()
         if was_visible:
             if self._anchor is not None:
                 self._place(self._anchor)
             self._present()
+
+    def _apply_native_style(self) -> None:
+        if os.name != "nt":
+            return
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            return
+        if self._stream_mode:
+            apply_stream_window(hwnd, keycolor=self._stream_keycolor)
+        else:
+            apply_tool_window(hwnd)
 
     # ---------------------------------------------------------------- 层级
     def _raises_by_design(self) -> bool:
@@ -538,13 +558,44 @@ class SpeechBubble(QWidget):
     def host_on_top(self) -> bool:
         return self._host_on_top
 
-    def set_stream_mode(self, enabled: bool) -> None:
-        """直播捕获兼容：气泡也必须是普通顶层窗口，否则捕获软件看不到它。"""
+    def set_stream_mode(
+        self,
+        enabled: bool,
+        *,
+        keycolor: bool = False,
+        key_color: str = "#00FF00",
+    ) -> None:
+        """直播捕获兼容：气泡也必须是普通顶层窗口，否则捕获软件看不到它。
+
+        色键模式下窗口改为不透明并铺底色；圆角外的区域交给 OBS 色度键抠掉。
+        """
         enabled = bool(enabled)
-        if enabled == self._stream_mode:
+        keycolor = bool(keycolor and enabled)
+        color = QColor(str(key_color or "").strip())
+        if not color.isValid():
+            color = QColor("#00FF00")
+        if (
+            enabled == self._stream_mode
+            and keycolor == self._stream_keycolor
+            and color.name().lower() == self._key_color.name().lower()
+        ):
             return
         self._stream_mode = enabled
+        self._stream_keycolor = keycolor
+        self._key_color = color
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TranslucentBackground, not keycolor
+        )
         self._apply_window_flags()
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._stream_mode and self._stream_keycolor:
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), self._key_color)
+            painter.end()
+            return
+        super().paintEvent(event)
 
     # ---------------------------------------------------------------- 文本
     def show_text(
@@ -845,6 +896,16 @@ class SpeechBubble(QWidget):
     def showEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         super().showEvent(event)
         self._was_shown = True
+        # 构造期 _apply_window_flags 不碰 winId（会带出 2px 宿主边框），
+        # 真正显示后补一次直播模式的原生样式。
+        if self._stream_mode:
+            self._apply_native_style()
+        # 气泡的 show/raise 会让 Qt 把宿主的 WindowDoesNotAcceptFocus 重新
+        # 映射成 WS_EX_NOACTIVATE；直播模式要再清一次，否则 OBS 又拿不到激活态。
+        host = self.parentWidget()
+        sync = getattr(host, "_apply_native_style", None)
+        if callable(sync):
+            sync()
 
     def _place(self, anchor: QRect) -> None:
         """贴着角色锚点放：上居中 → 上偏左右 → 两侧 → 下方，且不压住角色。"""

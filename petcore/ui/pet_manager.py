@@ -42,6 +42,8 @@ SHARED_KEYS = (
     "spawn_inherit_size",
     "spawn_scale",
     "stream_capture_mode",
+    "stream_capture_keycolor",
+    "stream_key_color",
     "ui_font_size",
 )
 

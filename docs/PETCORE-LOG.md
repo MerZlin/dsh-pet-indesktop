@@ -5085,3 +5085,134 @@ dsh-pet-core\dsh-pet-core.exe --instance smoke1031b
 
 **未验证 / 风险**：规则仍是关键词表，不是语义模型；换角色或换素材包后，若词表里没有
 对应用词仍会落空（返回 `None`，不猜一个不相关的动作）。
+
+## L141 — 2026-10-31 — 反馈批次 2：聊天窗 / 语音 / 直播 / 设置搜索 / DSH / 人格 / 会话 / 自语
+
+**主题**：用户十项反馈的整批实现。范围：60 个已跟踪文件（+3792 / −257）与 9 个新文件。
+本轮不触碰 `pet/` 产品代码，`origin/main`（v4.4.0）保持冻结。
+
+**改动（按用户可见能力分组）**
+
+1. **聊天输入区**：`petcore/ui/chat/window.py` 把 `setStretchFactor` 从错误的
+   `chat_main_layout` 移到 `ai_layout`，输入区/工具条固定自然高度；短会话时间线
+   改为底部对齐（顶部 Expanding spacer）。`widgets.py` 在输入法 preedit 期间清空
+   placeholder，commit/取消/FocusOut 恢复。实测 1100×800：composer 125px、
+   toolbar 34px、scroll 575px（修复前 agent 实测 286/195/314）。
+2. **音频设备**：`config.py` 新增 `music_audio_device(_name)`、`asr_device_name`；
+   `media.music/audio_sessions.py` 支持端点枚举/默认端点短缓存/按 `(线程,设备)` 重建
+   manager；runtime 每 5s 跟随默认、每 30s 确认手选设备，拔掉回退默认；
+   设置页新增「音频输出设备」（异步枚举 + 刷新），语音页新增「麦克风」下拉。
+3. **直播兼容 v2**：`config.py` 新增 `stream_capture_keycolor` / `stream_key_color`；
+   `pet_window.py` 色键模式不透明、整窗填底色、标题带 slot、`_apply_native_style`
+   每次改旗标后重放 exstyle、直播模式置顶用 `SetWindowPos` 不重建 HWND；
+   `bubble.py` 色键模式同样铺底色；新增 `platform/capture_probe.py`（PrintWindow/
+   BitBlt 非黑占比 + exstyle 报告）；设置页三选一 + 色键颜色 + 捕获自检。
+4. **设置搜索**：`settings/base.py` 的 `page_search_texts` 增加 QTreeWidget 项、
+   `searchKeys` 注册与 accessibleName；`reveal_text` 支持树项展开/选中、下拉/列表项
+   滚动定位（不改值）、页内标签切换；`page_extensions.py` 搜索命中折叠组自动展开。
+   `SettingsCard.add_row(search_keys=...)` + 公开 `register_search_terms`。
+5. **DSH 审批**：`dsh_view.py` 审批卡状态机（提交后置灰、resolved 终态、404/断线
+   恢复按钮、同 id 去重、上限 20）；`dsh_controller.py` 新增 `DshHub`（进程内单条
+   SSE，多窗订阅）+ generation guard；`net/dsh.py` `close_active()` 停止读循环；
+   `integrations/dsh-pet-channel/index.js` 同会话只留一个 pending、10 分钟审批超时。
+6. **语音实时预览**：`platform/mic.py` `peek_wav()`；`ui/asr_channel.py` 新增
+   `partial` 信号与增量识别循环（同刻最多一个在飞，sapi ≥1.5s）；聊天窗/快速对话
+   显示预览且不覆盖用户已输入文本；语音设置页新增实时开关与刷新间隔。
+7. **人格卡**：6 个包内预设扩写为多段（默认 3–6 句）；`persona_presets.py` 新增
+   `PersonaStore`（用户目录、同 id 覆盖内置、保存/删除/恢复/校验），runtime 按
+   mtime 缓存合并池；设置页新增新建/复制/重命名/保存/恢复内置/删除与名称栏。
+8. **会话分节/归档**：`session_store.py` 新增 `archived_at`（schema 仍 1）、
+   `list_sessions(include_archived=)`、`archive()`；新 `history_buckets.py`（今天/
+   昨天/本周/本月/更早，零 Qt）；侧栏组头可折叠、三点菜单归档/删除（删除确认默认
+   取消）、「已归档」开关；controller 在归档/删除/隐藏当前会话时切到下一个或新建。
+9. **右键菜单**：模板新增 `ai_hub`「AI 助手」，收 `ai.chat:open/look_screen/proactive`；
+   `migrate_p12_menu` 幂等迁移，且不会在没有任何 AI 项的精简布局里凭空注入 hub。
+10. **自言自语**：默认候选台词 7 句；新增 `self_talk_daily_*` 三键与 `daily.py`
+    （日期确定性种子 + 连说切段）；runtime 每天每 slot 第一句用每日句，状态落
+    `feature-data/fun.self-talk/daily.json`；设置页新增每日池/连说/今天预览/
+    恢复内置/试听连说。
+
+**验证**
+
+- `QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest tests/test_petcore_*.py -q`
+  → **2609 passed, 1 skipped**（219.14 s）。
+- `.venv/Scripts/ruff check pet/ tests/ petcore/ examples/petcore-mods/ai.chat
+  examples/petcore-mods/media.music` → 通过。
+- `.venv/Scripts/python -m petcore --check --strict` → `strict.problems=[]`。
+- `node --check integrations/dsh-pet-channel/index.js` → 通过。
+- 真机色键窗口探针（`capture_probe.probe_window`，Windows）：
+  `exstyle=8`（仅 TOPMOST）、`toolwindow=false`、`noactivate=false`、
+  `layered=false`、`printwindow=1.0`、`bitblt=1.0`。
+- 同机透明直播窗口对照：`layered=true`、`printwindow=0.2454`、`bitblt=0.0`
+  （证明 BitBlt 黑屏、PrintWindow 有画面，色键模式两条读回都有画面）。
+- 真机音频端点：`list_endpoints()` 冷 **149.36ms** / 暖 **0.01ms**；默认端点
+  **3.34ms/次**（仅跟随默认时每 5s 一次）；麦克风枚举到 1 个输入设备。
+- 新增/更新测试：`test_petcore_chat_ui.py`（布局/IME/分节/归档/预览）、
+  `test_petcore_settings_search.py`、`test_petcore_music_audio_device.py`、
+  `test_petcore_asr.py`、`test_petcore_ai_persona.py`、`test_petcore_sessions.py`、
+  `test_petcore_history_buckets.py`、`test_petcore_self_talk_daily.py`、
+  `test_petcore_stream_mode.py`、`test_petcore_capture_probe.py`、
+  `test_petcore_dsh.py`、`test_petcore_menu_layout.py`、`test_petcore_extensions_nav.py`。
+
+**未验证 / 风险**
+
+- DSH 桌面端本机未运行：审批/超时/单连接只经 fake HTTP/SSE 与静态审计；
+  真机双向仍需用户环境复测。
+- OBS/直播姬未安装：色键窗口只做了 GDI 读回与 exstyle 探针，未做真实 OBS 抓屏；
+  OBS 端需选「Windows 10 (1903 及以上)」并加色度键滤镜。
+- ASR 真实麦克风只验证设备枚举与替身 partial；未把真实语音内容写入日志或报告。
+- 音频设备插拔只经 fake COM 测试与默认端点比较；未做真实耳机插拔。
+- 安装包构建与安装向导交互在下一节/PR 报告记录。
+
+**复审修正（同日）**：独立只读复审发现 2 高 / 7 中 / 5 低，逐条修正：
+设置页 `confirm_save` 先关 keycolor 再关 mode；运行期色键切换显式重建 HWND 并在
+`apply_stream_window(keycolor=True)` 清 `WS_EX_LAYERED`（气泡 show 后同步宿主样式，
+真机复测 layered=false / bitblt=1.0 / exstyle=0x8）；手选音频设备回退标志保持到
+30s 检查；ASR 间隔改为识别返回后再计时；识别诊断传手选设备；DSH 历史回放清
+`_approvals`、hub 回放连接状态、审批按钮 RuntimeError 保护；p12 hub 插到最靠前
+AI action 原位置；会话流式守卫 `stream_session_id` 防迟到 done 写进新会话；人格卡
+整窗保存自动落卡；捕获自检移 QThreadPool。最终全量 **2614 passed, 1 skipped**。
+
+## L142 — 2026-10-31 — 反馈批次 2 安装包（0.2.0）构建与实机冒烟
+
+**主题**：批次 2 全部代码/文档后的最终安装包。构建输出隔离在
+`rel-feedback2-2026-10-31`（`rel-*/` 已被 `.gitignore` 忽略，不进版本库）。
+
+**命令**
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 \
+  -Clean -Installer -OutputRoot rel-feedback2-2026-10-31
+```
+
+**产物**
+
+- `rel-feedback2-2026-10-31/dsh-pet-core-setup.exe`：305,200,979 字节；
+  SHA256 `b2ae9d148423df8339f1853d6fc9189652185579bc3a0363afef943e472d1c67`；
+  ProductVersion 0.2.0，未签名（本机 SAC 关闭，可直接运行）。
+- 同目录 onedir `dsh-pet-core/dsh-pet-core.exe`：15,727,438 字节。
+- 随包内置特性含新增 `petcore/builtin/features/fun.self-talk/host/daily.py`
+  （打包后实际路径已确认）。
+
+**构建门**
+
+- `verify presentmon`：文件存在、大小 980,320、sha256
+  `b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af`、x86-64 通过。
+- `smoke --check --strict`：`menu_template=json`、`characters=1`、
+  `builtin_images=24`、`strict=True`，`strict.problems=[]`。
+- Inno Setup `Successful compile (120.969 sec)`，输出 setup。
+
+**打包产物实机冒烟**
+
+- 临时数据根 `%TEMP%\petcore-pkgprobe-*` 写入 `stream_capture_mode=true`、
+  `stream_capture_keycolor=true`，启动 onedir exe（`--instance pkgprobe1031`）。
+- 枚举到 `dsh-pet core #0`；`capture_probe.probe_window`：
+  `exstyle=8`（仅 TOPMOST）、`toolwindow=false`、`noactivate=false`、
+  `layered=false`、`printwindow=1.0`、`bitblt=1.0`。
+- 日志只有 `starting petcore 0.2.0`，无 traceback；测完删除临时数据根。
+
+**未验证 / 风险**
+
+- 安装向导 GUI 交互（目录页、扩展勾选、卸载器）未在用户机器上逐页点击；
+  setup 只验证了编译产物与 onedir 冒烟。
+- OBS/直播姬、DSH 桌面端、真实麦克风内容仍未真机验证（见 L141 / PR 报告）。

@@ -184,6 +184,24 @@ python -m petcore mods doctor
 - 内置包当前清单：`fun.self-talk`、`fun.click-talk`、`tool.quick-launch`、`tool.quiet-mode`、`tool.links`、`tool.memory-trim`、`tool.network-info`。
 - 示例可导入包：`examples/petcore-mods/{fun.divination,fun.festival,reminder.todo,voice.chime,media.music,tool.weather,tool.file-reader}`；`examples/petcore-mods/README.md` 是安装与端口样板说明。
 
+### 8.1 设置搜索注册（2026-10-31）
+
+mod 设置页里没有可见文案的行（人设卡名、动态路径、图标按钮）必须登记搜索词，
+否则用户在设置搜索里搜不到：
+
+```python
+from petcore.ui.settings.base import register_search_terms
+register_search_terms(row, "每日一句", "今日台词", "连说")
+# 或 SettingsCard.add_row(..., search_keys=("人格卡", "人设"))
+```
+
+`page_search_texts()` 会自动收集 `QLabel`/按钮/下拉项/列表项/`QTreeWidget` 项与
+`searchKeys`；`reveal_text()` 命中下拉/列表时只滚动定位，不改变当前值。
+
+`ai.chat` 的用户人格卡落在 `<data_root>/feature-data/ai.chat/personas/*.json`，
+同 id 文件覆盖包内预设（可改名/改提示词），删除文件即恢复内置；包内
+`persona_presets/*.json` 永远只读。
+
 
 ## 9. Core 内置特性与 `host_page`（P8）
 

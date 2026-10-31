@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...net.dsh import DshClient
-from .dsh_controller import DshController
+from .dsh_controller import DshController, DshHub
 
 logger = logging.getLogger("petcore.ui.chat.dsh.view")
 
@@ -36,18 +36,33 @@ _REASON_TEXT = {
 class DshView(QWidget):
     context_ready = Signal(str)
 
-    def __init__(self, client: DshClient | None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        client: DshClient | None,
+        parent: QWidget | None = None,
+        *,
+        hub: DshHub | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("dsh-view")
         self._client = client
         self._started = False
         self._transcript: list[tuple[str, str]] = []
         self._tool_cards: dict[str, QLabel] = {}
-        self._controller = DshController(client, self)
-        self._controller.connected.connect(self._on_connected)
-        self._controller.history_loaded.connect(self._on_history)
-        self._controller.frame.connect(self._on_frame)
-        self._controller.failed.connect(self._on_failed)
+        self._approvals: dict[str, tuple[QWidget, QWidget, QWidget]] = {}
+        self._hub = hub if hub is not None and hub.available else None
+        self._controller: DshController | None = None
+        if self._hub is not None:
+            self._hub.connected.connect(self._on_connected)
+            self._hub.history_loaded.connect(self._on_history)
+            self._hub.frame.connect(self._on_frame)
+            self._hub.failed.connect(self._on_failed)
+        else:
+            self._controller = DshController(client, self)
+            self._controller.connected.connect(self._on_connected)
+            self._controller.history_loaded.connect(self._on_history)
+            self._controller.frame.connect(self._on_frame)
+            self._controller.failed.connect(self._on_failed)
         self._build()
         if client is None:
             self.set_status("未安装 DSH 通道；在设置 → 常规 → DSH 连接里安装", False)
@@ -124,20 +139,37 @@ class DshView(QWidget):
         if self._client is None or self._started:
             return
         self._started = True
-        self._controller.start()
+        if self._hub is not None:
+            self._hub.acquire()
+            cached = self._hub.history_cache()
+            if cached is not None:
+                self._on_history(cached)
+            return
+        if self._controller is not None:
+            self._controller.start()
 
     def deactivate(self) -> None:
         if not self._started:
             return
         self._started = False
-        self._controller.stop()
+        if self._hub is not None:
+            self._hub.release()
+            return
+        if self._controller is not None:
+            self._controller.stop()
 
     def _retry(self) -> None:
         if self._client is None:
             return
+        self.set_status("正在连接 DSH…")
+        if self._hub is not None:
+            self._started = True
+            self._hub.restart()
+            return
+        if self._controller is None:
+            return
         self._controller.stop()
         self._started = False
-        self.set_status("正在连接 DSH…")
         self.activate()
 
     # ---------------------------------------------------------------- 输入
@@ -148,7 +180,9 @@ class DshView(QWidget):
         self.input.clear()
         self._add_text("user", text)
         self.set_status("已发送，等待 DSH…")
-        self._controller.send(text)
+        target = self._hub or self._controller
+        if target is not None:
+            target.send(text)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
         if (
@@ -163,7 +197,9 @@ class DshView(QWidget):
 
     def _stop(self) -> None:
         self.set_status("正在取消…")
-        self._controller.cancel()
+        target = self._hub or self._controller
+        if target is not None:
+            target.cancel()
 
     def _emit_context(self) -> None:
         if not self._transcript:
@@ -180,10 +216,13 @@ class DshView(QWidget):
         if connected:
             suffix = f" · v{detail}" if detail else ""
             self.set_status(f"已连接 DSH{suffix}", True)
-        else:
-            self.set_status(_REASON_TEXT.get(detail, f"DSH 连接失败（{detail}）"), False)
+            return
+        self.set_status(_REASON_TEXT.get(detail, f"DSH 连接失败（{detail}）"), False)
+        # 断线后按钮不能停在“已提交”：重连后用户仍可再点一次。
+        self._reopen_approvals()
 
     def _on_failed(self, reason: str) -> None:
+        self._reopen_approvals()
         self.set_status(_REASON_TEXT.get(reason, f"DSH 操作失败（{reason}）"), False)
 
     def _on_history(self, items) -> None:
@@ -229,7 +268,7 @@ class DshView(QWidget):
         elif kind == "approval-request":
             self._add_approval(frame)
         elif kind == "approval-resolved":
-            self.set_status("审批已处理")
+            self._resolve_approval(frame)
         elif kind == "turn-start":
             self.set_status("DSH 思考中…")
         elif kind == "step":
@@ -259,6 +298,10 @@ class DshView(QWidget):
             if widget is not None:
                 widget.deleteLater()
         self._tool_cards.clear()
+        # 历史回放/重连会重建整条时间线；旧审批卡被 deleteLater 后，如果
+        # id 还留在 _approvals，同 id 的 approval-request 会被当成重复丢弃，
+        # 界面上就再也没有可点的卡片。
+        self._approvals.clear()
 
     def _append(self, widget: QWidget) -> None:
         self.timeline_layout.insertWidget(self.timeline_layout.count() - 1, widget)
@@ -316,6 +359,9 @@ class DshView(QWidget):
         self._scroll_bottom()
 
     def _add_approval(self, frame: dict) -> None:
+        request_id = str(frame.get("id") or "")
+        if request_id and request_id in self._approvals:
+            return
         card = QFrame(self.timeline)
         card.setObjectName("dsh-approval")
         layout = QVBoxLayout(card)
@@ -336,24 +382,95 @@ class DshView(QWidget):
         buttons = QHBoxLayout()
         allow = QPushButton("允许", card)
         allow.clicked.connect(
-            lambda _checked=False, rid=str(frame.get("id") or ""): self._answer(rid, True)
+            lambda _checked=False, rid=request_id: self._answer(rid, True)
         )
         deny = QPushButton("拒绝", card)
         deny.clicked.connect(
-            lambda _checked=False, rid=str(frame.get("id") or ""): self._answer(rid, False)
+            lambda _checked=False, rid=request_id: self._answer(rid, False)
         )
         buttons.addWidget(allow)
         buttons.addWidget(deny)
         buttons.addStretch(1)
         layout.addLayout(buttons)
         self._append(card)
+        if not request_id:
+            allow.setEnabled(False)
+            deny.setEnabled(False)
+            self.set_status("审批请求缺少 ID，无法提交", False)
+            return
+        self._approvals[request_id] = (card, allow, deny)
+        # 审批风暴保护：只保留最近 20 张卡，旧卡不再占用交互。
+        while len(self._approvals) > 20:
+            oldest = next(iter(self._approvals))
+            old_card, _allow, _deny = self._approvals.pop(oldest)
+            old_card.deleteLater()
         self.set_status("等待审批…")
 
     def _answer(self, request_id: str, allow: bool) -> None:
         if not request_id:
+            self.set_status("审批请求缺少 ID，无法提交", False)
             return
+        entry = self._approvals.get(request_id)
+        if entry is not None:
+            _card, allow_button, deny_button = entry
+            try:
+                allow_button.setEnabled(False)
+                deny_button.setEnabled(False)
+            except RuntimeError:
+                # 卡片已随历史回放被 deleteLater；审批答案仍要发出去。
+                pass
         self.set_status("已提交审批结果")
-        self._controller.answer(request_id, allow)
+        target = self._hub or self._controller
+        if target is None:
+            self.set_status("DSH 通道不可用", False)
+            return
+        target.answer(request_id, allow)
+        QTimer.singleShot(
+            8000, self, lambda rid=request_id: self._approval_timeout(rid)
+        )
+
+    def _approval_timeout(self, request_id: str) -> None:
+        entry = self._approvals.get(request_id)
+        if entry is None:
+            return
+        card, allow_button, deny_button = entry
+        if card is None:
+            return
+        try:
+            allow_button.setEnabled(True)
+            deny_button.setEnabled(True)
+            self.set_status("审批提交超时，请重试或检查连接", False)
+        except RuntimeError:
+            return
+
+    def _reopen_approvals(self) -> None:
+        """提交失败/断线时恢复按钮，避免卡片永久停在“已提交”。"""
+        for card, allow_button, deny_button in list(self._approvals.values()):
+            try:
+                allow_button.setEnabled(True)
+                deny_button.setEnabled(True)
+            except RuntimeError:
+                continue
+
+    def _resolve_approval(self, frame: dict) -> None:
+        request_id = str(frame.get("id") or "")
+        entry = self._approvals.pop(request_id, None)
+        if entry is None:
+            self.set_status("审批已处理")
+            return
+        card, allow_button, deny_button = entry
+        try:
+            allow_button.setEnabled(False)
+            deny_button.setEnabled(False)
+            if frame.get("cancelled"):
+                text = "审批已取消"
+            else:
+                text = "审批已允许" if frame.get("allow") else "审批已拒绝"
+            self.set_status(text)
+            # 保留一小会儿让用户看到终态，再移除卡片。
+            QTimer.singleShot(1500, card, card.deleteLater)
+        except RuntimeError:
+            return
 
     def _scroll_bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()

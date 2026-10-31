@@ -41,6 +41,7 @@ from .menu_layout import (
     migrate_p9_menu,
     migrate_p10_menu,
     migrate_p11_menu,
+    migrate_p12_menu,
     resolve,
 )
 from .chat import ChatController, QuickChatController
@@ -869,6 +870,7 @@ class CoreHost:
             changed = migrate_p9_menu(raw) or changed
             changed = migrate_p10_menu(raw) or changed
             changed = migrate_p11_menu(raw) or changed
+            changed = migrate_p12_menu(raw) or changed
             if changed:
                 self.config.set("menu_layout", raw)
                 self.config.save()
@@ -1160,8 +1162,25 @@ class CoreHost:
         if hasattr(window, "set_edge_probe_enabled"):
             window.set_edge_probe_enabled(edge_probe, persist=False)
         stream = bool(global_config.get("stream_capture_mode"))
-        if stream != bool(getattr(window, "stream_capture_mode", stream)):
-            window.set_stream_capture_mode(stream, persist=False)
+        keycolor = bool(global_config.get("stream_capture_keycolor"))
+        key_color = str(global_config.get("stream_key_color") or "#00FF00")
+        mode_changed = stream != bool(
+            getattr(window, "stream_capture_mode", stream)
+        ) or keycolor != bool(getattr(window, "stream_capture_keycolor", keycolor))
+        if mode_changed:
+            window.set_stream_capture_mode(
+                stream, keycolor=keycolor, persist=False
+            )
+        else:
+            color_setter = getattr(window, "set_stream_key_color", None)
+            current_color = getattr(window, "stream_key_color", None)
+            current_name = (
+                current_color.name()
+                if hasattr(current_color, "name")
+                else str(current_color or "")
+            )
+            if callable(color_setter) and key_color.upper() != current_name.upper():
+                color_setter(key_color, persist=False)
 
     def install_hotkeys(self) -> None:
         if self.hotkeys is None:

@@ -93,6 +93,9 @@ def _draw(name: str, painter: QPainter, color: QColor) -> None:
     elif name == "remove":
         painter.drawLine(QPointF(3.0, 3.0), QPointF(13.0, 13.0))
         painter.drawLine(QPointF(13.0, 3.0), QPointF(3.0, 13.0))
+    elif name == "more":
+        for x in (4.0, 8.0, 12.0):
+            painter.drawEllipse(QPointF(x, 8.0), 0.9, 0.9)
     elif name == "retry":
         painter.drawArc(QRectF(2.4, 2.4, 11.2, 11.2), 35 * 16, 285 * 16)
         painter.drawLine(QPointF(10.8, 2.8), QPointF(13.8, 3.2))

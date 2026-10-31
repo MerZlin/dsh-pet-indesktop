@@ -117,6 +117,7 @@ class QuickChatBubble(QWidget):
         self.input = QLineEdit(self.surface)
         self.input.setObjectName("quick-chat-input")
         self.input.setPlaceholderText("和桌宠说点什么… Enter 发送")
+        self._partial_mirror = ""
         self.input.returnPressed.connect(self._submit)
         footer.addWidget(self.input, 1)
         self.record_button = QToolButton(self.surface)
@@ -316,10 +317,33 @@ class QuickChatBubble(QWidget):
         if hint:
             self.hint.setText(hint)
 
+    def set_partial_transcript(self, text: str) -> None:
+        value = str(text or "").strip()
+        if not value:
+            if self._partial_mirror and self.input.text().strip() == self._partial_mirror:
+                self.input.clear()
+            self._partial_mirror = ""
+            self.input.setToolTip("")
+            return
+        current = self.input.text().strip()
+        if not current or current == self._partial_mirror:
+            self._partial_mirror = value
+            self.input.setText(value)
+            self.input.setCursorPosition(len(value))
+            self.input.setToolTip("")
+            return
+        self._partial_mirror = value
+        self.input.setToolTip(f"识别中：{value}")
+
+    def clear_partial(self) -> None:
+        self.set_partial_transcript("")
+
     def insert_transcript(self, text: str, *, auto_send: bool = False) -> None:
         value = str(text or "").strip()
         if not value:
             return
+        self._partial_mirror = ""
+        self.input.setToolTip("")
         self.input.setText(value)
         self.input.setFocus()
         if auto_send:

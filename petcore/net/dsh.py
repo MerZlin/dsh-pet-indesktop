@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -63,6 +64,32 @@ class DshClient:
     def __init__(self, *, timeout: float = 4.0, state_file: Path | None = None) -> None:
         self.timeout = max(1.0, min(30.0, float(timeout)))
         self._state_file = Path(state_file) if state_file is not None else _state_file()
+        self._stream_lock = threading.Lock()
+        self._active_streams: set = set()
+
+    def _register_stream(self, response) -> None:
+        with self._stream_lock:
+            self._active_streams.add(response)
+
+    def _unregister_stream(self, response) -> None:
+        with self._stream_lock:
+            self._active_streams.discard(response)
+
+    def close_active(self) -> None:
+        """关闭所有在飞的 SSE 响应，让 ``events()`` 的读循环立即退出。
+
+        ``stop`` 事件只在读到下一个行边界时才被检查；通道 keepalive 是 15s，
+        不主动 close 时关闭窗口/退出视图会留下最长 15–30s 的线程。关闭响应
+        只影响当前客户端，不影响其它连接。
+        """
+        with self._stream_lock:
+            streams = list(self._active_streams)
+            self._active_streams.clear()
+        for response in streams:
+            try:
+                response.close()
+            except Exception:  # noqa: BLE001 - 已被对端关闭
+                pass
 
     def info(self) -> DshInfo | None:
         try:
@@ -227,6 +254,7 @@ class DshClient:
                 delay = min(30.0, delay * 2.0)
                 continue
             delay = max(1.0, float(idle_sleep))
+            self._register_stream(response)
             yield {"kind": "connection", "ok": True, "reason": ""}
             try:
                 for raw in response:
@@ -248,6 +276,7 @@ class DshClient:
             except Exception:  # noqa: BLE001 - 断线后重连
                 pass
             finally:
+                self._unregister_stream(response)
                 try:
                     response.close()
                 except Exception:

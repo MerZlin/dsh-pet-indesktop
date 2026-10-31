@@ -62,7 +62,7 @@ def test_stream_mode_uses_a_regular_top_level_window(app, tmp_path: Path) -> Non
         assert window.windowFlags() & MASK == Qt.WindowType.Window
         assert window.windowFlags() & MASK != Qt.WindowType.Tool
         assert window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
-        assert window.windowTitle() == "dsh-pet core"
+        assert window.windowTitle() == "dsh-pet core #0"
         assert window.bubble.windowFlags() & MASK == Qt.WindowType.Window
         assert window.bubble.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
     finally:
@@ -108,9 +108,15 @@ def test_live_apply_flips_stream_mode_without_persisting(tmp_path: Path) -> None
             self.always_on_top = True
             self.click_through = False
             self.stream_capture_mode = False
+            self.stream_capture_keycolor = False
+            self.stream_key_color = SimpleNamespace(name=lambda: "#00ff00")
 
-        def set_stream_capture_mode(self, value, *, persist=True):
+        def set_stream_capture_mode(
+            self, value, *, keycolor=None, persist=True
+        ):
             self.stream_capture_mode = bool(value)
+            if keycolor is not None:
+                self.stream_capture_keycolor = bool(keycolor)
             calls.append((bool(value), persist))
 
     host = object.__new__(CoreHost)
@@ -132,3 +138,38 @@ def test_apply_stream_window_is_a_no_op_off_windows(monkeypatch) -> None:
     monkeypatch.setattr(win_mod, "_user32", _fail)
 
     assert win_mod.apply_stream_window(0) is None
+
+
+def test_keycolor_mode_uses_an_opaque_window_and_paints_the_key(app, tmp_path: Path) -> None:
+    config = Config(tmp_path)
+    config.set("stream_capture_mode", True)
+    config.set("stream_capture_keycolor", True)
+    config.set("stream_key_color", "#00FF00")
+    window = PetWindow(config, tmp_path, FakeHost())
+    try:
+        assert window.stream_capture_keycolor is True
+        assert (
+            window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+        )
+        window.resize(80, 80)
+        image = window.grab().toImage()
+        assert image.pixelColor(0, 0).name().upper() == "#00FF00"
+        assert window.bubble.testAttribute(
+            Qt.WidgetAttribute.WA_TranslucentBackground
+        ) is False
+    finally:
+        window.shutdown()
+
+
+def test_keycolor_toggle_persists_both_keys(app, tmp_path: Path) -> None:
+    window = _window(tmp_path, False)
+    try:
+        window.set_stream_capture_mode(True, keycolor=True)
+        assert window.stream_capture_mode is True
+        assert window.stream_capture_keycolor is True
+        assert Config.load(tmp_path).get("stream_capture_keycolor") is True
+        window.set_stream_capture_mode(False, keycolor=False, persist=False)
+        assert window.stream_capture_mode is False
+        assert window.stream_capture_keycolor is False
+    finally:
+        window.shutdown()

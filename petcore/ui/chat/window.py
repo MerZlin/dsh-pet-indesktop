@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...chat.history_buckets import buckets
 from . import themes
 from .dsh_view import DshView
 from .icons import tool_icon
@@ -49,6 +50,8 @@ SHELL_RADIUS = 20.0
 #: 跟随桌宠时与身体框的间距；40ms 的单次合并定时器避免 60Hz 移动时反复重排。
 FOLLOW_GAP = 14
 FOLLOW_COALESCE_MS = 40
+#: 侧栏组头行：``UserRole`` 留给会话 id，组头用独立 role。
+GROUP_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
 
 class ChatWindow(QDialog):
@@ -60,6 +63,9 @@ class ChatWindow(QDialog):
     pin_toggled = Signal(bool)
     record_requested = Signal()
     record_stopped = Signal()
+    session_archive_requested = Signal(str, bool)
+    session_delete_requested = Signal(str)
+    archived_toggled = Signal(bool)
 
     def __init__(
         self,
@@ -68,6 +74,7 @@ class ChatWindow(QDialog):
         font_size: int = 13,
         font_family: str = "",
         dsh=None,
+        dsh_hub=None,
         character_id: str = "default",
         accent: str = DEFAULT_ACCENT,
         background: str = "",
@@ -82,6 +89,7 @@ class ChatWindow(QDialog):
         self._font_size = clamp_font_size(font_size)
         self._font_family = str(font_family or "").strip()
         self._dsh_client = dsh
+        self._dsh_hub = dsh_hub
         self._base_accent = safe_accent(accent)
         self.accent_color = self._base_accent
         self._bg_value = str(background or "").strip()
@@ -101,6 +109,12 @@ class ChatWindow(QDialog):
         self._session_titles: dict[str, str] = {}
         self._compact_layout = False
         self._sidebar_open = True
+        self._show_archived = False
+        self._collapsed_groups: set[str] = {"month", "older"}
+        self._group_rows: dict[str, list[int]] = {}
+        self._group_headers: dict[str, QListWidgetItem] = {}
+        self._group_labels: dict[str, str] = {}
+        self._row_by_session: dict[str, int] = {}
         self._scroll_pin = True
         self._auto_scrolling = False
         self._stream_follow_output = True
@@ -309,6 +323,9 @@ class ChatWindow(QDialog):
     def set_recording(self, recording: bool, hint: str = "") -> None:
         self.composer.set_recording(bool(recording), hint)
 
+    def set_partial_transcript(self, text: str) -> None:
+        self.composer.set_partial_transcript(text)
+
     def insert_transcript(self, text: str, *, auto_send: bool = False) -> None:
         self.composer.insert_text(text)
         if auto_send:
@@ -489,6 +506,13 @@ class ChatWindow(QDialog):
         footer_layout.setContentsMargins(9, 8, 9, 8)
         footer_layout.setSpacing(6)
         footer_layout.addStretch(1)
+        self.archive_button = QToolButton(sidebar_footer)
+        self.archive_button.setObjectName("archive-toggle-button")
+        self.archive_button.setText("已归档")
+        self.archive_button.setCheckable(True)
+        self.archive_button.setToolTip("显示或隐藏已归档会话")
+        self.archive_button.setAccessibleName("显示已归档会话")
+        footer_layout.addWidget(self.archive_button)
         self.clear_button = QToolButton(sidebar_footer)
         self.clear_button.setObjectName("clear-session-button")
         self.clear_button.setIcon(tool_icon(self.clear_button, "clear", 15))
@@ -586,8 +610,13 @@ class ChatWindow(QDialog):
         ai_layout = QVBoxLayout(self.ai_view)
         ai_layout.setContentsMargins(0, 0, 0, 0)
         ai_layout.setSpacing(0)
+        # 富余高度只给滚动区：spacer 与输入区都在这个布局里，stretch 必须
+        # 设到它身上（设到 chat_main_layout 是静默无效的）。
+        self.ai_layout = ai_layout
         self.view_stack.addWidget(self.ai_view)
-        self.dsh_view = DshView(self._dsh_client, self.view_stack)
+        self.dsh_view = DshView(
+            self._dsh_client, self.view_stack, hub=self._dsh_hub
+        )
         self.dsh_view.context_ready.connect(self._use_dsh_context)
         self.view_stack.addWidget(self.dsh_view)
         chat_main_layout.addWidget(self.view_stack, 1)
@@ -625,8 +654,14 @@ class ChatWindow(QDialog):
             self.message_horizontal_margin, 30, self.message_horizontal_margin, 30
         )
         self.message_host_layout.setSpacing(24)
-        self.message_bottom_spacer = QSpacerItem(
+        # 短会话把消息压到输入区上方（微信/DeepSeek 的阅读动线）；长会话时
+        # 这个 Expanding 会被内容吃掉，仍从顶部开始滚动。
+        self.message_top_spacer = QSpacerItem(
             0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
+        )
+        self.message_host_layout.addSpacerItem(self.message_top_spacer)
+        self.message_bottom_spacer = QSpacerItem(
+            0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
         )
         self.message_host_layout.addSpacerItem(self.message_bottom_spacer)
         self.message_stack.addWidget(self.empty_page)
@@ -643,10 +678,17 @@ class ChatWindow(QDialog):
 
         self.composer_card = QFrame(chat_main)
         self.composer_card.setObjectName("floating-composer")
+        # 输入区只吃自然高度：富余高度归滚动区，否则 toolbar 会吸收空白。
+        self.composer_card.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         composer_card_layout = QVBoxLayout(self.composer_card)
         self.composer_card_layout = composer_card_layout
         composer_card_layout.setContentsMargins(76, 8, 76, 20)
         self.composer = ChatComposer(self.composer_card)
+        self.composer.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         composer_shadow = QGraphicsDropShadowEffect(self.composer)
         composer_shadow.setBlurRadius(22)
         composer_shadow.setOffset(0, 5)
@@ -702,6 +744,7 @@ class ChatWindow(QDialog):
         self.close_button.clicked.connect(self.close)
         self.pin_button.clicked.connect(self.toggle_always_on_top)
         self.new_session_button.clicked.connect(self._on_new)
+        self.archive_button.toggled.connect(self._on_archived_toggled)
         self.clear_button.clicked.connect(self._on_clear)
         self.sidebar_toggle_button.clicked.connect(self.toggle_sidebar)
         self.sidebar_scrim.clicked.connect(self.close_sidebar)
@@ -712,35 +755,106 @@ class ChatWindow(QDialog):
         self.composer.record_stopped.connect(self.record_stopped)
 
     # ---------------------------------------------------------------- 侧栏
+    def is_showing_archived(self) -> bool:
+        return bool(self._show_archived)
+
     def set_history(self, sessions, current_id: str = "") -> None:
         sessions = list(sessions or [])
         self._session_titles = {}
+        self._row_by_session = {}
+        self._group_rows = {}
+        self._group_headers = {}
+        self._group_labels = {}
         self.session_list.blockSignals(True)
         self.session_list.clear()
-        selected = -1
-        for index, session in enumerate(sessions):
-            session_id = str(getattr(session, "session_id", "") or "")
-            title = str(getattr(session, "title", "") or "新会话")
-            self._session_titles[session_id] = title
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, session_id)
-            item.setToolTip(title)
-            item.setSizeHint(QSize(1, 36))
-            self.session_list.addItem(item)
-            self.session_list.setItemWidget(item, SessionListRow(session_id, title, self.session_list))
-            if session_id == str(current_id):
-                selected = index
-        if selected < 0 and sessions:
-            selected = 0
+        groups = buckets(sessions)
+        current_id = str(current_id or "")
+        # 当前会话所在分区必须展开，否则打开窗口看不到高亮。
+        for bucket in groups:
+            if any(
+                str(getattr(session, "session_id", "") or "") == current_id
+                for session in bucket.sessions
+            ):
+                self._collapsed_groups.discard(bucket.key)
+        for bucket in groups:
+            header = QListWidgetItem()
+            header.setData(GROUP_ROLE, bucket.key)
+            header.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            header.setSizeHint(QSize(1, 30))
+            self.session_list.addItem(header)
+            self._group_headers[bucket.key] = header
+            self._group_labels[bucket.key] = bucket.label
+            rows: list[int] = []
+            for session in bucket.sessions:
+                session_id = str(getattr(session, "session_id", "") or "")
+                title = str(getattr(session, "title", "") or "新会话")
+                archived = bool(float(getattr(session, "archived_at", 0.0) or 0.0))
+                self._session_titles[session_id] = title
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, session_id)
+                item.setToolTip(title + ("（已归档）" if archived else ""))
+                item.setSizeHint(QSize(1, 36))
+                self.session_list.addItem(item)
+                row = self.session_list.row(item)
+                self._row_by_session[session_id] = row
+                self._group_rows.setdefault(bucket.key, []).append(row)
+                rows.append(row)
+                row_widget = SessionListRow(
+                    session_id, title, self.session_list, archived=archived
+                )
+                row_widget.archive_requested.connect(self.session_archive_requested)
+                row_widget.delete_requested.connect(self.session_delete_requested)
+                self.session_list.setItemWidget(item, row_widget)
+        self._apply_collapsed_groups()
+
+        selected = self._row_by_session.get(current_id, -1)
+        if selected < 0 or self.session_list.isRowHidden(selected):
+            visible = [
+                row
+                for row in self._row_by_session.values()
+                if not self.session_list.isRowHidden(row)
+            ]
+            selected = visible[0] if visible else -1
         if selected >= 0:
             self.session_list.setCurrentRow(selected)
         self.session_list.blockSignals(False)
-        self._active_session_id = str(current_id or "")
+        self._active_session_id = current_id
         if not self._active_session_id and selected >= 0:
             item = self.session_list.item(selected)
             if item is not None:
                 self._active_session_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
         self.title_label.setText(self._session_titles.get(self._active_session_id) or "新对话")
+        self.archive_button.blockSignals(True)
+        self.archive_button.setChecked(self._show_archived)
+        self.archive_button.blockSignals(False)
+
+    def _apply_collapsed_groups(self) -> None:
+        for key, header in self._group_headers.items():
+            collapsed = key in self._collapsed_groups
+            label = self._group_labels.get(key, key)
+            header.setText(f"{'▸' if collapsed else '▾'} {label}")
+            for row in self._group_rows.get(key, ()):
+                self.session_list.setRowHidden(row, collapsed)
+
+    def _toggle_group(self, key: str) -> None:
+        if key in self._collapsed_groups:
+            self._collapsed_groups.discard(key)
+        else:
+            self._collapsed_groups.add(key)
+        self._apply_collapsed_groups()
+        self._restore_active_row()
+
+    def _restore_active_row(self) -> None:
+        row = self._row_by_session.get(self._active_session_id, -1)
+        if row < 0 or self.session_list.isRowHidden(row):
+            return
+        self.session_list.blockSignals(True)
+        self.session_list.setCurrentRow(row)
+        self.session_list.blockSignals(False)
+
+    def _on_archived_toggled(self, checked: bool) -> None:
+        self._show_archived = bool(checked)
+        self.archived_toggled.emit(self._show_archived)
 
     def toggle_sidebar(self) -> None:
         if self._compact_layout:
@@ -810,10 +924,18 @@ class ChatWindow(QDialog):
         item = self.session_list.item(index)
         if item is None:
             return
+        if item.data(GROUP_ROLE):
+            # 组头不是会话：把选中态还回当前会话，点击由 itemClicked 负责折叠。
+            self._restore_active_row()
+            return
         self._emit_session_selection(str(item.data(Qt.ItemDataRole.UserRole) or ""))
 
     def _on_session_item_clicked(self, item: QListWidgetItem) -> None:
         if item is None:
+            return
+        group_key = item.data(GROUP_ROLE)
+        if group_key:
+            self._toggle_group(str(group_key))
             return
         self._emit_session_selection(str(item.data(Qt.ItemDataRole.UserRole) or ""))
 
@@ -1019,8 +1141,9 @@ class ChatWindow(QDialog):
         return bubble
 
     def _clear_message_rows(self) -> None:
-        while self.message_host_layout.count() > 1:
-            item = self.message_host_layout.takeAt(0)
+        # 首尾两个 spacer 保留：顶部负责短会话底部对齐，底部固定 0。
+        while self.message_host_layout.count() > 2:
+            item = self.message_host_layout.takeAt(1)
             self._delete_layout_item(item)
         self._bubbles.clear()
         self._stream_bubble = None
@@ -1059,7 +1182,7 @@ class ChatWindow(QDialog):
             )
             self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self.scroll.setFixedHeight(150)
-            self.chat_main_layout.setStretchFactor(self.scroll, 0)
+            self.ai_layout.setStretchFactor(self.scroll, 0)
         else:
             self.content_top_spacer.changeSize(
                 0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
@@ -1072,7 +1195,14 @@ class ChatWindow(QDialog):
             self.scroll.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
             )
-            self.chat_main_layout.setStretchFactor(self.scroll, 1)
+            self.ai_layout.setStretchFactor(self.scroll, 1)
+            self.message_top_spacer.changeSize(
+                0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
+            )
+            self.message_bottom_spacer.changeSize(
+                0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+            )
+        self.ai_layout.invalidate()
         self.chat_main_layout.invalidate()
         self.message_host_layout.invalidate()
 

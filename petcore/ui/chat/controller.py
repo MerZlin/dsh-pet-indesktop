@@ -15,8 +15,10 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtWidgets import QMessageBox
 
 from ...chat.session_store import ChatSession, SessionStore
+from .dsh_controller import DshHub
 from .styles import safe_accent
 from .window import ChatWindow
 
@@ -59,6 +61,8 @@ class _ChatState:
     submit_callback: Callable[[str, int], None] | None = None
     stop_callback: Callable[[int], None] | None = None
     active: bool = False
+    #: 当前流式回答所属会话 id；切会话后迟到的 token/done 不许写进新会话。
+    stream_session_id: str = ""
     extras: dict = field(default_factory=dict)
 
 
@@ -84,11 +88,15 @@ class ChatController(QObject):
         self._submit_registry: dict[str, Callable[[str, int], None]] = {}
         self._stop_registry: dict[str, Callable[[int], None]] = {}
         self._recording_key: tuple[str, int] | None = None
+        self._dsh_hub: DshHub | None = None
         self._asr = getattr(host, "asr", None)
         if self._asr is not None:
             self._asr.recording_changed.connect(self._on_asr_recording)
             self._asr.finished.connect(self._on_asr_finished)
             self._asr.failed.connect(self._on_asr_failed)
+            partial = getattr(self._asr, "partial", None)
+            if partial is not None:
+                partial.connect(self._on_asr_partial)
         self.token_received.connect(self._apply_token)
         self.reasoning_received.connect(self._apply_reasoning)
         self.status_received.connect(self._apply_status)
@@ -114,6 +122,8 @@ class ChatController(QObject):
         if title:
             window.setWindowTitle(str(title))
         window.show()
+        if window.current_view() == "dsh":
+            window.dsh_view.activate()
         window.raise_()
         window.activateWindow()
         return True
@@ -196,6 +206,7 @@ class ChatController(QObject):
     def close(self, owner: str, *, pet_slot: int | None = None) -> None:
         state = self._states.get((str(owner), self._slot(pet_slot)))
         if state is not None and state.window is not None:
+            state.window.dsh_view.deactivate()
             state.window.hide()
 
     def cancel(self, owner: str, *, pet_slot: int | None = None) -> None:
@@ -368,11 +379,16 @@ class ChatController(QObject):
 
     def _create_window(self, state: _ChatState) -> ChatWindow:
         key = (state.owner, state.slot)
+        dsh = getattr(self.host, "dsh", None)
+        if dsh is not None and self._dsh_hub is None:
+            # 一个进程一条 SSE：多个聊天窗共享同一份 DSH 帧与审批状态。
+            self._dsh_hub = DshHub(dsh, self)
         window = ChatWindow(
             title=self._title(state.owner, state.slot),
             font_size=self._font_size(),
             font_family=self._font_family(),
-            dsh=getattr(self.host, "dsh", None),
+            dsh=dsh,
+            dsh_hub=self._dsh_hub,
             character_id=self._character_for(state.slot),
             accent=str(self._config_get("chat_accent", "") or ""),
             background=str(self._config_get("chat_background", "") or ""),
@@ -391,6 +407,17 @@ class ChatController(QObject):
         window.pin_toggled.connect(self._on_pin_toggled)
         window.record_requested.connect(lambda key=key: self._start_recording(key))
         window.record_stopped.connect(lambda key=key: self._stop_recording(key))
+        window.session_archive_requested.connect(
+            lambda session_id, archived, s=state: self._on_archive(
+                s, session_id, archived
+            )
+        )
+        window.session_delete_requested.connect(
+            lambda session_id, s=state: self._on_delete(s, session_id)
+        )
+        window.archived_toggled.connect(
+            lambda _checked=False, s=state: self._refresh_history(s)
+        )
         if self._asr is None:
             window.composer.record_button.hide()
         try:
@@ -450,19 +477,31 @@ class ChatController(QObject):
         window = state.window
         if window is None:
             return
+        if (
+            state.stream_session_id
+            and state.stream_session_id != state.session.session_id
+        ):
+            return
         if not state.active:
             window.begin_stream()
             state.session.append("assistant", "")
             state.active = True
+            state.stream_session_id = state.session.session_id
             self._notify_island("working")
         window.append_token(delta)
 
     def _begin_stream_if_needed(self, state: _ChatState) -> None:
         if state.active or state.window is None:
             return
+        if (
+            state.stream_session_id
+            and state.stream_session_id != state.session.session_id
+        ):
+            return
         state.window.begin_stream()
         state.session.append("assistant", "")
         state.active = True
+        state.stream_session_id = state.session.session_id
         self._notify_island("working")
 
     def _apply_reasoning(self, owner: str, delta: str, slot: int) -> None:
@@ -481,6 +520,15 @@ class ChatController(QObject):
 
     def _apply_done(self, owner: str, text: str, slot: int) -> None:
         state = self._ensure(owner, slot)
+        if (
+            state.stream_session_id
+            and state.stream_session_id != state.session.session_id
+        ):
+            # 用户在回答中途归档/删除/切换了会话：迟到的 done 属于旧会话，
+            # 不许 append 到新会话头上。
+            state.active = False
+            state.stream_session_id = ""
+            return
         window = state.window
         thinking = ("", [])
         if window is not None:
@@ -503,6 +551,7 @@ class ChatController(QObject):
             state.session.append("assistant", final)
             self._remember_thinking(state.session.messages[-1], thinking)
         state.active = False
+        state.stream_session_id = ""
         self._save(state)
         self._refresh_history(state)
 
@@ -536,6 +585,8 @@ class ChatController(QObject):
             return
         if attachments:
             state.extras["attachments"] = attachments
+        # 新一轮用户消息：清掉上一轮流式守卫，允许本会话开始新回答。
+        state.stream_session_id = ""
         state.window.append_message("user", text)
         state.session.append("user", text)
         self._save(state)
@@ -558,6 +609,7 @@ class ChatController(QObject):
             return
         state.session = state.store.new_session()
         state.active = False
+        state.stream_session_id = ""
         state.extras.pop("attachments", None)
         self._refresh_history(state)
 
@@ -565,6 +617,7 @@ class ChatController(QObject):
         state = self._states.get(key)
         if state is None:
             return
+        self._cancel_stream_for_switch(state)
         if not session_id:
             state.session = state.store.new_session()
             if state.window is not None:
@@ -578,6 +631,71 @@ class ChatController(QObject):
                 state.window.load_messages(loaded.messages)
         state.active = False
         self._refresh_history(state)
+
+    def _on_archive(
+        self, state: _ChatState, session_id: str, archived: bool
+    ) -> None:
+        session_id = str(session_id or "")
+        if not session_id:
+            return
+        try:
+            state.store.archive(session_id, bool(archived))
+        except OSError:
+            logger.warning("chat session archive failed", exc_info=True)
+            return
+        showing = bool(state.window and state.window.is_showing_archived())
+        if archived and not showing and state.session.session_id == session_id:
+            self._load_fallback(state)
+        self._refresh_history(state)
+
+    def _on_delete(self, state: _ChatState, session_id: str) -> None:
+        session_id = str(session_id or "")
+        if not session_id:
+            return
+        title = state.window._session_titles.get(session_id, "这个会话") if state.window else "这个会话"
+        answer = QMessageBox.question(
+            state.window,
+            "删除会话",
+            f"确定删除「{title}」？删除后无法恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            state.store.delete(session_id)
+        except OSError:
+            logger.warning("chat session delete failed", exc_info=True)
+            return
+        if state.session.session_id == session_id:
+            self._load_fallback(state)
+        self._refresh_history(state)
+
+    def _cancel_stream_for_switch(self, state: _ChatState) -> None:
+        if state.active:
+            try:
+                self.cancel(state.owner, pet_slot=state.slot)
+            except Exception:
+                logger.warning("cancel stream before switching failed", exc_info=True)
+        state.active = False
+
+    def _load_fallback(self, state: _ChatState) -> None:
+        """当前会话被归档/删除/隐藏后，切到下一个可见会话或新建。"""
+        # 流式回答还在吐 token 时切会话：先取消，迟到的 done 由
+        # stream_session_id 守卫丢弃，不会写进新会话。
+        self._cancel_stream_for_switch(state)
+        showing = bool(state.window and state.window.is_showing_archived())
+        try:
+            sessions = state.store.list_sessions(include_archived=showing)
+        except OSError:
+            sessions = []
+        if sessions:
+            state.session = sessions[0]
+        else:
+            state.session = state.store.new_session()
+        state.active = False
+        if state.window is not None:
+            state.window.load_messages(state.session.messages)
 
     # ---------------------------------------------------------------- 语音输入
     def _window_for_key(self, key: tuple[str, int]) -> ChatWindow | None:
@@ -613,12 +731,19 @@ class ChatController(QObject):
             return
         window.set_recording(bool(recording), "" if recording else "正在识别…")
 
+    def _on_asr_partial(self, text: str) -> None:
+        key = self._recording_key
+        window = self._window_for_key(key) if key is not None else None
+        if window is not None:
+            window.set_partial_transcript(str(text or ""))
+
     def _on_asr_finished(self, text: str) -> None:
         key = self._recording_key
         self._recording_key = None
         window = self._window_for_key(key) if key is not None else None
         if window is None:
             return
+        window.set_partial_transcript("")
         window.set_recording(False)
         auto_send = bool(self._config_get("asr_auto_send", False))
         window.insert_transcript(str(text or ""), auto_send=auto_send)
@@ -629,6 +754,7 @@ class ChatController(QObject):
         window = self._window_for_key(key) if key is not None else None
         if window is None:
             return
+        window.set_partial_transcript("")
         window.set_recording(False, asr_reason_text(reason))
 
     def _on_closed(self, key: tuple[str, int]) -> None:
@@ -649,8 +775,11 @@ class ChatController(QObject):
     def _refresh_history(self, state: _ChatState) -> None:
         if state.window is None:
             return
+        showing = state.window.is_showing_archived()
+        if not showing and bool(getattr(state.session, "archived_at", 0.0)):
+            self._load_fallback(state)
         try:
-            sessions = state.store.list_sessions()
+            sessions = state.store.list_sessions(include_archived=showing)
         except OSError:
             sessions = []
         state.window.set_history(sessions, state.session.session_id)

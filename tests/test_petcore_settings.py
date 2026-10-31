@@ -1063,3 +1063,30 @@ def test_interaction_page_exposes_squash_elasticity(app, tmp_path: Path) -> None
     assert page.squash_strength.value() == 100
     assert page.squash_ms.value() == 220
     dialog.deleteLater()
+
+
+def test_appearance_stream_mode_and_key_color_round_trip(app, tmp_path: Path) -> None:
+    host = _host(tmp_path)
+    dialog = SettingsDialog(host, initial_page="appearance")
+    try:
+        page = _page(dialog, "外观与交互")
+        page.stream_mode.setCurrentIndex(page.stream_mode.findData("keycolor"))
+        assert host.config.get("stream_capture_mode") is True
+        assert host.config.get("stream_capture_keycolor") is True
+        page.stream_key_color.setText("#FF00FF")
+        page._on_stream_key_color()
+        assert host.config.get("stream_key_color") == "#FF00FF"
+
+        # 从色键切回关闭后点保存：keycolor 必须先关，否则 normalize 把 mode 翻回 True。
+        page.stream_mode.setCurrentIndex(page.stream_mode.findData("off"))
+        page.confirm_save()
+        assert host.config.get("stream_capture_mode") is False
+        assert host.config.get("stream_capture_keycolor") is False
+
+        page.discard_changes()
+        assert host.config.get("stream_capture_mode") is False
+        assert host.config.get("stream_capture_keycolor") is False
+        assert page.stream_mode.currentData() == "off"
+        assert host.config.get("stream_key_color") == "#00FF00"
+    finally:
+        dialog.deleteLater()

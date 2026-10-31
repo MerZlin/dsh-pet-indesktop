@@ -201,12 +201,42 @@ class AiChatRuntime:
                 pass
         return character_id or "桌宠"
 
+    def _persona_presets(self):
+        """包内预设 + 用户人格卡；按目录/文件 mtime 缓存，每轮对话不读盘。"""
+        ports = getattr(self.context, "ports", None)
+        storage = getattr(ports, "storage", None)
+        data_dir = getattr(storage, "data_dir", None)
+        if not callable(data_dir):
+            return load_presets()
+        try:
+            user_dir = Path(data_dir("ai.chat")) / "personas"
+        except Exception:  # noqa: BLE001 - 存储不可用时退回包内预设
+            return load_presets()
+        try:
+            files = list(user_dir.glob("*.json")) if user_dir.is_dir() else []
+            key = (
+                str(user_dir),
+                float(user_dir.stat().st_mtime) if user_dir.is_dir() else 0.0,
+                max((float(path.stat().st_mtime) for path in files), default=0.0),
+            )
+        except OSError:
+            key = (str(user_dir), 0.0, 0.0)
+        if (
+            getattr(self, "_persona_cache_key", None) == key
+            and getattr(self, "_persona_cache", None) is not None
+        ):
+            return self._persona_cache
+        presets = load_presets(user_dir=user_dir)
+        self._persona_cache_key = key
+        self._persona_cache = presets
+        return presets
+
     def _prompt(self) -> str:
         return resolve_prompt(
             self._config_value("ai_persona", ""),
             self._config_value("ai_system_prompt", ""),
             self._character_name(),
-            load_presets(),
+            self._persona_presets(),
         )
 
     def _vision_enabled(self) -> bool:

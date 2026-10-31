@@ -250,3 +250,30 @@ def test_interaction_page_preserves_category_tokens_on_unrelated_changes(
     finally:
         page.deleteLater()
         app.processEvents()
+
+
+def test_settings_search_finds_animation_tree_items(tmp_path: Path) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from petcore.ui.settings.base import page_search_texts, reveal_text
+    from petcore.ui.settings.page_interaction import InteractionPage
+
+    app = QApplication.instance() or QApplication([])
+
+    class Host:
+        def __init__(self, root: Path):
+            self.config = Config(root)
+            self.window = SimpleNamespace(catalog=GraphCatalog(_specs()))
+
+    page = InteractionPage(Host(tmp_path))
+    try:
+        texts = page_search_texts(page)
+        assert "随机动作" in texts
+        assert "wave" in texts
+        assert reveal_text(page, "wave") is True
+        app.processEvents()
+        assert page.anim_tree.currentItem() is not None
+    finally:
+        page.deleteLater()
+        app.processEvents()

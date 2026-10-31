@@ -1062,3 +1062,44 @@ P5 的 petcore 运行时能力已按以下契约实现：
 
 **语义说明**：胶囊状态点只表达**智能体五态**；指标告警仍由段数值颜色与 chip 上的
 4px 告警点表达（不使用状态点）。
+
+## 反馈批次 2（2026-10-31）增量契约
+
+**聊天窗布局**：`ai_layout` 拥有 scroll 的 stretch；`composer_card`/`ChatComposer`
+纵向 Fixed；非空态时间线用顶部 Expanding spacer 底部对齐。输入法 preedit 期间
+placeholder 为空，commit/取消/FocusOut 恢复。
+
+**音频设备**：`music_audio_device` 空=跟随系统默认（runtime 每 5s 比较默认 id，
+变化即丢 WASAPI manager）；非空=手选端点（每 30s 确认存在，拔掉回退默认并记
+warning）。设置页端点列表在短命线程枚举，30s 缓存。`asr_device` 是 WinMM 输入索引，
+`asr_device_name` 只回显。
+
+**直播兼容**：`stream_capture_mode` 布尔 + `stream_capture_keycolor` 布尔 +
+`stream_key_color` `#RRGGBB`。色键模式窗口不透明、整窗铺底色、气泡同样铺底；
+直播模式置顶走 `SetWindowPos`，不重建 HWND；每次改窗旗标后重放
+`apply_stream_window`。`capture_probe.probe_window` 只读报告 exstyle 与
+PrintWindow/BitBlt 非黑占比，不写标题正文。
+
+**设置搜索**：匹配标签/按钮/下拉项/列表项/树项/`searchKeys`；树项完整名优先；
+下拉/列表只滚动定位，不改当前值；命中折叠 mod 页时自动展开左栏分组。
+
+**DSH**：`DshHub` 进程内单条 SSE，多视图订阅；审批卡提交后置灰、resolved 终态、
+失败/断线恢复；通道同会话只保留一个 pending，默认 10 分钟超时自动取消。
+
+**ASR 实时**：`AsrChannel.partial` 只在录音线程产生；同刻最多一个增量识别在飞；
+`sapi` 间隔 ≥1.5s。预览不得覆盖用户已输入文本，final 才 `insert_text`。
+
+**人格卡**：包内 `persona_presets/*.json` 只读；用户卡在
+`<data_root>/feature-data/ai.chat/personas/`，同 id 覆盖内置。保存校验 id/名称/
+说明/提示词长度，原子写；runtime 按目录+文件 mtime 缓存。
+
+**会话**：`ChatSession.archived_at`（0=未归档）仍属 schema 1；侧栏按
+今天/昨天/本周/本月/更早分节，组头折叠；归档会话默认隐藏，可切换显示；
+三点菜单归档/删除，删除确认默认取消。
+
+**菜单**：`ai_hub`「AI 助手」收 `ai.chat:open` / `look_screen` / `proactive`；
+`migrate_p12_menu` 幂等，且只在已有 AI 项或已有 hub 时迁移。
+
+**自语每日**：`self_talk_daily_enabled/texts/sequence`；每日句按日期确定性抽取，
+每个 slot 每天只说一次；`self_talk_daily_sequence` 时按 `|`/换行/句末标点拆段，
+复用 `say_sequence` 的逐句展示/朗读。

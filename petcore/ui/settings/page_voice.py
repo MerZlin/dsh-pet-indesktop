@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from ...contracts.speech import SpeechRequest
 from ...net.errors import describe as describe_net_error
+from ...platform.mic import MicRecorder
 from ...net.tts import PROVIDER_SPECS
 from .base import (
     SettingsPage,
@@ -61,6 +62,10 @@ CONFIG_KEYS = {
     "asr_endpoint": "asr_endpoint",
     "asr_model": "asr_model",
     "asr_language": "asr_language",
+    "asr_device": "asr_device",
+    "asr_device_name": "asr_device_name",
+    "asr_stream_enabled": "asr_stream_enabled",
+    "asr_partial_interval_ms": "asr_partial_interval_ms",
     "asr_auto_send": "asr_auto_send",
     "asr_max_seconds": "asr_max_seconds",
     "asr_timeout": "asr_timeout",
@@ -327,6 +332,26 @@ class VoicePage(SettingsPage):
             "对话窗/快速对话的话筒按钮；关闭后不录音、不识别。",
         )
 
+        self.asr_device = QComboBox(self)
+        self.asr_device.setMinimumWidth(220)
+        self.asr_device.addItem("系统默认麦克风", 0)
+        try:
+            for device in MicRecorder().devices():
+                self.asr_device.addItem(
+                    str(device.name or f"麦克风 {device.index + 1}"), int(device.index)
+                )
+        except Exception:  # noqa: BLE001 - 没有麦克风也保留系统默认项
+            pass
+        saved_device = int(self.config().get("asr_device") or 0)
+        index = self.asr_device.findData(saved_device)
+        self.asr_device.setCurrentIndex(index if index >= 0 else 0)
+        self.asr_device.currentIndexChanged.connect(self._on_changed)
+        card.add_row(
+            "麦克风",
+            self.asr_device,
+            "系统默认通常跟随 Windows 的默认输入设备；有多支麦克风时可手动指定。",
+        )
+
         self.asr_engine = QComboBox(self)
         self.asr_engine.addItem("系统识别（Windows，免配置）", "sapi")
         self.asr_engine.addItem("本地 ASR 服务（OpenAI 兼容）", "http")
@@ -374,6 +399,31 @@ class VoicePage(SettingsPage):
             "关闭时只把文字填进输入框，由你确认后发送。",
         )
 
+        self.asr_stream = make_checkbox(self)
+        self.asr_stream.setChecked(bool(self.config().get("asr_stream_enabled", True)))
+        self.asr_stream.toggled.connect(self._on_changed)
+        self.asr_stream.toggled.connect(self._sync_asr_rows)
+        card.add_row(
+            "实时显示识别文字",
+            self.asr_stream,
+            "录音过程中每隔一小段就把已录到的内容识别一次，先显示在输入区；"
+            "停止后再做一次完整识别。系统识别会比本地服务慢一些。",
+        )
+
+        self.asr_partial_interval = QSpinBox(self)
+        self.asr_partial_interval.setRange(400, 3000)
+        self.asr_partial_interval.setSingleStep(100)
+        self.asr_partial_interval.setSuffix(" 毫秒")
+        self.asr_partial_interval.setValue(
+            int(self.config().get("asr_partial_interval_ms") or 800)
+        )
+        self.asr_partial_interval.valueChanged.connect(self._on_changed)
+        card.add_row(
+            "预览刷新间隔",
+            self.asr_partial_interval,
+            "越短越跟手，但本地识别服务/系统识别的压力越大；系统识别实际不低于 1.5 秒。",
+        )
+
         self.asr_max_seconds = QSpinBox(self)
         self.asr_max_seconds.setRange(3, 60)
         self.asr_max_seconds.setSuffix(" 秒")
@@ -398,6 +448,7 @@ class VoicePage(SettingsPage):
         http = str(self.asr_engine.currentData() or "sapi") == "http"
         for widget in (self.asr_endpoint, self.asr_model, self.asr_language, self.asr_timeout):
             widget.setEnabled(http)
+        self.asr_partial_interval.setEnabled(self.asr_stream.isChecked())
 
     def _build_secrets(self) -> None:
         card = self.section("在线后端凭据")
@@ -546,6 +597,12 @@ class VoicePage(SettingsPage):
             "asr_endpoint": str(config.get("asr_endpoint") or ""),
             "asr_model": str(config.get("asr_model") or ""),
             "asr_language": str(config.get("asr_language") or "zh"),
+            "asr_device": int(config.get("asr_device") or 0),
+            "asr_device_name": str(config.get("asr_device_name") or ""),
+            "asr_stream_enabled": bool(config.get("asr_stream_enabled", True)),
+            "asr_partial_interval_ms": int(
+                config.get("asr_partial_interval_ms") or 800
+            ),
             "asr_auto_send": bool(config.get("asr_auto_send", False)),
             "asr_max_seconds": int(config.get("asr_max_seconds") or 30),
             "asr_timeout": int(float(config.get("asr_timeout") or 30)),
@@ -574,6 +631,13 @@ class VoicePage(SettingsPage):
             "asr_endpoint": self.asr_endpoint.text().strip(),
             "asr_model": self.asr_model.text().strip(),
             "asr_language": self.asr_language.text().strip() or "zh",
+            "asr_device": int(self.asr_device.currentData() or 0),
+            "asr_device_name": (
+                "" if int(self.asr_device.currentData() or 0) == 0
+                else str(self.asr_device.currentText() or "")
+            ),
+            "asr_stream_enabled": bool(self.asr_stream.isChecked()),
+            "asr_partial_interval_ms": int(self.asr_partial_interval.value()),
             "asr_auto_send": bool(self.asr_auto_send.isChecked()),
             "asr_max_seconds": int(self.asr_max_seconds.value()),
             "asr_timeout": int(self.asr_timeout.value()),
@@ -673,6 +737,10 @@ class VoicePage(SettingsPage):
             self.local_model.setText(self._initial["local_model"])
             self.local_timeout.setValue(int(self._initial["local_timeout"]))
             self.asr_enabled.setChecked(bool(self._initial["asr_enabled"]))
+            self.asr_device.blockSignals(True)
+            index = self.asr_device.findData(int(self._initial["asr_device"]))
+            self.asr_device.setCurrentIndex(index if index >= 0 else 0)
+            self.asr_device.blockSignals(False)
             self._select(self.asr_engine, self._initial["asr_engine"])
             self.asr_endpoint.setText(self._initial["asr_endpoint"])
             self.asr_model.setText(self._initial["asr_model"])
@@ -680,6 +748,10 @@ class VoicePage(SettingsPage):
             self.asr_auto_send.setChecked(bool(self._initial["asr_auto_send"]))
             self.asr_max_seconds.setValue(int(self._initial["asr_max_seconds"]))
             self.asr_timeout.setValue(int(self._initial["asr_timeout"]))
+            self.asr_stream.setChecked(bool(self._initial["asr_stream_enabled"]))
+            self.asr_partial_interval.setValue(
+                int(self._initial["asr_partial_interval_ms"])
+            )
             self._sync_asr_rows()
             self._sync_voice_options()
         finally:
@@ -858,6 +930,9 @@ class VoicePage(SettingsPage):
             "缓存",
             "语音输入",
             "麦克风",
+            "实时",
+            "预览",
+            "字幕",
             "录音",
             "识别",
             "asr",

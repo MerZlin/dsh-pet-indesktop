@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QColor, QCursor
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .. import paths
@@ -68,6 +68,7 @@ from ..platform.win import (
     apply_stream_window,
     apply_tool_window,
     forward_left_click,
+    set_topmost,
 )
 from .bubble import SpeechBubble
 from .easter_egg import DEFAULT_EASTER_EGG_TITLE, EasterEggController
@@ -112,6 +113,8 @@ class PetWindow(QWidget):
         self.click_through = bool(config.get("click_through"))
         self.always_on_top = bool(config.get("always_on_top"))
         self.stream_capture_mode = bool(config.get("stream_capture_mode"))
+        self.stream_capture_keycolor = bool(config.get("stream_capture_keycolor"))
+        self.stream_key_color = QColor(str(config.get("stream_key_color") or "#00FF00"))
         self.dragging = False
         self._suppress_context_menu = False
         self.state = PetState(scale=float(config.get("scale") or 0.72))
@@ -136,7 +139,11 @@ class PetWindow(QWidget):
         self.bubble = SpeechBubble(self)
         self.bubble.clicked.connect(self._on_bubble_clicked)
         self.bubble.set_text_scale(self._text_scale_factor())
-        self.bubble.set_stream_mode(self.stream_capture_mode)
+        self.bubble.set_stream_mode(
+            self.stream_capture_mode,
+            keycolor=self.stream_capture_keycolor,
+            key_color=self.stream_key_color.name(),
+        )
         self._clip = None
         self._image = None
         self._pixmap = None
@@ -196,7 +203,13 @@ class PetWindow(QWidget):
         self._right_hold_timer.timeout.connect(self._on_right_hold)
         self._layout = None
         self._apply_flags(initial=True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # 色键直播窗必须是不透明窗口：OBS 色度键需要一个真正有像素的底色；
+        # 分层窗口（WA_TranslucentBackground）在 BitBlt/WGC 下常读回全黑。
+        # _apply_flags(initial=True) 不创建原生窗口，这里设完再 show 仍生效。
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TranslucentBackground,
+            not (self.stream_capture_mode and self.stream_capture_keycolor),
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
@@ -286,7 +299,7 @@ class PetWindow(QWidget):
         self._restore_geometry()
         self.show()
         if self.stream_capture_mode:
-            apply_stream_window(int(self.winId()))
+            apply_stream_window(int(self.winId()), keycolor=self.stream_capture_keycolor)
         else:
             apply_tool_window(int(self.winId()))
         self._play_idle()
@@ -438,13 +451,47 @@ class PetWindow(QWidget):
         was_visible = self.isVisible()
         position = self.pos() if not initial else None
         self.setWindowFlags(flags)
-        self.setWindowTitle("dsh-pet core" if self.stream_capture_mode else "")
+        self.setWindowTitle(
+            f"dsh-pet core #{self.slot}" if self.stream_capture_mode else ""
+        )
         if position is not None:
             self.move(position)
         if was_visible and not initial:
             self.show()
-        # 气泡与桌宠必须是同一图层：置顶跟着走，否则图片气泡会被桌宠盖住。
+        # setWindowFlags 会重建 HWND 并重新加回 WS_EX_NOACTIVATE；直播模式必须
+        # 在每次改旗标后重新清一遍，否则 OBS 又枚举不到/拿不到激活态。
+        # 初次构造时窗口还没 show（start() 会在 show 后补），提前 winId() 会让
+        # 原生窗口带 2px 边框，把后续 move(400,400) 变成 (402,402)。
+        if not initial:
+            self._apply_native_style()
+        # 气泡与桌宠必须是同一图层：置顶跟着走，否则图片气泡会被盖住。
         self.bubble.set_host_on_top(self.always_on_top)
+
+    def _apply_native_style(self) -> None:
+        if os.name != "nt":
+            return
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            return
+        if self.stream_capture_mode:
+            apply_stream_window(hwnd, keycolor=self.stream_capture_keycolor)
+        else:
+            apply_tool_window(hwnd)
+
+    def _recreate_native_window(self) -> None:
+        """强制重建 HWND：WA_TranslucentBackground 的变化只在重建时生效。"""
+        was_visible = self.isVisible()
+        position = self.pos()
+        size = self.size()
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.destroy()
+        if was_visible:
+            self.show()
+            self.move(position)
+            self.resize(size)
+        self._apply_native_style()
 
     def _play_idle(self) -> None:
         spec = self.player.play(GraphType.IDEL, animat=AnimatType.B_LOOP)
@@ -999,25 +1046,74 @@ class PetWindow(QWidget):
         self.config.set("always_on_top", self.always_on_top)
         if persist:
             self.config.save()
+        if self.stream_capture_mode and os.name == "nt":
+            # 直播窗只改 Z 序：setWindowFlags 会重建 HWND，OBS 窗口源会掉。
+            try:
+                set_topmost(int(self.winId()), self.always_on_top)
+            except Exception:
+                self._apply_flags()
+            self.bubble.set_host_on_top(self.always_on_top)
+            return
         self._apply_flags()
 
     def toggle_always_on_top(self) -> None:
         self.set_always_on_top(not self.always_on_top)
 
-    def set_stream_capture_mode(self, value: bool, *, persist: bool = True) -> None:
-        """直播捕获兼容：切换成普通顶层窗口，气泡同步跟随。"""
+    def set_stream_capture_mode(
+        self, value: bool, *, keycolor: bool | None = None, persist: bool = True
+    ) -> None:
+        """直播捕获兼容：普通顶层窗口 / 色键窗口，气泡同步跟随。"""
+        old_keycolor = self.stream_capture_keycolor
         self.stream_capture_mode = bool(value)
+        if keycolor is not None:
+            self.stream_capture_keycolor = bool(keycolor)
+        if self.stream_capture_keycolor:
+            self.stream_capture_mode = True
+        self.config.set("stream_capture_keycolor", self.stream_capture_keycolor)
         self.config.set("stream_capture_mode", self.stream_capture_mode)
         if persist:
             self.config.save()
+        # 分层/不透明属性只能在原生窗口重建时可靠切换。**同 flags 的
+        # setWindowFlags 不会重建 HWND**（Qt 会复用），必须显式 destroy。
+        keycolor_changed = old_keycolor != self.stream_capture_keycolor
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TranslucentBackground,
+            not (self.stream_capture_mode and self.stream_capture_keycolor),
+        )
         self._apply_flags()
-        if self.stream_capture_mode:
-            apply_stream_window(int(self.winId()))
-        else:
-            apply_tool_window(int(self.winId()))
-        self.bubble.set_stream_mode(self.stream_capture_mode)
+        if keycolor_changed:
+            self._recreate_native_window()
+        self._apply_native_style()
+        self.bubble.set_stream_mode(
+            self.stream_capture_mode,
+            keycolor=self.stream_capture_keycolor,
+            key_color=self.stream_key_color.name(),
+        )
         if self.isVisible():
             self.show()
+            self.update()
+        if (
+            self.stream_capture_keycolor
+            and not old_keycolor
+            and self.stream_capture_mode
+        ):
+            self.say("直播色键已开启；OBS 需要重新选一次窗口源。", 5000)
+
+    def set_stream_key_color(self, value: str, *, persist: bool = True) -> None:
+        color = QColor(str(value or "").strip())
+        if not color.isValid():
+            color = QColor("#00FF00")
+        self.stream_key_color = color
+        self.config.set("stream_key_color", color.name().upper())
+        if persist:
+            self.config.save()
+        if self.stream_capture_mode and self.stream_capture_keycolor:
+            self.update()
+        self.bubble.set_stream_mode(
+            self.stream_capture_mode,
+            keycolor=self.stream_capture_keycolor,
+            key_color=self.stream_key_color.name(),
+        )
 
     def toggle_hidden(self) -> None:
         self.set_visible(not self.isVisible())
@@ -1160,11 +1256,14 @@ class PetWindow(QWidget):
         return QRect(0, 0, target_width, target_height)
 
     def paintEvent(self, _event) -> None:
-        if self._pixmap is None:
-            return
         from PySide6.QtGui import QPainter
 
         painter = QPainter(self)
+        if self.stream_capture_mode and self.stream_capture_keycolor:
+            painter.fillRect(self.rect(), self.stream_key_color)
+        if self._pixmap is None:
+            painter.end()
+            return
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         angle = self._probe_angle + self.effects.effect_angle()
         if abs(angle) >= 1e-6:

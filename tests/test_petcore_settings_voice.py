@@ -360,7 +360,13 @@ def test_asr_settings_write_and_discard(app, tmp_path: Path) -> None:
         page.asr_model.setText("whisper-1")
         page.asr_auto_send.setChecked(True)
         page.asr_max_seconds.setValue(20)
+        assert page.asr_device.count() >= 1
+        assert page.asr_stream.isChecked() is True
+        page.asr_stream.setChecked(False)
+        page.asr_partial_interval.setValue(1200)
 
+        assert host.config.get("asr_stream_enabled") is False
+        assert host.config.get("asr_partial_interval_ms") == 1200
         assert host.config.get("asr_engine") == "http"
         assert host.config.get("asr_endpoint").endswith("/v1/audio/transcriptions")
         assert host.config.get("asr_model") == "whisper-1"
@@ -373,6 +379,8 @@ def test_asr_settings_write_and_discard(app, tmp_path: Path) -> None:
         assert page.asr_engine.currentData() == "sapi"
         assert page.asr_endpoint.text() == ""
         assert page.asr_endpoint.isEnabled() is False
+        assert page.asr_stream.isChecked() is True
+        assert page.asr_partial_interval.value() == 800
         assert page.dirty() is False
     finally:
         page.deleteLater()

@@ -6,8 +6,9 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
+    QColorDialog,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -34,6 +35,29 @@ from .base import (
 
 class _DshInstallSignals(QObject):
     finished = Signal(object)
+
+
+class _CaptureProbeSignals(QObject):
+    finished = Signal(object)
+
+
+class _CaptureProbeWorker(QRunnable):
+    def __init__(self, hwnd: int, signals: _CaptureProbeSignals) -> None:
+        super().__init__()
+        self.hwnd = int(hwnd)
+        self.signals = signals
+
+    def run(self) -> None:
+        try:
+            from ...platform.capture_probe import probe_window
+
+            report = probe_window(self.hwnd)
+        except Exception as exc:  # noqa: BLE001 - 自检失败要回原因
+            report = {"supported": False, "reason": type(exc).__name__}
+        try:
+            self.signals.finished.emit(report)
+        except RuntimeError:
+            pass
 
 
 class _DshInstallWorker(QRunnable):
@@ -537,6 +561,12 @@ class AppearancePage(SettingsPage):
         self._initial_ui_font_size = int(self.config().get("ui_font_size") or 13)
         self._initial_bubble_text_scale = int(self.config().get("bubble_text_scale") or 100)
         self._initial_stream_capture = bool(self.config().get("stream_capture_mode"))
+        self._initial_stream_keycolor = bool(
+            self.config().get("stream_capture_keycolor")
+        )
+        self._initial_stream_key_color = str(
+            self.config().get("stream_key_color") or "#00FF00"
+        )
         self._initial_visible = self._window_visible()
 
         # 这一页的内容已经长到四屏：按主分支的设置页内分页切成四块。
@@ -592,15 +622,53 @@ class AppearancePage(SettingsPage):
             "关闭后恢复左键点击。影响所有桌宠，可从托盘菜单关闭。",
         )
 
-        self.stream_capture_check = make_checkbox(self)
-        self.stream_capture_check.setChecked(self._initial_stream_capture)
-        self.stream_capture_check.toggled.connect(self._on_stream_capture_changed)
+        self.stream_mode = QComboBox(self)
+        self.stream_mode.addItem("关闭", "off")
+        self.stream_mode.addItem("透明顶层窗口", "window")
+        self.stream_mode.addItem("色键窗口（推荐 OBS / 直播姬）", "keycolor")
+        mode = (
+            "keycolor"
+            if self._initial_stream_keycolor
+            else ("window" if self._initial_stream_capture else "off")
+        )
+        self.stream_mode.setCurrentIndex(self.stream_mode.findData(mode))
+        self.stream_mode.currentIndexChanged.connect(self._on_stream_mode_changed)
         card.add_row(
             "直播捕获兼容",
-            self.stream_capture_check,
-            "影响所有桌宠，让 OBS / 直播姬能在窗口列表里枚举到桌宠。捕获方式请选 "
-            "「Windows 10 (1903 及以上)」，BitBlt 会黑屏；多只桌宠的窗口都可单独捕获。",
+            self.stream_mode,
+            "影响所有桌宠。透明窗口请选「Windows 10 (1903 及以上)」；"
+            "BitBlt 会黑屏时改用色键窗口，在 OBS 加色度键滤镜抠掉底色。",
         )
+
+        stream_color_row = QWidget(self)
+        stream_color_layout = QHBoxLayout(stream_color_row)
+        stream_color_layout.setContentsMargins(0, 0, 0, 0)
+        stream_color_layout.setSpacing(8)
+        self.stream_key_color = QLineEdit(
+            str(self.config().get("stream_key_color") or "#00FF00"), stream_color_row
+        )
+        self.stream_key_color.setMaxLength(7)
+        self.stream_key_color.setMaximumWidth(110)
+        self.stream_key_color.editingFinished.connect(self._on_stream_key_color)
+        self.stream_color_button = make_button("选择颜色…", stream_color_row)
+        self.stream_color_button.clicked.connect(self._pick_stream_color)
+        self.stream_probe_button = make_button("捕获自检", stream_color_row)
+        self.stream_probe_button.clicked.connect(self._probe_stream_capture)
+        stream_color_layout.addWidget(self.stream_key_color)
+        stream_color_layout.addWidget(self.stream_color_button)
+        stream_color_layout.addWidget(self.stream_probe_button)
+        stream_color_layout.addStretch(1)
+        card.add_row(
+            "色键颜色 / 自检",
+            stream_color_row,
+            "色键窗口会用这个颜色铺满窗口底色；OBS 色度键选同一颜色。"
+            "「捕获自检」只读当前窗口，报告样式与 PrintWindow/BitBlt 读回占比。",
+            expand=True,
+        )
+        self.stream_status = QLabel("", self)
+        self.stream_status.setObjectName("settingHint")
+        self.stream_status.setWordWrap(True)
+        card.add_row("捕获自检结果", self.stream_status, "", expand=True)
 
         self.visible_check = make_checkbox(self)
         self.visible_check.setChecked(self._initial_visible)
@@ -1054,12 +1122,40 @@ class AppearancePage(SettingsPage):
                 setter(bool(enabled), persist=False)
         self.changed.emit()
 
-    def _on_stream_capture_changed(self, enabled: bool) -> None:
-        self.config().set("stream_capture_mode", bool(enabled))
-        self._apply_stream_capture(bool(enabled))
+    def _stream_mode_value(self) -> str:
+        return str(self.stream_mode.currentData() or "off")
+
+    def _on_stream_mode_changed(self, _index: int) -> None:
+        mode = str(self.stream_mode.currentData() or "off")
+        stream = mode in {"window", "keycolor"}
+        keycolor = mode == "keycolor"
+        # 先关 keycolor，再关 stream：normalize 会在 keycolor=true 时强制
+        # stream=true，反序写会把「关闭」翻回去。
+        self.config().set("stream_capture_keycolor", keycolor)
+        self.config().set("stream_capture_mode", stream)
+        self._apply_stream_capture(stream, keycolor)
         self.changed.emit()
 
-    def _apply_stream_capture(self, enabled: bool) -> None:
+    def _on_stream_key_color(self) -> None:
+        value = str(self.stream_key_color.text() or "").strip()
+        color = QColor(value)
+        if not color.isValid():
+            color = QColor("#00FF00")
+            self.stream_key_color.setText(color.name().upper())
+        value = color.name().upper()
+        self.config().set("stream_key_color", value)
+        self._apply_stream_key_color(value)
+        self.changed.emit()
+
+    def _pick_stream_color(self) -> None:
+        color = QColorDialog.getColor(
+            QColor(self.stream_key_color.text() or "#00FF00"), self
+        )
+        if color.isValid():
+            self.stream_key_color.setText(color.name().upper())
+            self._on_stream_key_color()
+
+    def _apply_stream_capture(self, stream: bool, keycolor: bool) -> None:
         pets = getattr(self.host, "pets", None)
         windows = pets.each() if pets is not None else [self._window]
         for window in windows:
@@ -1067,7 +1163,49 @@ class AppearancePage(SettingsPage):
                 continue
             setter = getattr(window, "set_stream_capture_mode", None)
             if callable(setter):
-                setter(bool(enabled), persist=False)
+                setter(bool(stream), keycolor=bool(keycolor), persist=False)
+
+    def _apply_stream_key_color(self, value: str) -> None:
+        pets = getattr(self.host, "pets", None)
+        windows = pets.each() if pets is not None else [self._window]
+        for window in windows:
+            if window is None:
+                continue
+            setter = getattr(window, "set_stream_key_color", None)
+            if callable(setter):
+                setter(str(value), persist=False)
+
+    def _probe_stream_capture(self) -> None:
+        window = self._window
+        if window is None:
+            self.stream_status.setText("当前没有可探测的桌宠窗口。")
+            return
+        try:
+            hwnd = int(window.winId())
+        except Exception as exc:  # noqa: BLE001 - 自检失败要说原因
+            self.stream_status.setText(f"自检失败：{type(exc).__name__}")
+            return
+        self.stream_probe_button.setEnabled(False)
+        self.stream_status.setText("正在读取窗口样式与画面…")
+        signals = _CaptureProbeSignals(self)
+        self._probe_signals = signals
+        signals.finished.connect(self._on_stream_probe_done)
+        QThreadPool.globalInstance().start(_CaptureProbeWorker(hwnd, signals))
+
+    def _on_stream_probe_done(self, report) -> None:
+        self.stream_probe_button.setEnabled(True)
+        if not isinstance(report, dict) or not report.get("supported"):
+            reason = ""
+            if isinstance(report, dict):
+                reason = str(report.get("reason") or "")
+            self.stream_status.setText(f"本平台不支持窗口读回自检（{reason or 'unknown'}）。")
+            return
+        self.stream_status.setText(
+            f"可见={report['visible']} · TOOLWINDOW={report['toolwindow']} · "
+            f"NOACTIVATE={report['noactivate']} · LAYERED={report['layered']} · "
+            f"PrintWindow 非黑={report['printwindow']:.1%} · "
+            f"BitBlt 非黑={report['bitblt']:.1%}\n建议：{report['suggested_method']}"
+        )
 
     def _ai_hotkey_row(self, card, label: str, key: str, kind: str):
         edit = QLineEdit(self)
@@ -1184,7 +1322,14 @@ class AppearancePage(SettingsPage):
         return (
             self.always_on_top_check.isChecked() != self._initial_always_on_top
             or self.click_through_check.isChecked() != self._initial_click_through
-            or self.stream_capture_check.isChecked() != self._initial_stream_capture
+            or self._stream_mode_value()
+            != (
+                "keycolor"
+                if self._initial_stream_keycolor
+                else ("window" if self._initial_stream_capture else "off")
+            )
+            or self.stream_key_color.text().strip().upper()
+            != self._initial_stream_key_color.upper()
             or self.multi_screen_check.isChecked() != self._initial_multi_screen
             or self.edge_probe_check.isChecked() != self._initial_edge_probe
             or self.hotkey_edit.text().strip() != self._initial_hotkey
@@ -1199,7 +1344,11 @@ class AppearancePage(SettingsPage):
         config.set("always_on_top", self.always_on_top_check.isChecked())
         config.set("click_through", self.click_through_check.isChecked())
         config.set("multi_screen", self.multi_screen_check.isChecked())
-        config.set("stream_capture_mode", self.stream_capture_check.isChecked())
+        stream_mode = self._stream_mode_value()
+        # 先关 keycolor 再关 mode：normalize 会在 keycolor=true 时强制 mode=true。
+        config.set("stream_capture_keycolor", stream_mode == "keycolor")
+        config.set("stream_capture_mode", stream_mode in {"window", "keycolor"})
+        config.set("stream_key_color", self.stream_key_color.text().strip().upper())
         config.set("edge_probe_enabled", self.edge_probe_check.isChecked())
         config.set("hotkey_toggle_pet", self.hotkey_edit.text().strip())
         config.set("ui_font_size", int(self.ui_font_size_spin.value()))
@@ -1221,12 +1370,13 @@ class AppearancePage(SettingsPage):
             spin.blockSignals(False)
         self.config().set("ui_font_size", self._initial_ui_font_size)
         self.config().set("bubble_text_scale", self._initial_bubble_text_scale)
+        self.config().set("stream_capture_keycolor", self._initial_stream_keycolor)
         self.config().set("stream_capture_mode", self._initial_stream_capture)
+        self.config().set("stream_key_color", self._initial_stream_key_color)
         self._sync_bubble_scale(self._initial_bubble_text_scale)
         for checkbox, value in (
             (self.always_on_top_check, self._initial_always_on_top),
             (self.click_through_check, self._initial_click_through),
-            (self.stream_capture_check, self._initial_stream_capture),
             (self.multi_screen_check, self._initial_multi_screen),
             (self.edge_probe_check, self._initial_edge_probe),
             (self.visible_check, self._initial_visible),
@@ -1234,7 +1384,18 @@ class AppearancePage(SettingsPage):
             checkbox.blockSignals(True)
             checkbox.setChecked(value)
             checkbox.blockSignals(False)
-        self._apply_stream_capture(self._initial_stream_capture)
+        mode = (
+            "keycolor"
+            if self._initial_stream_keycolor
+            else ("window" if self._initial_stream_capture else "off")
+        )
+        self.stream_mode.blockSignals(True)
+        self.stream_mode.setCurrentIndex(self.stream_mode.findData(mode))
+        self.stream_mode.blockSignals(False)
+        self.stream_key_color.setText(self._initial_stream_key_color)
+        self._apply_stream_capture(
+            self._initial_stream_capture, self._initial_stream_keycolor
+        )
         self.hotkey_edit.setText(self._initial_hotkey)
         self._last_hotkey = self._initial_hotkey
         applier = getattr(self.host, "set_hotkey", None)
@@ -1271,6 +1432,11 @@ class AppearancePage(SettingsPage):
             "直播",
             "OBS",
             "捕获",
+            "色键",
+            "绿幕",
+            "直播姬",
+            "窗口源",
+            "捕获自检",
             "scale",
             "appearance",
             "screen",

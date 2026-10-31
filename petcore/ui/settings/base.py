@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QFrame,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QStackedWidget,
+    QTreeWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -51,10 +53,13 @@ class SettingsCard(QFrame):
         *,
         expand: bool = False,
         sub: bool = False,
+        search_keys: tuple[str, ...] | list[str] = (),
     ) -> QWidget:
         row = QWidget(self)
         if sub:
             row.setProperty("subRow", True)
+        if search_keys:
+            register_search_terms(row, *search_keys)
 
         text_widget = QWidget(row)
         text_widget.setObjectName("settingTextBlock")
@@ -361,6 +366,25 @@ def build_embedded_page(spec, host) -> SettingsPage | None:
     return page if isinstance(page, SettingsPage) else None
 
 
+def register_search_terms(widget: QWidget, *terms: str) -> None:
+    """给没有可见文案的行/控件登记搜索词（mod 设置页可复用）。
+
+    典型场景：人设卡名、动态路径、图标按钮。搜索仍走 ``page_search_texts``，
+    不新增注册表；属性名 ``searchKeys`` 是唯一的公开契约。
+    """
+    values = [str(item) for item in (widget.property("searchKeys") or []) if str(item).strip()]
+    for term in terms:
+        text = str(term or "").strip()
+        if text and text not in values:
+            values.append(text)
+    if values:
+        widget.setProperty("searchKeys", values)
+
+
+def _search_keys(widget: QWidget) -> list[str]:
+    return [str(item).strip() for item in (widget.property("searchKeys") or []) if str(item).strip()]
+
+
 def page_label_texts(page: QWidget) -> list[str]:
     """页面内所有可见文案（标题 + 说明），供搜索做行级匹配。"""
     texts: list[str] = []
@@ -371,27 +395,55 @@ def page_label_texts(page: QWidget) -> list[str]:
     return texts
 
 
-def page_search_texts(page: QWidget) -> list[str]:
-    """搜索口径：文字标签 + 按钮 + 勾选 + 下拉选项 + 列表项。
+def _tree_item_texts(tree: QTreeWidget) -> list[str]:
+    texts: list[str] = []
 
-    只扫 ``QLabel`` 会漏掉「生成子宠」「重新加载扩展」这类**按钮**文案，
-    用户照着菜单上的字搜却得到「没有匹配」（审计 AUD-29）。
-    """
-    texts = list(page_label_texts(page))
-    for button in page.findChildren(QAbstractButton):
-        text = button.text().strip()
-        if text:
-            texts.append(text)
-    for combo in page.findChildren(QComboBox):
-        for index in range(combo.count()):
-            text = combo.itemText(index).strip()
+    def walk(item) -> None:
+        for column in range(tree.columnCount()):
+            text = str(item.text(column) or "").strip()
             if text:
                 texts.append(text)
+        for index in range(item.childCount()):
+            walk(item.child(index))
+
+    for index in range(tree.topLevelItemCount()):
+        walk(tree.topLevelItem(index))
+    return texts
+
+
+def page_search_texts(page: QWidget) -> list[str]:
+    """搜索口径：标签 + 按钮 + 下拉/列表/树/表格项 + 登记的 searchKeys。
+
+    只扫 ``QLabel`` 会漏掉「生成子宠」「重新加载扩展」这类**按钮**文案，
+    用户照着菜单上的字搜却得到「没有匹配」（审计 AUD-29）。动画清单是
+    ``QTreeWidget``，只扫 ``QListWidget`` 会让分类名与动画名永远搜不到。
+    """
+    texts = list(page_label_texts(page))
+    seen: set[str] = set()
+
+    def add(text: str) -> None:
+        value = str(text or "").strip()
+        if value and value not in seen:
+            seen.add(value)
+            texts.append(value)
+
+    for widget in page.findChildren(QWidget):
+        for key in _search_keys(widget):
+            add(key)
+        if isinstance(widget, QAbstractButton):
+            add(widget.text())
+            add(widget.accessibleName())
+    for combo in page.findChildren(QComboBox):
+        for index in range(combo.count()):
+            add(combo.itemText(index))
     for view in page.findChildren(QListWidget):
         for row in range(view.count()):
             item = view.item(row)
-            if item is not None and item.text().strip():
-                texts.append(item.text().strip())
+            if item is not None:
+                add(item.text())
+    for tree in page.findChildren(QTreeWidget):
+        for text in _tree_item_texts(tree):
+            add(text)
     return texts
 
 
@@ -421,45 +473,149 @@ def _has_fold_ancestor(widget: QWidget) -> bool:
     return False
 
 
+def _reveal_in_page(target: QWidget) -> None:
+    """从目标控件向上切页内分页/扩展分页，并滚到它所在的外层滚动区。"""
+    try:
+        widget = target
+        while widget is not None:
+            parent = widget.parentWidget()
+            if isinstance(parent, QStackedWidget):
+                parent.setCurrentWidget(widget)
+                # 直接切 stack 不会同步页内分页的按钮选中态；搜索定位要顺手切过去。
+                container = parent.parentWidget()
+                if isinstance(container, SettingsTabContainer):
+                    container.setCurrentIndex(parent.indexOf(widget))
+            elif isinstance(parent, QScrollArea):
+                parent.ensureWidgetVisible(target, 0, 80)
+            widget = parent
+    except RuntimeError:
+        # 页面在定时器触发前被销毁：搜索定位没有意义。
+        return
+
+
+def _tab_container_for(widget: QWidget) -> SettingsTabContainer | None:
+    current = widget.parentWidget()
+    while current is not None:
+        if isinstance(current, SettingsTabContainer):
+            return current
+        current = current.parentWidget()
+    return None
+
+
+def _match_targets(page: QWidget, needle: str) -> list[tuple[str, object, object]]:
+    """返回搜索命中目标：``("widget"|"combo"|"list"|"tree", 控件, 条目)``。"""
+    results: list[tuple[str, object, object]] = []
+    seen_widgets: set[int] = set()
+
+    def add_widget(widget: QWidget) -> None:
+        key = id(widget)
+        if key in seen_widgets:
+            return
+        seen_widgets.add(key)
+        results.append(("widget", widget, None))
+
+    for widget in page.findChildren(QWidget):
+        text = ""
+        if isinstance(widget, QLabel):
+            text = widget.text()
+        elif isinstance(widget, QAbstractButton):
+            text = widget.text() or widget.accessibleName()
+        if text and needle in text.strip().lower() and not widget.isHidden():
+            add_widget(widget)
+        if any(needle in item.lower() for item in _search_keys(widget)):
+            add_widget(widget)
+
+    for combo in page.findChildren(QComboBox):
+        for index in range(combo.count()):
+            if needle in combo.itemText(index).strip().lower():
+                results.append(("combo", combo, index))
+                break
+    for view in page.findChildren(QListWidget):
+        for row in range(view.count()):
+            item = view.item(row)
+            if item is not None and needle in item.text().strip().lower():
+                results.append(("list", view, item))
+                break
+    for tree in page.findChildren(QTreeWidget):
+        stack = [tree.topLevelItem(index) for index in range(tree.topLevelItemCount())]
+        while stack:
+            item = stack.pop(0)
+            if item is None:
+                continue
+            if any(
+                needle in str(item.text(column) or "").strip().lower()
+                for column in range(tree.columnCount())
+            ):
+                results.append(("tree", tree, item))
+                break
+            stack[0:0] = [item.child(index) for index in range(item.childCount())]
+    return results
+
+
 def reveal_text(page: QWidget, needle: str) -> bool:
-    """把命中文案的行滚到可见处，并切到它所在的页内分页。"""
+    """把命中文案的行滚到可见处，并切到它所在的页内分页/扩展页。
+
+    匹配范围包括标签、按钮、**下拉选项、列表项、树项（动画清单）**以及
+    ``register_search_terms`` 登记的无文案行。下拉/列表只滚动定位，**不改变
+    当前选中值**——搜索不是一次设置修改。
+    """
     needle = str(needle or "").strip().lower()
     if not needle:
         return False
-    matches: list[QWidget] = []
-    for label in page.findChildren(QWidget):
-        text = ""
-        if isinstance(label, QLabel):
-            text = label.text()
-        elif isinstance(label, QAbstractButton):
-            text = label.text()
-        if not text or label.isHidden():
-            continue
-        if needle not in text.strip().lower():
-            continue
-        matches.append(label)
+    matches = _match_targets(page, needle)
     if not matches:
         return False
+
+    # 动画清单的树项与「摸头候选」等列表项常同名；用户搜完整动画名时
+    # 优先定位到树项（更具体），但普通文字关键词仍优先找可读标签。
+    exact_tree = next(
+        (
+            entry
+            for entry in matches
+            if entry[0] == "tree"
+            and any(
+                needle
+                == str(entry[2].text(column) or "").strip().lower()
+                for column in range(entry[1].columnCount())
+            )
+        ),
+        None,
+    )
     # 折叠区里的命中优先展示；只展开**选中的那条**的祖先，别把无关折叠区全打开。
-    label = next((item for item in matches if _has_fold_ancestor(item)), matches[0])
-    _expand_collapsed_ancestors(label)
+    widget_matches = [entry for entry in matches if entry[0] == "widget"]
+    chosen = exact_tree or next(
+        (entry for entry in widget_matches if _has_fold_ancestor(entry[1])),
+        matches[0],
+    )
+    kind, target, detail = chosen
+    if kind == "widget":
+        _expand_collapsed_ancestors(target)
+        container = _tab_container_for(target)
+        if container is not None and container.tab_layout.indexOf(target) >= 0:
+            container.setCurrentIndex(container.tab_layout.indexOf(target))
 
     def _reveal() -> None:
         try:
-            widget = label
-            while widget is not None:
-                parent = widget.parentWidget()
-                if isinstance(parent, QStackedWidget):
-                    parent.setCurrentWidget(widget)
-                    # 直接切 stack 不会同步页内分页的按钮选中态；搜索定位要顺手切过去。
-                    container = parent.parentWidget()
-                    if isinstance(container, SettingsTabContainer):
-                        container.setCurrentIndex(parent.indexOf(widget))
-                elif isinstance(parent, QScrollArea):
-                    parent.ensureWidgetVisible(label, 0, 80)
-                widget = parent
+            if kind == "widget":
+                _reveal_in_page(target)
+            elif kind == "combo":
+                _reveal_in_page(target)
+                target.setFocus(Qt.FocusReason.OtherFocusReason)
+            elif kind == "list":
+                _reveal_in_page(target)
+                target.scrollToItem(detail, QAbstractItemView.ScrollHint.PositionAtCenter)
+            elif kind == "tree":
+                item = detail
+                parent = item.parent()
+                while parent is not None:
+                    parent.setExpanded(True)
+                    parent = parent.parent()
+                _reveal_in_page(target)
+                target.scrollToItem(
+                    item, QAbstractItemView.ScrollHint.PositionAtCenter
+                )
+                target.setCurrentItem(item)
         except RuntimeError:
-            # 页面在定时器触发前被销毁：搜索定位没有意义。
             return
 
     # 刚展开的折叠区还没重新布局；延后一拍再滚，否则按折叠几何算偏移。

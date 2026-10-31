@@ -175,3 +175,5 @@
 | L138 | 2026-10-31 | 安装包构建与实机启动（0.2.0） | 305 MB setup + 633 MB onedir；`--check --strict` 全绿；打包 exe 启动后可见窗口 461×259、日志无报错、首启播种 DeepSeek+opencode | packaging、installer、smoke、check-strict、first-run、seed、sha256 |
 | L139 | 2026-10-31 | 彩蛋头像提示文案跟随随机抽图 | `指定头像` 行 hint 从「回退首张」改成「随机抽一张」，与新 `selected_image()` 的 `rng.choice` 一致；66 passed | easter-egg、settings、hint、stale-text、rng |
 | L140 | 2026-10-31 | 聊天语义动作词表补齐 + 生气误命中 | `happy/greet/thanks/surprise` 补随包素材用词（雀跃/宅舞/礼仪/被吓一跳），`angry` 去掉歧义「哼」，`music` 加「唱首歌」；用 89 个真实素材名逐条实测，12 条规则全部可落 | semantic-animation、keyword、pack-vocabulary、angry、regression |
+| L141 | 2026-10-31 | 反馈批次 2：聊天/语音/直播/搜索/DSH/人格/会话/自语 | 聊天输入区不再撑高 + 拼音隐藏 placeholder；音频输出/麦克风设备；色键直播窗 + 捕获自检；设置搜索树/下拉/mod；DSH 单连接审批状态机 + 通道超时；ASR partial；人格卡；会话分节/归档/三点菜单；AI 助手二级菜单；每日一句/连说 | chat、composer、ime、audio-device、live、keycolor、capture-probe、settings-search、dsh、asr-partial、persona-store、session-archive、menu-hub、self-talk-daily |
+| L142 | 2026-10-31 | 反馈批次 2 安装包（0.2.0）构建与冒烟 | setup 305,200,979 B / SHA256 b2ae9d14…；`--check --strict` 全绿；onedir 实机启动 `dsh-pet core #0`，色键 `layered=false / bitblt=1.0`；daily.py 已随包 | packaging、installer、smoke、setup、sha256、keycolor、daily |

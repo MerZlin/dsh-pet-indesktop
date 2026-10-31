@@ -15,6 +15,7 @@ from petcore.ui.menu_layout import (
     migrate_p8_menu,
     migrate_p9_menu,
     migrate_p10_menu,
+    migrate_p12_menu,
     normalize_separators,
     resolve,
 )
@@ -189,9 +190,7 @@ def test_default_template_uses_the_p8_top_level_order() -> None:
         "easter_egg",
         "character",
         "animations_hub",
-        "ai.chat:open",
-        "ai.chat:look_screen",
-        "ai.chat:proactive",
+        "ai_hub",
         "ai.agent:enabled",
         "ai.chat:screen_capture",
         "playback_speed",
@@ -686,16 +685,27 @@ def test_merge_adds_the_proactive_action_to_existing_layouts() -> None:
     merged, notes = merge_user_layout(raw, registered=registered)
 
     assert "default-action-added:ai.chat:proactive" in notes
-    ids = _ids(merged["nodes"])
-    assert ids.count("ai.chat:proactive") == 1
-    assert ids.index("ai.chat:proactive") > ids.index("animations_hub")
-    assert ids.index("ai.chat:proactive") < ids.index("pet_controls"), (
+    all_ids = _all_ids(merged["nodes"])
+    assert "ai.chat:proactive" in all_ids
+    top = _ids(merged["nodes"])
+    assert "ai_hub" in top
+    assert top.index("ai_hub") > top.index("animations_hub")
+    assert top.index("ai_hub") < top.index("pet_controls"), (
         "没见过 AI 项的旧布局，应落在播放段（桌宠控制之前）"
     )
+    hub = next(node for node in merged["nodes"] if node.get("id") == "ai_hub")
+    assert [child["id"] for child in hub["children"]] == [
+        "ai.chat:open",
+        "ai.chat:look_screen",
+        "ai.chat:proactive",
+    ]
 
     again, notes_again = merge_user_layout(merged, registered=registered)
     assert "default-action-added:ai.chat:proactive" not in notes_again
-    assert _ids(again["nodes"]).count("ai.chat:proactive") == 1
+    again_hub = next(node for node in again["nodes"] if node.get("id") == "ai_hub")
+    assert [child["id"] for child in again_hub["children"]].count(
+        "ai.chat:proactive"
+    ) == 1
 
 
 def test_merge_places_the_proactive_action_right_after_look_screen() -> None:
@@ -711,6 +721,67 @@ def test_merge_places_the_proactive_action_right_after_look_screen() -> None:
     }
     registered = REGISTERED | {"ai.chat:proactive", "ai.chat:look_screen", "ai.chat:screen_capture"}
     merged, notes = merge_user_layout(raw, registered=registered)
-    ids = _ids(merged["nodes"])
-    assert ids.index("ai.chat:proactive") == ids.index("ai.chat:look_screen") + 1
+    hub = next(node for node in merged["nodes"] if node.get("id") == "ai_hub")
+    children = [child["id"] for child in hub["children"]]
+    assert children == [
+        "ai.chat:open",
+        "ai.chat:look_screen",
+        "ai.chat:proactive",
+    ]
     assert "default-action-added:ai.chat:proactive" in notes
+
+
+def test_migrate_p12_moves_ai_actions_into_the_hub() -> None:
+    layout = {
+        "schema_version": 1,
+        "layout_id": DEFAULT_LAYOUT_ID,
+        "nodes": [
+            {"type": "action", "id": "easter_egg", "visible": True},
+            {"type": "action", "id": "ai.chat:open", "visible": False},
+            {"type": "action", "id": "ai.chat:look_screen", "visible": True},
+            {"type": "action", "id": "ai.chat:proactive", "visible": True},
+            {"type": "action", "id": "ai.chat:screen_capture", "visible": True},
+            {"type": "action", "id": "quit", "visible": True},
+        ],
+    }
+    assert migrate_p12_menu(layout) is True
+    top = [node.get("id") for node in layout["nodes"]]
+    assert top == ["easter_egg", "ai_hub", "ai.chat:screen_capture", "quit"]
+    hub = next(node for node in layout["nodes"] if node.get("id") == "ai_hub")
+    assert [child["id"] for child in hub["children"]] == [
+        "ai.chat:open",
+        "ai.chat:look_screen",
+        "ai.chat:proactive",
+    ]
+    assert hub["children"][0]["visible"] is False, "隐藏记忆跟着节点走"
+    assert migrate_p12_menu(layout) is False
+
+
+def test_migrate_p12_leaves_other_layouts_alone() -> None:
+    layout = {
+        "schema_version": 1,
+        "layout_id": "someone-else",
+        "nodes": [{"type": "action", "id": "ai.chat:open", "visible": True}],
+    }
+    assert migrate_p12_menu(layout) is False
+    assert layout["nodes"][0]["id"] == "ai.chat:open"
+
+
+def test_migrate_p12_keeps_hub_at_the_first_ai_action_position() -> None:
+    layout = {
+        "schema_version": 1,
+        "layout_id": DEFAULT_LAYOUT_ID,
+        "nodes": [
+            {"type": "action", "id": "modern_settings", "visible": True},
+            {"type": "action", "id": "ai.chat:open", "visible": True},
+            {"type": "separator", "id": "sep1", "visible": True},
+            {"type": "action", "id": "quit", "visible": True},
+        ],
+    }
+    assert migrate_p12_menu(layout) is True
+    assert [node.get("id") for node in layout["nodes"]] == [
+        "modern_settings",
+        "ai_hub",
+        "sep1",
+        "quit",
+    ]

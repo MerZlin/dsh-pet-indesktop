@@ -38,3 +38,32 @@ def test_session_store_rejects_path_escape(tmp_path) -> None:
         assert "session id" in str(exc)
     else:
         raise AssertionError("path escape must be rejected")
+
+
+def test_session_archive_round_trip_and_old_files(tmp_path) -> None:
+    import json
+
+    store = SessionStore(tmp_path, character_id="arch")
+    first = store.new_session()
+    first.append("user", "旧会话")
+    store.save(first)
+
+    archived = store.archive(first.session_id, True)
+    assert archived is not None and archived.archived_at > 0
+    assert store.load(first.session_id).archived_at > 0
+    assert store.list_sessions() == []
+    assert [item.session_id for item in store.list_sessions(include_archived=True)] == [
+        first.session_id
+    ]
+
+    # 旧文件没有 archived_at：读出来就是未归档，schema 仍按 1 接受。
+    path = store.directory / f"{first.session_id}.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("archived_at")
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = store.load(first.session_id)
+    assert loaded is not None and loaded.archived_at == 0.0
+    assert store.list_sessions()
+
+    store.archive(first.session_id, False)
+    assert store.load(first.session_id).archived_at == 0.0

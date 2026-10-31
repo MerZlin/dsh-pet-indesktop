@@ -300,3 +300,52 @@ def test_asr_channel_refuses_when_disabled(app, tmp_path: Path) -> None:
         assert failed == ["disabled"]
     finally:
         channel.shutdown()
+
+
+def test_peek_wav_reads_without_stopping() -> None:
+    api = FakeInputApi()
+    recorder = MicRecorder(api)
+    recorder.start(0, max_seconds=3)
+    wav = recorder.peek_wav()
+    assert wav.startswith(b"RIFF")
+    assert recorder.recording is True
+    assert api.stopped is False
+    recorder.stop()
+
+
+def test_channel_emits_partial_then_final_text(app) -> None:
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def engine(self) -> str:
+            return "http"
+
+        def recognize(self, wav: bytes) -> str:
+            self.calls += 1
+            return "最终文本" if self.calls >= 2 else "实时文本"
+
+    config = SimpleNamespace(
+        get=lambda key, default=None: {
+            "asr_enabled": True,
+            "asr_stream_enabled": True,
+            "asr_partial_interval_ms": 400,
+            "asr_max_seconds": 30,
+        }.get(key, default)
+    )
+    service = FakeService()
+    recorder = MicRecorder(FakeInputApi())
+    channel = AsrChannel(service, config=config, recorder=recorder)
+    partials: list[str] = []
+    finished: list[str] = []
+    channel.partial.connect(partials.append)
+    channel.finished.connect(finished.append)
+    try:
+        assert channel.start() is True
+        assert _wait_until(lambda: bool(partials), timeout=3.0)
+        channel.stop()
+        assert _wait_until(lambda: bool(finished), timeout=3.0)
+        assert partials[0] == "实时文本"
+        assert finished == ["最终文本"]
+    finally:
+        channel.shutdown()

@@ -53,6 +53,8 @@ const DEFAULTS = {
   maxTurns: 0,
   maxBodyBytes: 2 * 1024 * 1024,
   grantMinutes: 5,
+  //: 审批等待上限：超时自动取消，避免 DSH 的 whenIdle 永久挂起（桌宠侧看起来像卡死）。
+  approvalTimeoutMinutes: 10,
 }
 
 const SHELL_TOOLS = new Set(['bash', 'ops_bash', 'pwsh', 'shell'])
@@ -255,15 +257,37 @@ function start(ctx, rawConfig) {
       return next()
     }
 
+    // 同一会话只留一个待审批：旧卡还没点就来了新审批时，取消旧卡再挂新卡。
+    // 否则桌宠侧会堆出一串永远等不到结果的卡片，DSH 车道也会一直占着。
+    for (const [oldId, old] of pending) {
+      if (old.sessionId !== sessionId) continue
+      pending.delete(oldId)
+      clearTimeout(old.timer)
+      push('approval-resolved', { id: oldId, allow: false, cancelled: true, tool: old.tool })
+    }
+
     const id = randomUUID()
     const args = clip(JSON.stringify(toolArgs(exec)), 1200)
-    pending.set(id, { sessionId, tool, args, at: Date.now() })
+    const timeoutMs = Math.max(1, Number(cfg.approvalTimeoutMinutes) || 10) * 60_000
+    const timer = setTimeout(() => {
+      const item = pending.get(id)
+      if (!item) return
+      pending.delete(id)
+      push('approval-resolved', { id, allow: false, cancelled: true, tool: item.tool })
+      log('approval timed out', item.tool, id)
+      submit('（审批等待超时，这次操作先不做了。如果还需要做，请主人重新发起。）', {
+        internal: true,
+      }).catch(() => { /* 超时后的收尾失败不致命 */ })
+    }, timeoutMs)
+    timer.unref?.()
+    pending.set(id, { sessionId, tool, args, at: Date.now(), timer })
     push('approval-request', {
       id,
       sessionId,
       tool,
       args,
       grantMinutes: cfg.grantMinutes,
+      timeoutMinutes: Math.round(timeoutMs / 60_000),
       title: `要跑一下 ${tool}`,
     })
     log('gated', tool, id)
@@ -288,6 +312,7 @@ function start(ctx, rawConfig) {
     const p = pending.get(id)
     if (!p) return false
     pending.delete(id)
+    clearTimeout(p.timer)
     if (allow) {
       grants.set(p.sessionId, { tool: p.tool, until: Date.now() + cfg.grantMinutes * 60_000 })
       state.approved = (state.approved ?? 0) + 1
@@ -624,6 +649,7 @@ function start(ctx, rawConfig) {
         approved: state.approved ?? 0,
         rejected: state.rejected ?? 0,
         askApproval: Boolean(cfg.askApproval),
+        approvalTimeoutMinutes: Number(cfg.approvalTimeoutMinutes) || 10,
         sandboxMode: cfg.sandboxMode,
         commands: true,
       })
@@ -707,6 +733,7 @@ function start(ctx, rawConfig) {
       } catch (e) { log('cancel failed', String(e?.message ?? e)) }
       for (const [id, p] of pending) {
         pending.delete(id)
+        clearTimeout(p.timer)
         push('approval-resolved', { id, allow: false, cancelled: true, tool: p.tool })
       }
       return json(res, 200, { ok: true })

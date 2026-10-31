@@ -32,6 +32,9 @@ class ChatSession:
     title: str
     messages: list[dict[str, Any]] = field(default_factory=list)
     updated_at: float = 0.0
+    #: 归档时间（0 = 未归档）。旧文件没有这个键，读出来就是 0；schema 仍为 1，
+    #: 旧版本读新文件只会忽略未知键，不会把会话判成损坏。
+    archived_at: float = 0.0
 
     def append(self, role: str, content: str) -> None:
         role = str(role or "user").strip().lower()
@@ -54,6 +57,7 @@ class ChatSession:
             "title": self.title[:MAX_TITLE_CHARS],
             "messages": list(self.messages[-MAX_MESSAGES:]),
             "updated_at": float(self.updated_at or 0.0),
+            "archived_at": float(self.archived_at or 0.0),
         }
 
     @classmethod
@@ -83,11 +87,16 @@ class ChatSession:
                         str(line)[:500] for line in activity[-40:]
                     ]
                 messages.append(record)
+        try:
+            archived_at = float(raw.get("archived_at") or 0.0)
+        except (TypeError, ValueError):
+            archived_at = 0.0
         return cls(
             session_id=session_id,
             title=str(raw.get("title") or "新会话")[:MAX_TITLE_CHARS],
             messages=messages[-MAX_MESSAGES:],
             updated_at=float(raw.get("updated_at") or 0.0),
+            archived_at=archived_at,
         )
 
 
@@ -117,7 +126,7 @@ class SessionStore:
         self.save(session)
         return session
 
-    def list_sessions(self) -> list[ChatSession]:
+    def list_sessions(self, *, include_archived: bool = False) -> list[ChatSession]:
         if not self.directory.is_dir():
             return []
         sessions: list[ChatSession] = []
@@ -128,8 +137,19 @@ class SessionStore:
             except (OSError, ValueError, TypeError) as exc:
                 self._diagnose(path, exc)
                 continue
+        if not include_archived:
+            sessions = [item for item in sessions if not item.archived_at]
         sessions.sort(key=lambda item: item.updated_at, reverse=True)
         return sessions
+
+    def archive(self, session_id: str, archived: bool = True) -> ChatSession | None:
+        """归档/取消归档；返回更新后的会话，找不到返回 None。"""
+        session = self.load(session_id)
+        if session is None:
+            return None
+        session.archived_at = time.time() if archived else 0.0
+        self.save(session)
+        return session
 
     def load(self, session_id: str) -> ChatSession | None:
         path = self._path(session_id)

@@ -716,6 +716,31 @@
 - **节流缓存与实例隔离**：`--instance` 会设置 `PETCORE_INSTANCE`，缩略图等进程级缓存目录
   按实例分目录；`--root ""` 按未指定处理（Windows 上 `Path("")` 是当前目录）。
 
+- **音频端点 = 线程 + 设备键**：`audio_sessions` 的 manager 缓存按
+  `(线程 ident, device_id)` 复用；换线程/换设备必须立即重建，不走 30 秒节流。
+  端点枚举只在设置页短命线程或 30 秒缓存里做；默认端点 id 短缓存 2 秒、runtime
+  每 5 秒比较一次。手选端点拔掉回退默认，不许写回配置。
+- **色键直播窗**：`stream_capture_keycolor` 为真时宠物/气泡必须是**不透明**窗口
+  （`WA_TranslucentBackground=False`）并整窗填 `stream_key_color`；直播模式置顶
+  只许 `SetWindowPos`，不许 `setWindowFlags` 重建 HWND；每次改旗标后必须重放
+  `apply_stream_window`（否则 `WS_EX_NOACTIVATE` 复活）。捕获自检只读，不写
+  窗口标题/正文到日志。
+- **ASR partial 不覆盖手打**：`AsrChannel.partial` 只更新预览或空输入框的镜像；
+  输入框已有用户文本时只显示提示行；final 才 `insert_text`。同刻最多一个增量
+  识别在飞，`sapi` 间隔 ≥1.5s；录音线程退出必须收口。
+- **会话归档兼容**：`ChatSession.archived_at` 是 schema 1 的可选键（缺失=未归档）；
+  `list_sessions()` 默认过滤归档。侧栏组头与 `currentRowChanged` 解耦，点组头只
+  折叠；归档/删除当前会话必须由 controller 回退到下一个可见会话或新建，不许让
+  消息继续写进已隐藏会话。
+- **人格卡只写用户目录**：`<data_root>/feature-data/ai.chat/personas/`；包内
+  `persona_presets/*.json` 只读。同 id 覆盖内置；删除/恢复内置只删用户文件。
+  runtime 合并池按目录+文件 mtime 缓存，保存后下一轮生效。
+- **设置搜索注册**：无可见文案的行用 `register_search_terms()` 或
+  `SettingsCard.add_row(search_keys=...)` 登记；`page_search_texts` 必须覆盖
+  QTreeWidget 项。`reveal_text` 对下拉/列表只滚动定位，**不许改当前值**。
+- **自语每日句**：状态落 `feature-data/fun.self-talk/daily.json`，按 slot 记日期；
+  只有气泡真的显示成功才标记已说；连说复用 `say_sequence`，不许自己拼定时器。
+
 ## 4. 变更纪律
 
 - 行为修复先写会红的测试，再改产品代码；Qt 行为用真实事件循环或 `offscreen`。

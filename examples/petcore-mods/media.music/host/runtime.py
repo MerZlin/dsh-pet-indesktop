@@ -350,8 +350,13 @@ class MusicRuntime:
 
         # ---- 接缝（测试替换这几项，生产走模块函数） ----
         self.sample_smtc = now_playing.read_sample
-        self.sample_audio = audio_sessions.snapshot
+        self.sample_audio = self._sample_audio
         self.sample_windows = window_source.snapshot
+        self._last_default_audio = ""
+        self._next_default_audio_check = 0.0
+        self._next_manual_audio_check = 0.0
+        self._audio_device_fallback_logged = False
+        self._manual_audio_fallback = False
         self.decide = recognizer.decide
         #: SMTC 的有界读取线程（``start()`` 建）：卡死的系统媒体服务不许占住采样线程。
         #: 测试/诊断直接调 ``poll()`` 的走法没有它，仍用上面那个同步接缝。
@@ -470,6 +475,49 @@ class MusicRuntime:
         except Exception:
             return default
         return default if value is None else value
+
+    def _audio_device_id(self) -> str:
+        """当前要采样的输出端点：空=跟随系统默认，非空=手选 id。
+
+        跟随默认时每 5 秒比较一次默认端点 id；变了就丢掉缓存的 WASAPI
+        manager（否则会一直读旧端点）。手选设备每 30 秒确认一次还在不在，
+        拔掉时回退默认并只记一条 warning（不写配置、不打扰用户）。
+        """
+        configured = str(self._config_value("music_audio_device", "") or "").strip()
+        now = time.monotonic()
+        if not configured:
+            if now >= self._next_default_audio_check:
+                self._next_default_audio_check = now + 5.0
+                current = audio_sessions.default_endpoint_id()
+                if (
+                    self._last_default_audio
+                    and current
+                    and current != self._last_default_audio
+                ):
+                    audio_sessions.reset()
+                if current:
+                    self._last_default_audio = current
+            return ""
+        if now >= self._next_manual_audio_check:
+            self._next_manual_audio_check = now + 30.0
+            if not audio_sessions.endpoint_exists(configured):
+                if not self._audio_device_fallback_logged:
+                    self._audio_device_fallback_logged = True
+                    log.warning(
+                        "configured audio output device is unavailable; using system default"
+                    )
+                self._manual_audio_fallback = True
+            else:
+                self._audio_device_fallback_logged = False
+                self._manual_audio_fallback = False
+        # 回退决定要保留到下次存在性检查（30s），不能只在检查那一拍生效；
+        # 否则 29/30 拍仍拿着已拔掉的端点，音频会话证据整段消失。
+        if self._manual_audio_fallback:
+            return ""
+        return configured
+
+    def _sample_audio(self):
+        return audio_sessions.snapshot(self._audio_device_id())
 
     def _flag(self, key: str, default: bool) -> bool:
         return bool(self._config_value(key, default))

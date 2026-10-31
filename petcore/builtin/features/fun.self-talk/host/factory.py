@@ -2,16 +2,38 @@ from __future__ import annotations
 
 import logging
 import random
+from pathlib import Path
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QPlainTextEdit, QSpinBox
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QSpinBox,
+    QWidget,
+)
 
+from petcore.config import DEFAULTS
 from petcore.contracts.contributions import Contribution
 from petcore.contracts.feature import FeatureDefinition
 from petcore.contracts.speech import SpeechRequest
 from petcore.media import talk_images
-from petcore.ui.settings.base import SettingsPage, make_checkbox
+from petcore.ui.settings.base import SettingsPage, make_button, make_checkbox
 from petcore.ui.settings.text_lines import format_lines, parse_lines
+
+try:  # 正常包加载（tests/安装后的 mod loader）
+    from . import daily
+except ImportError:  # 单文件加载器（内置特性按文件加载）没有 package 上下文
+    import importlib.util
+    import sys
+
+    _spec = importlib.util.spec_from_file_location(
+        f"{__name__}.daily", Path(__file__).with_name("daily.py")
+    )
+    assert _spec is not None and _spec.loader is not None
+    daily = importlib.util.module_from_spec(_spec)
+    sys.modules[_spec.name] = daily
+    _spec.loader.exec_module(daily)
 
 logger = logging.getLogger("petcore.features.self-talk")
 
@@ -116,6 +138,9 @@ class SelfTalkRuntime:
             binder = getattr(presentation, "for_window", None)
             if callable(binder) and pet is not None:
                 presentation = binder(getattr(pet, "window", None))
+            # 每天第一次先用每日句（确定性、每宠不同），再走彩蛋/普通随机。
+            if self._speak_daily(config, presentation, slot):
+                return
             # 先掷彩蛋：命中时整段 champion 台词走多气泡 + 逐句朗读，不再选普通台词。
             if self._champion_roll(config):
                 self._play_champion(config, presentation, slot)
@@ -164,6 +189,84 @@ class SelfTalkRuntime:
             logger.exception("self-talk failed")
         finally:
             self._schedule(pet)
+
+    def _daily_path(self) -> Path | None:
+        storage = getattr(self.context.ports, "storage", None)
+        data_dir = getattr(storage, "data_dir", None)
+        if not callable(data_dir):
+            return None
+        try:
+            return Path(data_dir("fun.self-talk")) / "daily.json"
+        except Exception:  # noqa: BLE001 - 存储不可用就跳过每日句
+            return None
+
+    def _speak_daily(self, config, presentation, slot: int | None) -> bool:
+        """每天第一次自言自语用每日句；返回 True 表示这次已由每日句占据。"""
+        if not bool(config.get("self_talk_daily_enabled", True)):
+            return False
+        path = self._daily_path()
+        if path is None:
+            return False
+        state = daily.load_state(path)
+        slot_value = int(slot or 0)
+        if daily.said_today(state, slot_value):
+            return False
+        texts = [
+            str(item)
+            for item in (config.get("self_talk_daily_texts") or [])
+            if str(item).strip()
+        ]
+        if not texts:
+            texts = [
+                str(item)
+                for item in (config.get("self_talk_texts") or [])
+                if str(item).strip()
+            ]
+        line = daily.daily_line(texts, salt=slot_value)
+        if not line:
+            return False
+        sequence = (
+            daily.split_sequence(line)
+            if bool(config.get("self_talk_daily_sequence"))
+            else (line,)
+        )
+        if not sequence:
+            return False
+        duration_ms = int(float(config.get("self_talk_duration") or 5) * 1000)
+        if len(sequence) > 1:
+            runner = getattr(presentation, "say_sequence", None)
+            if callable(runner):
+                shown = runner(
+                    [(part, "", max(1800, duration_ms)) for part in sequence],
+                    on_show=lambda text: self._speak_text(config, slot, text),
+                )
+            else:
+                shown = (
+                    presentation.say(
+                        " ".join(sequence),
+                        duration_ms=duration_ms * len(sequence),
+                    )
+                    is not False
+                )
+        else:
+            shown = presentation.say(
+                sequence[0], duration_ms=duration_ms
+            ) is not False
+        if shown:
+            daily.mark_said(state, slot_value)
+            try:
+                daily.save_state(path, state)
+            except OSError:
+                logger.debug("self-talk daily state save failed", exc_info=True)
+            if len(sequence) == 1:
+                self._speak_text(config, slot, sequence[0])
+        logger.info(
+            "self-talk daily slot=%s parts=%d shown=%s",
+            slot_value,
+            len(sequence),
+            shown,
+        )
+        return True
 
     def _champion_roll(self, config) -> bool:
         if not bool(config.get("self_talk_champion_enabled")):
@@ -311,7 +414,85 @@ class SelfTalkPage(SettingsPage):
         self._text_timer.setInterval(250)
         self._text_timer.timeout.connect(self._on_changed)
         self.texts.textChanged.connect(lambda: self._text_timer.start())
-        card.add_row("候选台词", self.texts, "每行一条；留空则不显示。", expand=True)
+        card.add_row(
+            "候选台词",
+            self.texts,
+            "每行一条；这里是初始预制句，可直接改/删/加，留空则不显示。",
+            expand=True,
+            search_keys=("恢复内置台词", "预制句"),
+        )
+
+        daily_card = self.section("每日一句")
+        self.daily_enabled = make_checkbox(self)
+        self.daily_enabled.setChecked(
+            bool(self.config().get("self_talk_daily_enabled", True))
+        )
+        self.daily_enabled.toggled.connect(self._on_changed)
+        daily_card.add_row(
+            "每天第一句用每日台词",
+            self.daily_enabled,
+            "每天第一次自言自语从下面的池子里按日期抽一句；"
+            "同一只宠同一天固定，换天才换。",
+            search_keys=("每日一句", "今日台词", "每日随机"),
+        )
+        self.daily_texts = QPlainTextEdit(self)
+        self.daily_texts.setPlaceholderText("每行一条每日台词")
+        self.daily_texts.setMinimumHeight(110)
+        self.daily_texts.setPlainText(
+            format_lines(self.config().get("self_talk_daily_texts") or [])
+        )
+        self._daily_timer = QTimer(self)
+        self._daily_timer.setSingleShot(True)
+        self._daily_timer.setInterval(250)
+        self._daily_timer.timeout.connect(self._on_changed)
+        self.daily_texts.textChanged.connect(lambda: self._daily_timer.start())
+        self.daily_texts.textChanged.connect(self._refresh_daily_preview)
+        daily_card.add_row(
+            "每日台词池",
+            self.daily_texts,
+            "每行一条；留空时回退到「候选台词」。",
+            expand=True,
+            search_keys=("每日一句", "每日台词池"),
+        )
+        self.daily_sequence = make_checkbox(self)
+        self.daily_sequence.setChecked(
+            bool(self.config().get("self_talk_daily_sequence"))
+        )
+        self.daily_sequence.toggled.connect(self._on_changed)
+        daily_card.add_row(
+            "每日一句连说",
+            self.daily_sequence,
+            "把每日句按「|」、换行或句号拆成多条气泡，复用 champion 彩蛋的连说通道。",
+            search_keys=("连说", "多气泡"),
+        )
+        self.daily_preview = QLabel("", self)
+        self.daily_preview.setObjectName("settingHint")
+        self.daily_preview.setWordWrap(True)
+        daily_card.add_row(
+            "今天的一句",
+            self.daily_preview,
+            "",
+            search_keys=("今天的一句", "预览"),
+        )
+        daily_buttons = QWidget(self)
+        daily_buttons_layout = QHBoxLayout(daily_buttons)
+        daily_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        daily_buttons_layout.setSpacing(8)
+        restore = make_button("恢复内置台词", daily_buttons)
+        restore.clicked.connect(self._restore_default_texts)
+        test_sequence = make_button("试听连说", daily_buttons)
+        test_sequence.clicked.connect(self._preview_champion)
+        daily_buttons_layout.addWidget(restore)
+        daily_buttons_layout.addWidget(test_sequence)
+        daily_buttons_layout.addStretch(1)
+        daily_card.add_row(
+            "快捷操作",
+            daily_buttons,
+            "「恢复内置台词」同时恢复候选台词与每日池；「试听连说」播放 Niko 彩蛋五句。",
+            expand=True,
+            search_keys=("恢复默认", "试听", "Niko", "champion"),
+        )
+        self._refresh_daily_preview()
 
         extra = self.section("语音与彩蛋")
         self.voice_enabled = make_checkbox(self)
@@ -360,6 +541,9 @@ class SelfTalkPage(SettingsPage):
             "max": int(float(config.get("self_talk_max") or 60)),
             "duration": int(float(config.get("self_talk_duration") or 5)),
             "texts": list(config.get("self_talk_texts") or []),
+            "daily_enabled": bool(config.get("self_talk_daily_enabled", True)),
+            "daily_texts": list(config.get("self_talk_daily_texts") or []),
+            "daily_sequence": bool(config.get("self_talk_daily_sequence")),
             "voice": bool(config.get("self_talk_voice_enabled")),
             "champion": bool(config.get("self_talk_champion_enabled")),
             "champion_chance": int(config.get("self_talk_champion_chance") or 0),
@@ -372,6 +556,9 @@ class SelfTalkPage(SettingsPage):
             "max": int(self.max_spin.value()),
             "duration": int(self.duration_spin.value()),
             "texts": parse_lines(self.texts.toPlainText()),
+            "daily_enabled": self.daily_enabled.isChecked(),
+            "daily_texts": parse_lines(self.daily_texts.toPlainText()),
+            "daily_sequence": self.daily_sequence.isChecked(),
             "voice": self.voice_enabled.isChecked(),
             "champion": self.champion_enabled.isChecked(),
             "champion_chance": int(self.champion_chance.value()),
@@ -381,6 +568,30 @@ class SelfTalkPage(SettingsPage):
         self.champion_chance.setEnabled(bool(checked))
         self._on_changed()
 
+    def _refresh_daily_preview(self, *_args) -> None:
+        texts = parse_lines(self.daily_texts.toPlainText())
+        if not texts:
+            texts = parse_lines(self.texts.toPlainText())
+        line = daily.daily_line(texts)
+        self.daily_preview.setText(
+            f"今天：{line}" if line else "每日池为空，会回退到候选台词。"
+        )
+
+    def _restore_default_texts(self) -> None:
+        self.texts.setPlainText(format_lines(DEFAULTS["self_talk_texts"]))
+        self.daily_texts.setPlainText(format_lines(DEFAULTS["self_talk_daily_texts"]))
+        self._refresh_daily_preview()
+        self._on_changed()
+
+    def _preview_champion(self) -> None:
+        runner = getattr(self.host, "say_sequence", None)
+        if not callable(runner):
+            return
+        runner(
+            [(text, subtitle, duration) for text, subtitle, duration in CHAMPION_LINES],
+            force=True,
+        )
+
     def _on_changed(self, *_args) -> None:
         values = self._current()
         config = self.config()
@@ -389,6 +600,9 @@ class SelfTalkPage(SettingsPage):
         config.set("self_talk_max", max(values["min"], values["max"]))
         config.set("self_talk_duration", values["duration"])
         config.set("self_talk_texts", list(values["texts"]))
+        config.set("self_talk_daily_enabled", values["daily_enabled"])
+        config.set("self_talk_daily_texts", list(values["daily_texts"]))
+        config.set("self_talk_daily_sequence", values["daily_sequence"])
         config.set("self_talk_voice_enabled", values["voice"])
         config.set("self_talk_champion_enabled", values["champion"])
         config.set("self_talk_champion_chance", values["champion_chance"])
@@ -414,6 +628,9 @@ class SelfTalkPage(SettingsPage):
         config.set("self_talk_max", self._initial["max"])
         config.set("self_talk_duration", self._initial["duration"])
         config.set("self_talk_texts", list(self._initial["texts"]))
+        config.set("self_talk_daily_enabled", self._initial["daily_enabled"])
+        config.set("self_talk_daily_texts", list(self._initial["daily_texts"]))
+        config.set("self_talk_daily_sequence", self._initial["daily_sequence"])
         config.set("self_talk_voice_enabled", self._initial["voice"])
         config.set("self_talk_champion_enabled", self._initial["champion"])
         config.set("self_talk_champion_chance", self._initial["champion_chance"])
@@ -431,6 +648,8 @@ class SelfTalkPage(SettingsPage):
         for check, key in (
             (self.voice_enabled, "voice"),
             (self.champion_enabled, "champion"),
+            (self.daily_enabled, "daily_enabled"),
+            (self.daily_sequence, "daily_sequence"),
         ):
             check.blockSignals(True)
             check.setChecked(self._initial[key])
@@ -442,6 +661,10 @@ class SelfTalkPage(SettingsPage):
         self.texts.blockSignals(True)
         self.texts.setPlainText(format_lines(self._initial["texts"]))
         self.texts.blockSignals(False)
+        self.daily_texts.blockSignals(True)
+        self.daily_texts.setPlainText(format_lines(self._initial["daily_texts"]))
+        self.daily_texts.blockSignals(False)
+        self._refresh_daily_preview()
         self.changed.emit()
 
     def keywords(self) -> list[str]:
@@ -458,6 +681,11 @@ class SelfTalkPage(SettingsPage):
             "彩蛋",
             "champion",
             "冠军",
+            "每日一句",
+            "今日台词",
+            "每日随机",
+            "连说",
+            "恢复默认",
             "self talk",
             "bubble",
         ]

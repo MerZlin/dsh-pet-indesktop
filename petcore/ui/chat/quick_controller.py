@@ -46,6 +46,9 @@ class QuickChatController(QObject):
             self._asr.recording_changed.connect(self._on_asr_recording)
             self._asr.finished.connect(self._on_asr_finished)
             self._asr.failed.connect(self._on_asr_failed)
+            partial = getattr(self._asr, "partial", None)
+            if partial is not None:
+                partial.connect(self._on_asr_partial)
         self._token_received.connect(
             self._apply_token, Qt.ConnectionType.QueuedConnection
         )
@@ -210,12 +213,19 @@ class QuickChatController(QObject):
             bool(recording), "" if recording else "正在识别…"
         )
 
+    def _on_asr_partial(self, text: str) -> None:
+        key = self._recording_key
+        state = self._states.get(key) if key is not None else None
+        if state is not None:
+            state.bubble.set_partial_transcript(str(text or ""))
+
     def _on_asr_finished(self, text: str) -> None:
         key = self._recording_key
         self._recording_key = None
         state = self._states.get(key) if key is not None else None
         if state is None:
             return
+        state.bubble.set_partial_transcript("")
         state.bubble.set_recording(False)
         config = getattr(self.host, "config", None)
         auto_send = False
@@ -232,6 +242,7 @@ class QuickChatController(QObject):
         state = self._states.get(key) if key is not None else None
         if state is None:
             return
+        state.bubble.set_partial_transcript("")
         state.bubble.set_recording(False, asr_reason_text(reason))
 
     def _on_submit(self, key: tuple[str, int], text: str) -> None:

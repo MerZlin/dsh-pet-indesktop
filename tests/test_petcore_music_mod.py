@@ -802,6 +802,7 @@ def test_settings_page_has_h2_and_h3_groups(app):
         "识别诊断",
         "歌词显示",
         "识别范围",
+        "音频输出设备",
         "切歌与播放控制",
         "播放器",
     ]
@@ -1725,3 +1726,21 @@ def test_a_dead_sampling_worker_is_never_replaced_by_a_gui_thread_sample(caplog)
         if orphan is not None:
             orphan.join(5.0)
     assert orphan is None or not orphan.is_alive()
+
+
+def test_settings_page_audio_device_selection_round_trips(app):
+    host = _Host({"music_enabled": True, "music_audio_device": "", "music_audio_device_name": ""})
+    page = sys.modules[HOST_PKG].MusicPage(host)
+    try:
+        page._apply_audio_devices([("dev-a", "耳机 A"), ("dev-b", "扬声器 B")])
+        index = page.audio_device.findData("dev-a")
+        assert index >= 0
+        page.audio_device.setCurrentIndex(index)
+        assert host.config["music_audio_device"] == "dev-a"
+        assert host.config["music_audio_device_name"] == "耳机 A"
+
+        page.discard_changes()
+        assert host.config["music_audio_device"] == ""
+        assert page.audio_device.currentData() == ""
+    finally:
+        page.close()

@@ -10,14 +10,14 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QEvent, QRect, Qt, QThread, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QInputMethodEvent, QKeyEvent
 from PySide6.QtWidgets import QApplication, QWidget
 
 from petcore.chat.session_store import ChatSession
 from petcore.config import Config
 from petcore.ui.chat import ChatController, themes
-from petcore.ui.chat.window import ChatWindow, FOLLOW_GAP
+from petcore.ui.chat.window import ChatWindow, FOLLOW_GAP, GROUP_ROLE
 
 
 @pytest.fixture(scope="module")
@@ -301,16 +301,20 @@ def test_session_list_and_new_conversation(controller) -> None:
         ChatSession("s2", "第二个会话", [], 2.0),
     ]
     window.set_history(sessions, "s1")
-    assert window.session_list.count() == 2
-    titles = [
-        window.session_list.itemWidget(window.session_list.item(index)).title.text()
-        for index in range(2)
+    session_items = [
+        window.session_list.item(index)
+        for index in range(window.session_list.count())
+        if window.session_list.item(index).data(Qt.ItemDataRole.UserRole)
     ]
-    assert titles == ["第一个会话", "第二个会话"]
+    assert len(session_items) == 2
+    titles = [
+        window.session_list.itemWidget(item).title.text() for item in session_items
+    ]
+    assert titles == ["第二个会话", "第一个会话"], "同一分区内按更新时间倒序"
 
     seen: list[str] = []
     window.session_selected.connect(seen.append)
-    window.session_list.setCurrentRow(1)
+    window.session_list.setCurrentRow(window.session_list.row(session_items[0]))
     assert seen == ["s2"]
     window.new_session_button.click()
     assert seen == ["s2", ""]
@@ -587,3 +591,154 @@ def test_dsh_context_is_inserted_into_ai_composer(controller) -> None:
     window._use_dsh_context("DSH：你好")
     assert window.current_view() == "ai"
     assert "DSH：你好" in window.composer.input.toPlainText()
+
+
+def test_ime_preedit_hides_the_placeholder(controller) -> None:
+    window = _open(controller)
+    original = window.input.placeholderText()
+    assert original.startswith("和桌宠说点什么")
+
+    QApplication.sendEvent(window.input, QInputMethodEvent("nihao", []))
+    assert window.input.placeholderText() == ""
+
+    commit = QInputMethodEvent()
+    commit.setCommitString("你好")
+    QApplication.sendEvent(window.input, commit)
+    assert window.input.placeholderText() == original
+    assert window.input.toPlainText() == "你好"
+
+    # 取消组合（空 preedit）也要恢复提示。
+    QApplication.sendEvent(window.input, QInputMethodEvent("", []))
+    assert window.input.placeholderText() == original
+
+
+def test_composer_stays_compact_and_short_chat_sits_above_it(controller) -> None:
+    window = _open(controller)
+    window.resize(1100, 800)
+    window.load_messages(
+        [
+            {"role": "user", "content": "你好"},
+            {"role": "assistant", "content": "你好呀，今天想聊什么？"},
+        ]
+    )
+
+    assert _wait_until(lambda: window.scroll.height() > 300)
+    assert window.composer.height() <= 140
+    assert window.composer.toolbar.height() <= 40
+    assert window.composer_card.y() >= window.scroll.y() + window.scroll.height() - 2
+    assert window.scroll.height() > 300
+
+    first = window.bubbles()[0]
+    top = first.mapTo(window.timeline_host, QPoint(0, 0)).y()
+    assert top > 100, "短会话应贴到底部，而不是堆在标题栏下面"
+
+
+def test_clearing_messages_keeps_both_spacers(controller) -> None:
+    window = _open(controller)
+    window.load_messages([{"role": "user", "content": "你好"}])
+    window.load_messages([])
+    assert window.message_host_layout.count() == 2
+    assert window.message_top_spacer is not None
+    assert window.message_bottom_spacer is not None
+
+
+def test_partial_transcript_mirrors_then_replaces_with_final(controller) -> None:
+    window = _open(controller)
+    window.set_partial_transcript("你好")
+    assert window.input.toPlainText() == "你好"
+    window.set_partial_transcript("你好呀")
+    assert window.input.toPlainText() == "你好呀"
+
+    window.insert_transcript("你好呀，今天想聊什么？")
+    assert window.input.toPlainText() == "你好呀，今天想聊什么？"
+    assert window.composer._partial_mirror == ""
+
+
+def test_partial_transcript_never_overwrites_user_text(controller) -> None:
+    window = _open(controller)
+    window.input.setPlainText("我先打的字")
+    window.set_partial_transcript("识别到的内容")
+    assert window.input.toPlainText() == "我先打的字"
+    assert "识别到的内容" in window.composer.partial_label.text()
+    assert window.composer.partial_label.isVisible() is True
+
+    window.set_partial_transcript("")
+    assert window.input.toPlainText() == "我先打的字"
+    assert window.composer.partial_label.isVisible() is False
+
+
+def test_history_is_grouped_by_date_and_groups_collapse(controller) -> None:
+    window = _open(controller)
+    now = time.time()
+    sessions = [
+        ChatSession("today", "今天会话", [], now),
+        ChatSession("old", "更早会话", [], now - 60 * 86400),
+    ]
+    window.set_history(sessions, "today")
+
+    headers = [
+        window.session_list.item(index)
+        for index in range(window.session_list.count())
+        if window.session_list.item(index).data(GROUP_ROLE)
+    ]
+    assert [item.text() for item in headers][0].endswith("今天")
+    assert any(item.text().endswith("更早") for item in headers)
+
+    old_row = window._row_by_session["old"]
+    assert window.session_list.isRowHidden(old_row) is True, "更早默认折叠"
+    older_header = next(item for item in headers if item.text().endswith("更早"))
+    window.session_list.itemClicked.emit(older_header)
+    assert window.session_list.isRowHidden(old_row) is False
+    window.session_list.itemClicked.emit(older_header)
+    assert window.session_list.isRowHidden(old_row) is True
+
+
+def test_archived_rows_and_toggle_emit_signals(controller) -> None:
+    from petcore.chat.session_store import ChatSession
+
+    window = _open(controller)
+    session = ChatSession("archived", "归档会话", [], time.time(), archived_at=time.time())
+    window.set_history([session], "archived")
+
+    row_item = next(
+        window.session_list.item(index)
+        for index in range(window.session_list.count())
+        if window.session_list.item(index).data(Qt.ItemDataRole.UserRole) == "archived"
+    )
+    row = window.session_list.itemWidget(row_item)
+    assert row.archived is True
+    assert row.title.property("archived") is True
+
+    archived: list[tuple[str, bool]] = []
+    deleted: list[str] = []
+    toggled: list[bool] = []
+    window.session_archive_requested.connect(lambda sid, value: archived.append((sid, value)))
+    window.session_delete_requested.connect(deleted.append)
+    window.archived_toggled.connect(toggled.append)
+
+    row.archive_requested.emit("archived", False)
+    row.delete_requested.emit("archived")
+    window.archive_button.click()
+    assert archived == [("archived", False)]
+    assert deleted == ["archived"]
+    assert toggled == [True]
+    assert window.is_showing_archived() is True
+
+
+def test_late_stream_answer_does_not_land_in_archived_fallback_session(controller) -> None:
+    window = _open(controller)
+    state = controller.states()[("ai.chat", 0)]
+    controller.token("ai.chat", "半")
+    assert state.active is True
+    old_id = state.session.session_id
+
+    controller._on_archive(state, old_id, True)
+    assert state.session.session_id != old_id
+    new_session = state.session
+
+    controller.done("ai.chat", "迟到的完整回答")
+    assert new_session.session_id == state.session.session_id
+    assert all(
+        "迟到的完整回答" not in str(item.get("content") or "")
+        for item in new_session.messages
+    )

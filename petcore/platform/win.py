@@ -15,6 +15,13 @@ _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x00000020
 _WS_EX_NOACTIVATE = 0x08000000
 _WS_EX_TOOLWINDOW = 0x00000080
+_WS_EX_LAYERED = 0x00080000
+_WS_EX_APPWINDOW = 0x00040000
+_HWND_TOPMOST = -1
+_HWND_NOTOPMOST = -2
+_SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
+_SWP_NOACTIVATE = 0x0010
 
 
 def _user32():
@@ -57,22 +64,71 @@ def apply_tool_window(hwnd: int) -> None:
         logger.debug("apply_tool_window failed", exc_info=True)
 
 
-def apply_stream_window(hwnd: int) -> None:
+def apply_stream_window(hwnd: int, *, keycolor: bool = False) -> None:
     """直播捕获兼容：还原成普通顶层窗口（可被 OBS/直播姬枚举与捕获）。
 
     Qt 的 ``Tool`` 窗口带 ``WS_EX_TOOLWINDOW``（不进任务栏/Alt-Tab），部分捕获
     后端会直接跳过；``WS_EX_NOACTIVATE`` 还会让窗口拿不到激活态。这里两个都清掉。
+
+    ``keycolor=True`` 时还要清掉 ``WS_EX_LAYERED``：Qt 在运行期把
+    ``WA_TranslucentBackground`` 改回 False 后不会自动去掉分层位（实测同一个
+    HWND 一直是 layered），而分层窗口正是 OBS BitBlt/WGC 读回黑屏的来源。
     """
     if os.name != "nt":
         return
     try:
         user32 = _user32()
         style = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-        updated = style & ~(_WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE)
+        clear = _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE
+        if keycolor:
+            clear |= _WS_EX_LAYERED
+        updated = style & ~clear
         if updated != style:
             user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, updated)
     except Exception:
         logger.debug("apply_stream_window failed", exc_info=True)
+
+
+def window_exstyle(hwnd: int) -> int:
+    """当前扩展样式；非 Windows/读取失败返回 0。"""
+    if os.name != "nt":
+        return 0
+    try:
+        return int(_user32().GetWindowLongW(hwnd, _GWL_EXSTYLE))
+    except Exception:
+        return 0
+
+
+def set_topmost(hwnd: int, enabled: bool) -> bool:
+    """只改 Z 序，不重建 HWND（OBS 窗口源不会因此掉源）。"""
+    if os.name != "nt":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        return bool(
+            user32.SetWindowPos(
+                hwnd,
+                _HWND_TOPMOST if enabled else _HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE,
+            )
+        )
+    except Exception:
+        logger.debug("set_topmost failed", exc_info=True)
+        return False
 
 
 def apply_click_through(window, enabled: bool) -> None:

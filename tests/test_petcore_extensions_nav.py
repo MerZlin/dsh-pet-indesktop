@@ -461,3 +461,45 @@ def test_feature_pages_carry_label_owner_and_group():
     assert addon_spec.label == "抽签"
     assert addon_spec.group == "addon"
     assert addon_spec.host_page == ""
+
+
+class _SearchableAddonPage(SettingsPage):
+    title = "可搜索加装页"
+
+    def __init__(self, host):
+        super().__init__(host)
+        from PySide6.QtWidgets import QLabel
+
+        self.section("功能").add_row(
+            "加装专属词", QLabel("加装专属词说明", self)
+        )
+
+
+def test_settings_search_switches_to_and_expands_a_mod_tab(app, tmp_path: Path) -> None:
+    host = FakeHost(tmp_path)
+    host.settings_pages = lambda: [
+        SettingsPageSpec(
+            "addon.search",
+            "Searchable",
+            _SearchableAddonPage,
+            order=5,
+            label="可搜索加装页",
+            group="addon",
+        )
+    ]
+    dialog = SettingsDialog(host)
+    try:
+        extensions = _extensions(dialog)
+        dialog.search.setText("加装专属词")
+        app.processEvents()
+        app.processEvents()
+        assert extensions.current_key() == "extension:addon.search"
+        assert any(
+            str(item.text()) == "可搜索加装页"
+            for item in (
+                extensions.nav.item(row) for row in range(extensions.nav.count())
+            )
+            if item is not None
+        )
+    finally:
+        dialog.deleteLater()

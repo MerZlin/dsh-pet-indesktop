@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPlainTextEdit,
     QSizePolicy,
     QToolButton,
@@ -119,20 +120,60 @@ def validate_attachment_additions(current, candidates) -> tuple[list[Path], list
 
 
 class SessionListRow(QFrame):
-    """会话列表的一行：标题 + 当前会话高亮（点击由 QListWidget 统一处理）。"""
+    """会话列表的一行：标题 + 三点菜单（点击行由 QListWidget 统一处理）。"""
 
-    def __init__(self, session_id: str, title: str, parent=None):
+    archive_requested = Signal(str, bool)
+    delete_requested = Signal(str)
+
+    def __init__(
+        self, session_id: str, title: str, parent=None, *, archived: bool = False
+    ):
         super().__init__(parent)
         self.session_id = str(session_id)
+        self.archived = bool(archived)
         self.setObjectName("session-row")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 0, 10, 0)
+        layout.setContentsMargins(10, 0, 4, 0)
         layout.setSpacing(5)
         self.title = QLabel(str(title or "新会话"), self)
         self.title.setObjectName("session-row-title")
+        if self.archived:
+            self.title.setProperty("archived", True)
         self.title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         layout.addWidget(self.title, 1)
+        self.more = tool_button(self, "session-more-button", "more", "更多操作")
+        self.more.setFixedSize(24, 24)
+        self.more.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.more.clicked.connect(self._show_menu)
+        self.more.hide()
+        layout.addWidget(self.more, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def enterEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.more.show()
+        if event is not None:
+            super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.more.hide()
+        if event is not None:
+            super().leaveEvent(event)
+
+    def _show_menu(self) -> None:
+        menu = QMenu(self)
+        label = "取消归档" if self.archived else "归档会话"
+        archive = menu.addAction(label)
+        archive.triggered.connect(
+            lambda _checked=False: self.archive_requested.emit(
+                self.session_id, not self.archived
+            )
+        )
+        menu.addSeparator()
+        delete = menu.addAction("删除会话…")
+        delete.triggered.connect(
+            lambda _checked=False: self.delete_requested.emit(self.session_id)
+        )
+        menu.exec(self.more.mapToGlobal(self.more.rect().bottomLeft()))
 
 
 class ChatTitleBar(QFrame):
@@ -713,12 +754,20 @@ class ChatComposer(QFrame):
 
         self.input = AttachmentTextEdit(self)
         self.input.setObjectName("chat-input")
-        self.input.setPlaceholderText("和桌宠说点什么…  Enter 发送，Shift+Enter 换行")
+        self._placeholder = "和桌宠说点什么…  Enter 发送，Shift+Enter 换行"
+        self.input.setPlaceholderText(self._placeholder)
         self.input.setMinimumHeight(38)
         self.input.setMaximumHeight(68)
         self.input.installEventFilter(self)
         self.input.files_dropped.connect(self.add_attachments)
         root.addWidget(self.input)
+
+        self.partial_label = QLabel("", self)
+        self.partial_label.setObjectName("composer-partial")
+        self.partial_label.setWordWrap(True)
+        self.partial_label.hide()
+        root.addWidget(self.partial_label)
+        self._partial_mirror = ""
 
         self.toolbar = QFrame(self)
         self.toolbar.setObjectName("composer-toolbar")
@@ -751,6 +800,7 @@ class ChatComposer(QFrame):
         footer.addWidget(self.send)
         root.addWidget(self.toolbar)
         self.input.textChanged.connect(self._update_enabled)
+        self.input.textChanged.connect(self._on_input_text_changed)
         self._update_enabled()
 
     def choose_attachments(self) -> None:
@@ -802,10 +852,50 @@ class ChatComposer(QFrame):
         if hint:
             self._flash_notice(hint)
 
+    def set_partial_transcript(self, text: str) -> None:
+        """实时预览识别文字：不覆盖用户已经手打的内容。
+
+        输入框为空或只包含上一段预览时，直接把预览镜像进输入框（用户能看到
+        逐字增长）；用户已经打了字时只更新提示行，停止录音后最终文本才会
+        ``insert_text`` 追加。
+        """
+        value = str(text or "").strip()
+        if not value:
+            self.clear_partial()
+            return
+        current = self.input.toPlainText().strip()
+        if not current or current == self._partial_mirror:
+            self._partial_mirror = value
+            self.input.blockSignals(True)
+            self.input.setPlainText(value)
+            self.input.blockSignals(False)
+            cursor = self.input.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self.input.setTextCursor(cursor)
+            self._update_enabled()
+            self.partial_label.hide()
+            return
+        self._partial_mirror = value
+        self.partial_label.setText(f"识别中：{value}")
+        self.partial_label.show()
+
+    def clear_partial(self) -> None:
+        """清掉预览；只有输入框仍然是预览镜像时才清空，别删用户手打的内容。"""
+        mirror = self._partial_mirror
+        self._partial_mirror = ""
+        self.partial_label.clear()
+        self.partial_label.hide()
+        if mirror and self.input.toPlainText().strip() == mirror:
+            self.input.blockSignals(True)
+            self.input.clear()
+            self.input.blockSignals(False)
+            self._update_enabled()
+
     def insert_text(self, text: str) -> None:
         value = str(text or "").strip()
         if not value:
             return
+        self.clear_partial()
         current = self.input.toPlainText()
         prefix = "" if not current or current.endswith((" ", "\n")) else " "
         self.input.insertPlainText(prefix + value)
@@ -892,12 +982,31 @@ class ChatComposer(QFrame):
         self.add_attachments(paths)
         event.acceptProposedAction()
 
+    def _sync_placeholder(self) -> None:
+        """拼音组合期间隐藏 placeholder（preedit 不进文档，Qt 不会自己收）。
+
+        ``QPlainTextEdit`` 只在文档为空时绘制 placeholder，而输入法 preedit 属于
+        输入法层、不写入 document——不手动清空就会和拼音叠在一起。
+        """
+        text = "" if self._ime_composing else self._placeholder
+        if self.input.placeholderText() != text:
+            self.input.setPlaceholderText(text)
+
+    def _on_input_text_changed(self) -> None:
+        # 用户手动清空时恢复提示；组合中保持隐藏。
+        if not self._ime_composing and not self.input.toPlainText():
+            self._sync_placeholder()
+
     def eventFilter(self, obj, event):
-        # 输入法组合状态跟踪：组合中回车用于上屏候选，不应触发发送
+        # 输入法组合状态跟踪：组合中回车用于上屏候选，且 placeholder 必须隐藏。
         if event.type() == QEvent.Type.InputMethod:
             self._ime_composing = bool(event.preeditString())
             if event.commitString():
                 self._ime_composing = False
+            self._sync_placeholder()
+        elif obj is self.input and event.type() == QEvent.Type.FocusOut:
+            self._ime_composing = False
+            self._sync_placeholder()
         elif obj is self.input and event.type() == QEvent.Type.KeyPress:
             is_return = event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
             if is_return and not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:

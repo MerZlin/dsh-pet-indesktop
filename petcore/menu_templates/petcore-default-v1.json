@@ -5,9 +5,19 @@
     {"type": "action", "id": "easter_egg", "visible": true, "section": "tools"},
     {"type": "action", "id": "character", "visible": true, "section": "profile"},
     {"type": "action", "id": "animations_hub", "visible": true, "section": "playback"},
-    {"type": "action", "id": "ai.chat:open", "visible": true, "section": "playback"},
-    {"type": "action", "id": "ai.chat:look_screen", "visible": true, "section": "playback"},
-    {"type": "action", "id": "ai.chat:proactive", "visible": true, "section": "playback"},
+    {
+      "type": "submenu",
+      "id": "ai_hub",
+      "label": "AI 助手",
+      "visible": true,
+      "section": "playback",
+      "icon": "chat",
+      "children": [
+        {"type": "action", "id": "ai.chat:open", "visible": true},
+        {"type": "action", "id": "ai.chat:look_screen", "visible": true},
+        {"type": "action", "id": "ai.chat:proactive", "visible": true}
+      ]
+    },
     {"type": "action", "id": "ai.agent:enabled", "visible": true, "section": "playback"},
     {"type": "action", "id": "ai.chat:screen_capture", "visible": true, "section": "playback"},
     {"type": "action", "id": "playback_speed", "visible": false, "section": "playback"},

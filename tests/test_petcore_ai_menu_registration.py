@@ -150,5 +150,13 @@ def test_legacy_hidden_list_still_targets_the_new_ids() -> None:
         assert LEGACY_ID_MAP[old] == new
 
     layout = migrate_legacy(hidden=["ai_chat"], order=None)
-    nodes = {node.get("id"): node for node in layout["nodes"] if node.get("type") == "action"}
+    nodes: dict[str, dict] = {}
+
+    def walk(items) -> None:
+        for node in items:
+            if node.get("type") == "action":
+                nodes[str(node.get("id") or "")] = node
+            walk(node.get("children", ()))
+
+    walk(layout["nodes"])
     assert nodes["ai.chat:open"]["visible"] is False

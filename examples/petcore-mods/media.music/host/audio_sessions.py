@@ -69,6 +69,15 @@ _lock = threading.Lock()
 #: 缓存的 ``IAudioSessionManager2`` 及建它的线程 ident（COM 接口是线程亲和的）。
 _manager = None
 _manager_thread: int | None = None
+#: 当前缓存 manager 对应的端点 id（空串 = 系统默认）。换设备必须立刻重建。
+_manager_device = ""
+#: 端点列表缓存：设置页打开/刷新时才会走属性商店，30 秒内不重复枚举。
+_endpoints_cache: tuple[tuple[str, str], ...] = ()
+_endpoints_at = 0.0
+#: 默认端点 id 的短缓存：跟随系统默认时每拍问一次，避免重复 CoCreateInstance。
+_default_endpoint_id = ""
+_default_endpoint_at = 0.0
+_DEFAULT_ENDPOINT_INTERVAL = 2.0
 #: 下一次允许因"枚举失败 / 0 条会话"而丢弃缓存端点的时刻。
 _next_invalidate_at = 0.0
 #: 建端点连续失败后的冷却：避免设备被独占时每拍都去 Activate 一次。
@@ -96,14 +105,17 @@ def available() -> bool:
     return ok
 
 
-def snapshot() -> tuple[AudioSession, ...]:
+def snapshot(device_id: str | None = None) -> tuple[AudioSession, ...]:
     """采样一次逐进程音频会话；读不到就是空元组，绝不抛。
 
+    ``device_id`` 为空 = 系统默认渲染端点；非空 = 用户手选的端点 id。
     调用方把空元组理解为"没有证据"，而不是"没有在放声音"——两者在决策上
     不同（前者退回 SMTC 的结论，后者是否决）。
     """
     try:
-        rows = _enumerate_rows()
+        # 空设备保持旧接缝 ``_enumerate_rows()`` 的无参调用（既有测试与探针
+        # 都是替换成无参 lambda）；手选设备才把 id 传进去。
+        rows = _enumerate_rows(device_id) if str(device_id or "").strip() else _enumerate_rows()
     except Exception:
         _note_dead_endpoint()
         return ()
@@ -117,14 +129,21 @@ def snapshot() -> tuple[AudioSession, ...]:
         return ()
 
 
-def reset() -> None:
-    """丢掉缓存的端点与两个节流窗口（设备切换排查、测试换替身时用）。"""
-    global _manager, _manager_thread, _next_invalidate_at, _build_allowed_at
+def reset(device_id: str | None = None) -> None:
+    """丢掉缓存的端点与两个节流窗口（设备切换排查、测试换替身时用）。
+
+    ``device_id`` 只用于诊断：无论传什么都清空当前 manager；下一次
+    ``snapshot()`` 会按当时传入的设备重建。
+    """
+    global _manager, _manager_thread, _manager_device
+    global _next_invalidate_at, _build_allowed_at
     with _lock:
         _manager = None
         _manager_thread = None
+        _manager_device = ""
         _next_invalidate_at = 0.0
         _build_allowed_at = 0.0
+    _ = device_id
 
 
 def close() -> None:
@@ -133,11 +152,12 @@ def close() -> None:
     COM 的 apartment 引用计数是线程绑定的，不配对会让线程的 apartment 一直挂着；
     接口指针也必须先丢，否则释放发生在 COM 关掉之后。
     """
-    global _manager, _manager_thread
+    global _manager, _manager_thread, _manager_device
     with _lock:
         if _manager_thread == threading.get_ident():
             _manager = None
             _manager_thread = None
+            _manager_device = ""
     if getattr(_local, "initialized", False):
         _local.initialized = False
         try:
@@ -172,7 +192,7 @@ def _co_initialize() -> None:
 
 def _note_dead_endpoint() -> None:
     """丢掉缓存的端点，并按 30 秒节流（多一次重建都不行）。"""
-    global _manager, _manager_thread, _next_invalidate_at
+    global _manager, _manager_thread, _manager_device, _next_invalidate_at
     with _lock:
         now = time.monotonic()
         if now < _next_invalidate_at:
@@ -180,30 +200,47 @@ def _note_dead_endpoint() -> None:
         _next_invalidate_at = now + _REBUILD_INTERVAL
         _manager = None
         _manager_thread = None
+        _manager_device = ""
 
 
-def _session_manager():
+def _session_manager(device_id: str | None = None):
     """缓存的 ``IAudioSessionManager2``；拿不到返回 ``None``。
 
-    只有这里会付 ``GetSpeakers()`` 那次约 24ms 的 ``Activate`` 成本。
+    默认端点走 ``GetSpeakers()``（一次约 24ms 的 ``Activate``）；手选端点走
+    ``GetDevice(id)`` + ``AudioSessionManager``。缓存键是「线程 + 设备 id」：
+    COM 接口线程亲和，换线程或换设备都必须立刻重建，不能沿用旧接口。
     """
-    global _manager, _manager_thread, _build_allowed_at
+    global _manager, _manager_thread, _manager_device, _build_allowed_at
     ident = threading.get_ident()
+    device = str(device_id or "").strip()
     with _lock:
-        if _manager is not None and _manager_thread == ident:
+        if (
+            _manager is not None
+            and _manager_thread == ident
+            and _manager_device == device
+        ):
             return _manager
         now = time.monotonic()
-        # 冷却只拦"手上什么都没有"的情形；手里有另一个线程的接口时立刻为当前
-        # 线程重建一次（那是线程亲和，不是端点失效）。
+        # 冷却只拦"手上什么都没有"的情形；手里有接口但线程/设备不符时立刻重建。
         if _manager is None and now < _build_allowed_at:
             return None
         if _manager is not None:
             _manager = None
             _manager_thread = None
+            _manager_device = ""
         try:
             from pycaw.utils import AudioUtilities
 
-            manager = AudioUtilities.GetSpeakers().AudioSessionManager
+            if device:
+                enumerator = AudioUtilities.GetDeviceEnumerator()
+                raw = enumerator.GetDevice(device) if enumerator is not None else None
+                manager = (
+                    AudioUtilities.CreateDevice(raw).AudioSessionManager
+                    if raw is not None
+                    else None
+                )
+            else:
+                manager = AudioUtilities.GetSpeakers().AudioSessionManager
         except Exception:
             manager = None
         if manager is None:
@@ -211,11 +248,12 @@ def _session_manager():
             return None
         _manager = manager
         _manager_thread = ident
+        _manager_device = device
         _build_allowed_at = 0.0
         return manager
 
 
-def _enumerate_rows() -> list[tuple[int, int, bool, float, str]]:
+def _enumerate_rows(device_id: str | None = None) -> list[tuple[int, int, bool, float, str]]:
     """枚举一次原始会话行 ``(pid, state, muted, peak, exe)``。
 
     这是**刻意的测试接缝**：替换掉它就能覆盖后面的合并 / 过滤 / 异常吞掉，
@@ -226,7 +264,7 @@ def _enumerate_rows() -> list[tuple[int, int, bool, float, str]]:
     from pycaw.utils import AudioSession as _PycawSession
     from pycaw.utils import IAudioSessionControl2
 
-    manager = _session_manager()
+    manager = _session_manager(device_id)
     if manager is None:
         return []
     rows: list[tuple[int, int, bool, float, str]] = []
@@ -260,6 +298,128 @@ def _enumerate_rows() -> list[tuple[int, int, bool, float, str]]:
             pass
         rows.append((pid, state, muted, peak, _session_exe(session)))
     return rows
+
+
+def endpoints(*, refresh: bool = False) -> tuple[tuple[str, str], ...]:
+    """当前可用的**输出**端点 ``(id, FriendlyName)``；失败返回空元组。
+
+    只在设置页打开/点刷新时调用；结果缓存 30 秒。属性商店的读取成本较高
+    （每个设备一次），不能放进 1Hz 采样路径。
+    """
+    global _endpoints_cache, _endpoints_at
+    now = time.monotonic()
+    with _lock:
+        if (
+            not refresh
+            and _endpoints_cache
+            and now - _endpoints_at < _REBUILD_INTERVAL
+        ):
+            return _endpoints_cache
+    try:
+        _co_initialize()
+        from pycaw.constants import DEVICE_STATE, EDataFlow
+        from pycaw.utils import AudioUtilities
+
+        devices = AudioUtilities.GetAllDevices(
+            EDataFlow.eRender.value, DEVICE_STATE.ACTIVE.value
+        )
+        rows: list[tuple[str, str]] = []
+        for device in devices or ():
+            device_id = str(getattr(device, "id", "") or "").strip()
+            if not device_id:
+                continue
+            try:
+                name = str(device.FriendlyName or "").strip()
+            except Exception:
+                name = ""
+            rows.append((device_id, name or device_id))
+    except Exception:
+        return ()
+    with _lock:
+        _endpoints_cache = tuple(rows)
+        _endpoints_at = now
+    return tuple(rows)
+
+
+def list_endpoints(timeout: float = 3.0) -> tuple[tuple[str, str], ...]:
+    """给 GUI 设置页用：在短命线程里初始化 COM 并枚举端点。
+
+    UI 线程不直接碰 COM；超时就返回空元组（调用方置灰并说明原因）。
+    """
+    result: list[tuple[str, str]] = []
+
+    def work() -> None:
+        try:
+            result.extend(endpoints(refresh=True))
+        except Exception:
+            pass
+        finally:
+            close()
+
+    thread = threading.Thread(target=work, name="music-audio-endpoints", daemon=True)
+    thread.start()
+    thread.join(timeout=max(0.5, float(timeout)))
+    return tuple(result)
+
+
+def default_endpoint_id(*, refresh: bool = False) -> str:
+    """系统默认渲染端点 id；失败返回空串。短缓存 2 秒，1Hz 采样不重复建 COM。"""
+    global _default_endpoint_id, _default_endpoint_at
+    now = time.monotonic()
+    with _lock:
+        if (
+            not refresh
+            and _default_endpoint_id
+            and now - _default_endpoint_at < _DEFAULT_ENDPOINT_INTERVAL
+        ):
+            return _default_endpoint_id
+    try:
+        _co_initialize()
+        import comtypes
+        from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
+        from pycaw.constants import CLSID_MMDeviceEnumerator, EDataFlow, ERole
+
+        enumerator = comtypes.CoCreateInstance(
+            CLSID_MMDeviceEnumerator,
+            IMMDeviceEnumerator,
+            comtypes.CLSCTX_INPROC_SERVER,
+        )
+        raw = enumerator.GetDefaultAudioEndpoint(
+            EDataFlow.eRender.value, ERole.eMultimedia.value
+        )
+        value = str(raw.GetId()) if raw is not None else ""
+    except Exception:
+        value = ""
+    with _lock:
+        _default_endpoint_id = value
+        _default_endpoint_at = now
+    return value
+
+
+def endpoint_exists(device_id: str) -> bool:
+    """手选端点是否仍存在；空 id（默认）恒为 True。"""
+    device = str(device_id or "").strip()
+    if not device:
+        return True
+    try:
+        _co_initialize()
+        from pycaw.utils import AudioUtilities
+
+        enumerator = AudioUtilities.GetDeviceEnumerator()
+        return bool(enumerator is not None and enumerator.GetDevice(device) is not None)
+    except Exception:
+        return False
+
+
+def endpoint_label(device_id: str) -> str:
+    """把端点 id 映射成可读名字；未知 id 返回空串（UI 显示「已保存的设备」）。"""
+    device = str(device_id or "").strip()
+    if not device:
+        return "跟随系统默认"
+    for did, name in endpoints():
+        if did == device:
+            return name
+    return ""
 
 
 def _session_exe(session) -> str:

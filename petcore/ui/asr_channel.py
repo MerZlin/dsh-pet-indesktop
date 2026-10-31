@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -24,6 +25,7 @@ MIN_SECONDS = 3
 
 class AsrChannel(QObject):
     recording_changed = Signal(bool)
+    partial = Signal(str)
     finished = Signal(str)
     failed = Signal(str)
 
@@ -67,6 +69,24 @@ class AsrChannel(QObject):
             return max(0, int(self._cfg("asr_device", 0) or 0))
         except (TypeError, ValueError):
             return 0
+
+    def _stream_enabled(self) -> bool:
+        return bool(self._cfg("asr_stream_enabled", True))
+
+    def _partial_interval(self) -> float:
+        try:
+            interval = float(self._cfg("asr_partial_interval_ms", 800)) / 1000.0
+        except (TypeError, ValueError):
+            interval = 0.8
+        interval = max(0.4, min(3.0, interval))
+        try:
+            engine = str(self._service.engine() or "")
+        except Exception:  # noqa: BLE001 - 未知引擎按 HTTP 的节奏
+            engine = "http"
+        # 系统识别每次都是一次短进程（实测 1–2 秒）；比这更密的增量只会排队。
+        if engine == "sapi":
+            interval = max(1.5, interval)
+        return interval
 
     @property
     def recording(self) -> bool:
@@ -117,7 +137,35 @@ class AsrChannel(QObject):
                 return
             if not started:
                 return
-            self._stop_event.wait(timeout=float(max_seconds))
+            stream_enabled = self._stream_enabled()
+            interval = self._partial_interval()
+            deadline = time.monotonic() + float(max_seconds)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if not stream_enabled:
+                    # 没有实时预览时不要空转；一觉睡到录音结束/用户停止。
+                    self._stop_event.wait(timeout=remaining)
+                    break
+                # 先等一个完整间隔再识别；识别返回后下一轮重新等，慢引擎
+                # （sapi 单次 1–2 秒）不会被“已经超过间隔”逼成不间断识别。
+                if self._stop_event.wait(timeout=min(interval, remaining)):
+                    break
+                try:
+                    wav = self._recorder.peek_wav()
+                except Exception:
+                    continue
+                if not wav:
+                    continue
+                try:
+                    text = self._service.recognize(wav)
+                except Exception:
+                    # 预览失败不打断正式识别：停止后还会完整识别一次。
+                    continue
+                value = str(text or "").strip()
+                if value:
+                    self.partial.emit(value)
             if self._cancel_event.is_set():
                 try:
                     self._recorder.cancel()

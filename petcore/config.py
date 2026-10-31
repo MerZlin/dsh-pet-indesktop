@@ -159,6 +159,8 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "spawn_inherit_size",
         "spawn_scale",
         "stream_capture_mode",
+        "stream_capture_keycolor",
+        "stream_key_color",
         "ui_font_size",
         "weather_enabled",
         "weather_city",
@@ -216,6 +218,8 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "music_filter_enabled",
         "music_filter_extra_ids",
         "music_title_format",
+        "music_audio_device",
+        "music_audio_device_name",
     }
 )
 
@@ -240,6 +244,8 @@ DEFAULTS: dict[str, Any] = {
     "bubble_text_scale": 100,
     "menu_animation_icons": True,
     "stream_capture_mode": False,
+    "stream_capture_keycolor": False,
+    "stream_key_color": "#00FF00",
     # 全屏游戏/视频期间自动隐藏所有桌宠（仅 Windows 有探测；默认开，同主分支）。
     "auto_hide_fullscreen": True,
     # 角色自定义显示名 {角色id: 自定义名}，空名 = 恢复默认（目录显示名）。
@@ -372,7 +378,31 @@ DEFAULTS: dict[str, Any] = {
     "spawn_inherit_size": True,
     "spawn_scale": 0.72,
     "self_talk_enabled": False,
-    "self_talk_texts": ["今天也要好好休息。"],
+    "self_talk_texts": [
+        "好女孩……",
+        "好模型……",
+        "欧鲸鲸……",
+        "今天也要认真工作呀。",
+        "再陪你一会儿。",
+        "今天也要好好休息。",
+        "忙完了就伸个懒腰吧。",
+    ],
+    "self_talk_daily_enabled": True,
+    "self_talk_daily_texts": [
+        "今天也一起慢慢来吧。",
+        "窗外的光不错，适合做点小事。",
+        "先喝口水，再继续也不迟。",
+        "今天的第一件小事，想做什么？",
+        "如果有点累，就靠一会儿再走。",
+        "别把今天排得太满，留一点空。",
+        "今天的你，也值得被好好对待。",
+        "做不完也没关系，明天还有时间。",
+        "记得起来走两步，肩颈会谢谢你。",
+        "今天适合把一件小事做完。",
+        "有我在旁边，慢慢来就好。",
+        "今天也要给自己留一点喜欢的时间。",
+    ],
+    "self_talk_daily_sequence": False,
     "self_talk_min": 20,
     "self_talk_max": 60,
     "self_talk_duration": 5,
@@ -439,6 +469,8 @@ DEFAULTS: dict[str, Any] = {
     "music_filter_enabled": False,
     "music_filter_extra_ids": "",
     "music_title_format": "",
+    "music_audio_device": "",
+    "music_audio_device_name": "",
     "speech_backend": "edge",
     "speech_fallback": "sapi",
     "speech_voice": "",
@@ -461,6 +493,9 @@ DEFAULTS: dict[str, Any] = {
     "asr_model": "",
     "asr_language": "zh",
     "asr_device": 0,
+    "asr_device_name": "",
+    "asr_stream_enabled": True,
+    "asr_partial_interval_ms": 800,
     "asr_auto_send": False,
     "asr_max_seconds": 30,
     "asr_timeout": 30.0,
@@ -1219,6 +1254,16 @@ class Config:
         normalized["stream_capture_mode"] = _bool(
             normalized.get("stream_capture_mode"), False
         )
+        normalized["stream_capture_keycolor"] = _bool(
+            normalized.get("stream_capture_keycolor"), False
+        )
+        key_color = str(normalized.get("stream_key_color") or "").strip()
+        normalized["stream_key_color"] = (
+            key_color if re.fullmatch(r"#[0-9a-fA-F]{6}", key_color) else "#00FF00"
+        )
+        if normalized["stream_capture_keycolor"]:
+            # 色键模式必须是普通顶层窗口：没有 stream 边界时 OBS 枚举不到。
+            normalized["stream_capture_mode"] = True
         normalized["auto_hide_fullscreen"] = _bool(
             normalized.get("auto_hide_fullscreen"), True
         )
@@ -1309,6 +1354,15 @@ class Config:
         )
         normalized["self_talk_enabled"] = _bool(normalized.get("self_talk_enabled"), False)
         normalized["self_talk_texts"] = _text_list(normalized.get("self_talk_texts"))
+        normalized["self_talk_daily_enabled"] = _bool(
+            normalized.get("self_talk_daily_enabled"), True
+        )
+        normalized["self_talk_daily_texts"] = _text_list(
+            normalized.get("self_talk_daily_texts")
+        )
+        normalized["self_talk_daily_sequence"] = _bool(
+            normalized.get("self_talk_daily_sequence"), False
+        )
         normalized["self_talk_min"] = _number(normalized.get("self_talk_min"), 20.0, 1.0, 3600.0)
         normalized["self_talk_max"] = _number(normalized.get("self_talk_max"), 60.0, 1.0, 3600.0)
         normalized["self_talk_duration"] = _number(
@@ -1468,6 +1522,12 @@ class Config:
         normalized["music_title_format"] = str(
             normalized.get("music_title_format") or ""
         ).strip()[:120]
+        normalized["music_audio_device"] = str(
+            normalized.get("music_audio_device") or ""
+        ).strip()[:512]
+        normalized["music_audio_device_name"] = str(
+            normalized.get("music_audio_device_name") or ""
+        ).strip()[:160]
         normalized["speech_backend"] = _speech_backend(normalized.get("speech_backend"))
         normalized["speech_fallback"] = _speech_fallback(normalized.get("speech_fallback"))
         normalized["speech_voice"] = (
@@ -1529,6 +1589,19 @@ class Config:
         )
         normalized["asr_device"] = int(
             round(_number(normalized.get("asr_device"), 0.0, 0.0, 32.0))
+        )
+        normalized["asr_device_name"] = (
+            str(normalized.get("asr_device_name") or "").strip()[:120]
+        )
+        normalized["asr_stream_enabled"] = _bool(
+            normalized.get("asr_stream_enabled"), True
+        )
+        normalized["asr_partial_interval_ms"] = int(
+            round(
+                _number(
+                    normalized.get("asr_partial_interval_ms"), 800.0, 400.0, 3000.0
+                )
+            )
         )
         normalized["asr_auto_send"] = _bool(normalized.get("asr_auto_send"), False)
         normalized["asr_max_seconds"] = int(

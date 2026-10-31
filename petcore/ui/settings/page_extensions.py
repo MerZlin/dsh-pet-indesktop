@@ -524,6 +524,8 @@ class ExtensionsPage(SettingsPage):
         for key, (_label, entry_page) in self._entries.items():
             if entry_page is not page or key == self._current_key:
                 continue
+            # 搜索命中折叠组里的 mod 页时，左栏必须先展开，否则选中项不可见。
+            self._expand_group_of(key)
             for row, row_key in self._row_keys.items():
                 if row_key == key:
                     self.nav.setCurrentRow(row)

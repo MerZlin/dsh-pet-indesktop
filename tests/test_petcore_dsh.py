@@ -253,3 +253,143 @@ def test_installer_rolls_back_profile_when_link_fails(tmp_path: Path) -> None:
     doc = json.loads(package.read_text(encoding="utf-8"))
     assert doc["dependencies"] == {}
     assert doc["dsh"]["profile"]["bundles"] == []
+
+
+# ---------------------------------------------------------------- 审批状态机 / 共享连接
+
+
+def test_view_approval_reaches_terminal_state(app) -> None:
+    view = DshView(None)
+    try:
+        view._on_frame(
+            {
+                "kind": "approval-request",
+                "id": "a1",
+                "tool": "bash",
+                "title": "要跑一下 bash",
+                "args": '{"command":"rm -rf /tmp/x"}',
+            }
+        )
+        assert "等待审批" in view.status.text()
+        card, allow, deny = view._approvals["a1"]
+        assert allow.isEnabled() and deny.isEnabled()
+
+        view._on_frame({"kind": "approval-resolved", "id": "a1", "allow": True})
+        assert "审批已允许" in view.status.text()
+        assert allow.isEnabled() is False and deny.isEnabled() is False
+    finally:
+        view.deleteLater()
+
+
+def test_view_duplicate_approval_id_does_not_stack_cards(app) -> None:
+    view = DshView(None)
+    try:
+        frame = {"kind": "approval-request", "id": "a1", "tool": "bash", "args": "{}"}
+        view._on_frame(frame)
+        before = view.timeline_layout.count()
+        view._on_frame(frame)
+        assert view.timeline_layout.count() == before
+        assert len(view._approvals) == 1
+    finally:
+        view.deleteLater()
+
+
+def test_view_failed_answer_reopens_buttons(app) -> None:
+    view = DshView(None)
+    try:
+        view._on_frame(
+            {"kind": "approval-request", "id": "a1", "tool": "bash", "args": "{}"}
+        )
+        card, allow, deny = view._approvals["a1"]
+        view._answer("a1", True)
+        assert allow.isEnabled() is False and deny.isEnabled() is False
+        view._on_failed("protocol")
+        assert allow.isEnabled() is True and deny.isEnabled() is True
+    finally:
+        view.deleteLater()
+
+
+class _FakeDshClient:
+    def __init__(self) -> None:
+        self.connections = 0
+        self.answers: list[tuple[str, bool]] = []
+        self.sent: list[str] = []
+
+    def ping(self):
+        return {"version": "test"}
+
+    def history(self, limit=20):
+        return []
+
+    def events(self, stop, *, idle_sleep=1.0):
+        type(self).connections = self.connections + 1
+        self.connections += 1
+        yield {"kind": "hello", "version": "test"}
+        while not stop.wait(0.05):
+            pass
+
+    def answer(self, request_id, allow):
+        self.answers.append((request_id, bool(allow)))
+        return {"ok": True}
+
+    def prompt(self, text):
+        self.sent.append(str(text))
+        return {"ok": True}
+
+    def cancel(self):
+        return {"ok": True}
+
+
+def test_hub_shares_one_stream_between_two_views(app) -> None:
+    from petcore.ui.chat.dsh_controller import DshHub
+
+    client = _FakeDshClient()
+    hub = DshHub(client)
+    first = DshView(client, hub=hub)
+    second = DshView(client, hub=hub)
+    try:
+        first.activate()
+        second.activate()
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and client.connections < 1:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        assert client.connections == 1
+        first.deactivate()
+        second.deactivate()
+    finally:
+        hub.shutdown()
+        first.deleteLater()
+        second.deleteLater()
+
+
+def test_history_replay_clears_pending_approval_state(app) -> None:
+    view = DshView(None)
+    try:
+        frame = {"kind": "approval-request", "id": "a1", "tool": "bash", "args": "{}"}
+        view._on_frame(frame)
+        assert "a1" in view._approvals
+        view._clear_rows()
+        assert view._approvals == {}
+        view._on_frame(frame)
+        assert "a1" in view._approvals, "重连后同一审批必须能重新建卡"
+    finally:
+        view.deleteLater()
+
+
+def test_hub_replays_connected_state_to_a_second_view(app) -> None:
+    from petcore.ui.chat.dsh_controller import DshHub
+
+    client = _FakeDshClient()
+    hub = DshHub(client)
+    first = DshView(client, hub=hub)
+    second = DshView(client, hub=hub)
+    try:
+        first.activate()
+        hub._on_connected(True, "0.1.0")
+        second.activate()
+        assert "已连接" in second.status.text()
+    finally:
+        hub.shutdown()
+        first.deleteLater()
+        second.deleteLater()

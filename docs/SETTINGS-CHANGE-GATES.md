@@ -867,3 +867,43 @@ C 盘剩余空间显示选项（性能占用要低）」。
 8 例 + `tests/test_petcore_settings.py` 6 例，先红后绿）✓；布局（720×500 最小窗口 × 13/18px
 两种字号下两枚按钮都落在侧栏视口内且可见、导航仍有高度——**几何断言有，真机截图未做**）；
 跨平台（纯 Qt 文案与键级操作，无平台分支）✓；文档（本节 + L124 + PR 报告 + `INDEX.md` 登记）✓。
+
+### 2026-10-31 — petcore 反馈批次 2：音频设备 / 直播色键 / ASR 实时 / 自语每日
+
+本刀新增 10 个持久键，均为**有稳定默认值的偏好**（诊断/一次性命令不进设置）。
+逐键准入与迁移见下表；设置落点、搜索别名与保存语义见各行。
+
+| 键 | 默认 | 作用域 | 披露 | 依赖 / 失败路径 | 搜索别名 |
+|---|---|---|---|---|---|
+| `music_audio_device` | `""` | 全局 | primary | 空=跟随系统默认；手选端点拔掉时 runtime 回退默认并记一条 warning，不写配置 | 音频输出 / 输出设备 / 耳机 |
+| `music_audio_device_name` | `""` | 全局 | primary | 仅 UI 回显；端点 id 仍在 `music_audio_device`，名字不参与采样 | 输出设备 |
+| `asr_device_name` | `""` | 本宠 | primary | 仅 UI 回显；`asr_device` 已有整数索引 | 麦克风 |
+| `asr_stream_enabled` | `True` | 本宠 | primary | 关闭后不产生 partial，停止后仍做一次完整识别 | 实时 / 预览 / 字幕 |
+| `asr_partial_interval_ms` | `800` | 本宠 | advanced | 400–3000；sapi 实际钳到 ≥1500ms，避免短进程排队 | 刷新间隔 |
+| `stream_capture_keycolor` | `False` | 全局 | primary | 为真时 normalize 强制 `stream_capture_mode=True`；关模式必须先关本键（否则被强制翻回） | 色键 / 绿幕 / OBS / 直播 |
+| `stream_key_color` | `#00FF00` | 全局 | primary | 只接受 `#RRGGBB`，非法值归一为默认；空/坏值不阻止启动 | 色键颜色 / 绿幕 |
+| `self_talk_daily_enabled` | `True` | 本宠 | primary | 每日句失败回退普通候选；状态文件坏/缺失按未说处理 | 每日一句 / 今日台词 |
+| `self_talk_daily_texts` | 12 句 | 本宠 | primary | 每行一条；空池回退 `self_talk_texts`，不阻断自语 | 每日台词池 |
+| `self_talk_daily_sequence` | `False` | 本宠 | advanced | 为真时按 `\|`/换行/句号拆段走 `say_sequence`；显示失败不标记已说 | 连说 / 多气泡 |
+
+**迁移 / 兼容**
+
+- 全部为**新增键**：老配置没有它们 → 取默认；没有旧键/旧入口/旧别名需要去向。
+- `stream_capture_mode` 仍是布尔键（老值原样可用）；`stream_capture_keycolor` 只叠加模式，
+  关闭时先清 keycolor 再清 mode，避免 normalize 的强制关系把「关闭」翻回 true。
+- 音频/ASR 设备名只用于回显，拔设备/换设备不会写脏配置。
+
+**准出对应**
+
+1. **契约**：上述键、默认、作用域、依赖与失败路径；直播/音频/ASR 均实时作用到宿主，
+   取消/关闭按设置窗快照回滚（`AppearancePage.discard_changes` 已含三键）。
+2. **TDD**：`test_petcore_music_audio_device.py`、`test_petcore_music_mod.py`、
+   `test_petcore_capture_probe.py`、`test_petcore_stream_mode.py`、
+   `test_petcore_settings_voice.py`、`test_petcore_settings.py`、
+   `test_petcore_self_talk_daily.py` 覆盖默认、round-trip、取消回滚、坏值归一与设备回退。
+3. **布局/可访问性**：新行都在既有 `SettingsCard.add_row` / `expand=True` 口径内，
+   标签与可访问名可搜索；窄窗不新增横向固定宽度（设备下拉 220px，自检按钮可换行）。
+4. **跨平台**：音频端点/直播读回仅 Windows；非 Windows 分别返回空端点/`supported=false`，
+   设置行保留并说明原因（不创建伪控件）。
+5. **文档/视觉**：本记录 + L141 + PR 报告 + `INDEX.md` 登记；直播三选一与色键颜色
+   在真机 1100×800 / 720×500 由设置页几何测试覆盖，OBS 真机截图未做（见报告）。

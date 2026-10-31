@@ -322,6 +322,25 @@ class MicRecorder:
             api.close(handle)
         return wav_bytes(pcm, sample_rate=self.sample_rate, channels=CHANNELS)
 
+    def peek_wav(self) -> bytes:
+        """录制中取当前已录到的 PCM（不 stop / 不 unprepare）。
+
+        供语音输入的实时预览做增量识别；返回空串表示这一刻还没有数据。
+        只允许在持有 recorder 的录音线程里调用（与 ``stop()`` 同一个线程）。
+        """
+        if not self.recording:
+            return b""
+        api = self._system_api()
+        header, buffer = self._header, self._buffer
+        if header is None or buffer is None:
+            return b""
+        try:
+            size = api.recorded_bytes(header)
+            pcm = api.read_buffer(buffer, size)
+        except Exception:
+            return b""
+        return wav_bytes(pcm, sample_rate=self.sample_rate, channels=CHANNELS)
+
     def cancel(self) -> None:
         if not self.recording:
             return

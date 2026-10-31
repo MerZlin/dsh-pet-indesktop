@@ -23,9 +23,19 @@ BUILTIN_DEFAULT_LAYOUT: dict = {
         {"type": "action", "id": "easter_egg", "visible": True, "section": "tools"},
         {"type": "action", "id": "character", "visible": True, "section": "profile"},
         {"type": "action", "id": "animations_hub", "visible": True, "section": "playback"},
-        {"type": "action", "id": "ai.chat:open", "visible": True, "section": "playback"},
-        {"type": "action", "id": "ai.chat:look_screen", "visible": True, "section": "playback"},
-        {"type": "action", "id": "ai.chat:proactive", "visible": True, "section": "playback"},
+        {
+            "type": "submenu",
+            "id": "ai_hub",
+            "label": "AI 助手",
+            "visible": True,
+            "section": "playback",
+            "icon": "chat",
+            "children": [
+                {"type": "action", "id": "ai.chat:open", "visible": True},
+                {"type": "action", "id": "ai.chat:look_screen", "visible": True},
+                {"type": "action", "id": "ai.chat:proactive", "visible": True},
+            ],
+        },
         {"type": "action", "id": "ai.agent:enabled", "visible": True, "section": "playback"},
         {"type": "action", "id": "ai.chat:screen_capture", "visible": True, "section": "playback"},
         {"type": "action", "id": "playback_speed", "visible": False, "section": "playback"},
@@ -302,6 +312,9 @@ def merge_user_layout(
         registered=registered_set,
         diagnostics=diagnostics,
     )
+    # 模板把 AI 三项收进了 ai_hub；旧的顶层节点必须在合并时一起搬进去，
+    # 否则会变成「新子菜单里只有缺失项、旧项还留在顶层」。
+    migrate_p12_menu(working, default)
     _append_mod_actions(working, registered_set, diagnostics)
     return working, tuple(diagnostics)
 
@@ -374,6 +387,8 @@ def resolve(
             registered=registered_set,
             diagnostics=diagnostics,
         )
+        # 旧用户布局的顶层 AI 项也要收进 ai_hub（菜单重建路径）。
+        migrate_p12_menu(working, default)
     _append_mod_actions(working, registered_set, diagnostics)
 
     def resolve_nodes(nodes) -> list[dict]:
@@ -766,6 +781,98 @@ def migrate_p11_menu(layout: dict) -> bool:
 
     walk(nodes)
     return changed
+
+
+#: 「AI 助手」二级菜单与它收拢的三项（反馈批次 2）。
+AI_HUB_ID = "ai_hub"
+AI_HUB_ACTIONS = ("ai.chat:open", "ai.chat:look_screen", "ai.chat:proactive")
+
+
+def migrate_p12_menu(layout: dict, template: Mapping | None = None) -> bool:
+    """把 AI 对话/看看屏幕/主动识屏收进「AI 助手」二级菜单（幂等）。
+
+    旧布局里这三项是顶层 action；模板改成 ai_hub 后，``_merge_template_actions``
+    只会补缺失项，不会把已存在的项搬进去，所以必须显式迁移。
+    """
+    if not isinstance(layout, dict) or layout.get("layout_id") != DEFAULT_LAYOUT_ID:
+        return False
+    nodes = layout.get("nodes")
+    if not isinstance(nodes, list):
+        return False
+    try:
+        template_nodes = (template or load_default()).get("nodes", [])
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    template_hub = _find_submenu(template_nodes, AI_HUB_ID)
+    if not isinstance(template_hub, dict):
+        return False
+    before = deepcopy(nodes)
+
+    existing: dict[str, dict] = {}
+    for action_id in AI_HUB_ACTIONS:
+        found = _find_action(nodes, action_id)
+        if found is not None:
+            existing[action_id] = deepcopy(found)
+
+    hub = _find_submenu(nodes, AI_HUB_ID)
+    if hub is None:
+        # 自定义布局里没有 AI 项时不要凭空注入一个空 hub（菜单编辑器/精简布局
+        # 都只注册了别的 action）。
+        if not existing:
+            return False
+        hub = deepcopy(template_hub)
+        hub["children"] = []
+        # 把 hub 放在被移动 action 里最靠前那个的原位置；模板锚点只兜底。
+        # 否则精简布局里 `_insert_at_template_anchor` 会把 AI 助手排到设置上方。
+        first_index = next(
+            (
+                index
+                for index, node in enumerate(nodes)
+                if isinstance(node, dict)
+                and node.get("type") == "action"
+                and str(node.get("id") or "") in existing
+            ),
+            None,
+        )
+        if first_index is not None:
+            nodes.insert(min(first_index, len(nodes)), hub)
+        else:
+            template_index = next(
+                (
+                    index
+                    for index, node in enumerate(template_nodes)
+                    if isinstance(node, dict)
+                    and node.get("type") == "submenu"
+                    and str(node.get("id") or "") == AI_HUB_ID
+                ),
+                len(template_nodes),
+            )
+            _insert_at_template_anchor(nodes, hub, template_nodes, template_index)
+
+    if hub is not None and not existing:
+        # 已有 hub 但里面没有任何 AI 项：可能是用户自己的自定义分组，别塞东西。
+        return False
+    for action_id in AI_HUB_ACTIONS:
+        _take_action(nodes, action_id)
+
+    template_children = {
+        str(node.get("id") or ""): node
+        for node in template_hub.get("children", ())
+        if isinstance(node, dict) and node.get("type") == "action"
+    }
+    children: list[dict] = []
+    for action_id in AI_HUB_ACTIONS:
+        node = existing.get(action_id) or deepcopy(template_children.get(action_id) or {})
+        node["type"] = "action"
+        node["id"] = action_id
+        node.setdefault("visible", True)
+        children.append(node)
+    hub["children"] = children
+
+    if nodes == before:
+        return False
+    _clean_submenu_children(nodes)
+    return True
 
 
 def _apply_legacy_hidden(nodes, hidden_ids: set[str]) -> None:

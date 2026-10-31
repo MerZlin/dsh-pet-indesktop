@@ -52,6 +52,18 @@ QListWidget#session-list::item:hover { background: #edf1f7; }
 QListWidget#session-list::item:selected { background: #e4ebfc; color: #326de6; }
 QFrame#session-row { background: transparent; border: none; }
 QLabel#session-row-title { color: #343a44; background: transparent; }
+QLabel#session-row-title[archived="true"] { color: #9aa1ab; }
+QToolButton#session-more-button {
+    width: 24px; height: 24px; border: none; border-radius: 6px;
+    background: transparent; color: #626a76;
+}
+QToolButton#session-more-button:hover { background: #e8ecf2; }
+QToolButton#archive-toggle-button {
+    min-height: 30px; padding: 0 8px; border: none; border-radius: 8px;
+    background: transparent; color: #626a76; font-size: @F_10@;
+}
+QToolButton#archive-toggle-button:hover { background: #e8ecf2; }
+QToolButton#archive-toggle-button:checked { color: #ffffff; background: @ACCENT@; }
 QFrame#sidebar-footer { background: transparent; border: none; }
 QFrame#header-status { background: transparent; border: none; }
 QLabel#status-dot { color: #28a56b; font-size: @F_9@; }
@@ -158,6 +170,9 @@ QPlainTextEdit#chat-input {
 QPlainTextEdit#chat-input:focus { border: none; }
 QFrame#composer-toolbar { background: transparent; border: none; }
 QLabel#composer-hint { color: #a0a6b0; font-size: @F_9@; }
+QLabel#composer-partial {
+    color: #6f7782; font-size: @F_9@; padding: 0 2px;
+}
 QToolButton#composer-attach-button {
     width: 29px; height: 29px; border: none; border-radius: 14px; background: transparent;
     color: #252a32;

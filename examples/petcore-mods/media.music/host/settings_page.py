@@ -50,6 +50,8 @@ class MusicPage(SettingsPage):
     detect_done = Signal(str)
     diagnose_done = Signal(str)
     transport_done = Signal(str)
+    #: 设备枚举在短命线程里跑，结果用 Qt 排队信号回 GUI（不跨线程碰控件）。
+    devices_loaded = Signal(object)
 
     def __init__(self, host, parent=None):
         super().__init__(host, parent)
@@ -244,6 +246,39 @@ class MusicPage(SettingsPage):
             expand=True,
         )
 
+        # -------------------------------------------------------- 输出设备
+        device_card = self.section("音频输出设备", level=3)
+        device_row = QWidget(self)
+        device_layout = QHBoxLayout(device_row)
+        device_layout.setContentsMargins(0, 0, 0, 0)
+        device_layout.setSpacing(8)
+        self.audio_device = QComboBox(device_row)
+        self.audio_device.setMinimumWidth(220)
+        current_device = str(config.get("music_audio_device", "") or "").strip()
+        current_name = str(config.get("music_audio_device_name", "") or "").strip()
+        self.audio_device.addItem("跟随系统默认", "")
+        if current_device:
+            self.audio_device.addItem(current_name or current_device, current_device)
+            self.audio_device.setCurrentIndex(1)
+        self.audio_device.currentIndexChanged.connect(self._on_audio_device_changed)
+        device_layout.addWidget(self.audio_device, 1)
+        self.audio_refresh = QPushButton("刷新设备", device_row)
+        self.audio_refresh.clicked.connect(self._load_audio_devices)
+        device_layout.addWidget(self.audio_refresh)
+        device_card.add_row(
+            "识别用的输出设备",
+            device_row,
+            "默认跟随系统默认设备；插拔耳机后会自动切换。手动选设备后，"
+            "设备被拔掉会回退默认并记一条诊断。只影响「谁在出声」的判定。",
+            expand=True,
+        )
+        self.audio_device_status = QLabel("", self)
+        self.audio_device_status.setObjectName("settingHint")
+        self.audio_device_status.setWordWrap(True)
+        device_card.add_row("设备状态", self.audio_device_status, "", expand=True)
+        self.devices_loaded.connect(self._apply_audio_devices)
+        self._load_audio_devices()
+
         # -------------------------------------------------------- 切歌
         transport_card = self.section("切歌与播放控制", level=3)
         buttons = QWidget(self)
@@ -320,6 +355,68 @@ class MusicPage(SettingsPage):
         self.config().set(key, value)
         self.changed.emit()
 
+    def _load_audio_devices(self) -> None:
+        """设备枚举走短命线程：COM 首次 Activate 会让 GUI 卡住几十毫秒。"""
+        if getattr(self, "_audio_loading", False):
+            return
+        self._audio_loading = True
+        self.audio_device_status.setText("正在读取输出设备…")
+        self.audio_refresh.setEnabled(False)
+
+        def work() -> None:
+            try:
+                devices = audio_sessions.list_endpoints()
+            except Exception:
+                devices = ()
+            try:
+                self.devices_loaded.emit(devices)
+            except RuntimeError:
+                # 页面在读取期间被销毁。
+                pass
+
+        threading.Thread(
+            target=work, name="music-audio-device-list", daemon=True
+        ).start()
+
+    def _apply_audio_devices(self, devices) -> None:
+        self._audio_loading = False
+        self.audio_refresh.setEnabled(True)
+        current = str(self.audio_device.currentData() or self.config().get(
+            "music_audio_device", ""
+        ) or "").strip()
+        self.audio_device.blockSignals(True)
+        self.audio_device.clear()
+        self.audio_device.addItem("跟随系统默认", "")
+        seen: set[str] = set()
+        for device_id, name in tuple(devices or ()):
+            device_id = str(device_id or "").strip()
+            if not device_id or device_id in seen:
+                continue
+            seen.add(device_id)
+            self.audio_device.addItem(str(name or device_id), device_id)
+        if current and current not in seen:
+            saved_name = str(
+                self.config().get("music_audio_device_name", "") or ""
+            ).strip()
+            self.audio_device.addItem(saved_name or current, current)
+        index = self.audio_device.findData(current)
+        self.audio_device.setCurrentIndex(index if index >= 0 else 0)
+        self.audio_device.blockSignals(False)
+        if devices:
+            self.audio_device_status.setText(f"读到 {len(seen)} 个输出设备。")
+        else:
+            self.audio_device_status.setText(
+                "没有读到输出设备（音频服务未启动或本平台不支持）；当前按系统默认采样。"
+            )
+
+    def _on_audio_device_changed(self, _index: int) -> None:
+        device_id = str(self.audio_device.currentData() or "").strip()
+        name = str(self.audio_device.currentText() or "").strip()
+        if not device_id:
+            name = ""
+        self._write("music_audio_device", device_id)
+        self._write("music_audio_device_name", name)
+
     def _paths(self) -> dict[str, str]:
         raw = self.config().get("music_player_paths", {})
         return dict(raw) if isinstance(raw, dict) else {}
@@ -347,6 +444,12 @@ class MusicPage(SettingsPage):
             "music_filter_enabled": bool(self.filter_enabled.isChecked()),
             "music_filter_extra_ids": str(self.filter_extra.text().strip()),
             "music_title_format": str(self.title_format.text().strip()),
+            "music_audio_device": str(self.audio_device.currentData() or ""),
+            "music_audio_device_name": (
+                ""
+                if not str(self.audio_device.currentData() or "")
+                else str(self.audio_device.currentText() or "")
+            ),
         }
 
     def dirty(self) -> bool:
@@ -388,6 +491,12 @@ class MusicPage(SettingsPage):
         index = self.player.findData(str(values.get("music_player") or ""))
         self.player.setCurrentIndex(index if index >= 0 else 0)
         self.player.blockSignals(False)
+        self.audio_device.blockSignals(True)
+        index = self.audio_device.findData(
+            str(values.get("music_audio_device") or "")
+        )
+        self.audio_device.setCurrentIndex(index if index >= 0 else 0)
+        self.audio_device.blockSignals(False)
         paths = values.get("music_player_paths") or {}
         for key, edit in self.path_edits.items():
             edit.blockSignals(True)
@@ -427,6 +536,10 @@ class MusicPage(SettingsPage):
             "foobar",
             "aimp",
             "音频会话",
+            "音频输出",
+            "输出设备",
+            "耳机",
+            "扬声器",
             "music",
             "lyric",
         ]
@@ -497,6 +610,10 @@ class MusicPage(SettingsPage):
         allowed = self._allowed_ids_from_ui()
         targets = players.recognition_targets(self._paths(), self.filter_extra.text().strip())
         title_format = self.title_format.text().strip()
+        device_id = str(self.config().get("music_audio_device", "") or "").strip()
+        device_name = str(
+            self.config().get("music_audio_device_name", "") or ""
+        ).strip()
 
         def work() -> None:
             # SMTC 走有界读取线程：系统媒体服务卡死时，诊断按钮不许永远转圈。
@@ -508,13 +625,20 @@ class MusicPage(SettingsPage):
                     allowed_ids=allowed or None,
                     targets=targets,
                     smtc=reader.read,
+                    # 诊断必须看用户手选的那台设备，不能退回无参默认端点。
+                    audio=lambda: audio_sessions.snapshot(device_id),
                 )
                 decision = recognizer.decide(
                     sample,
                     allowed_ids=allowed,
                     title_format=title_format,
                 )
-                text = diagnostics.render(sample, decision)
+                label = (
+                    "跟随系统默认"
+                    if not device_id
+                    else (device_name or device_id)
+                )
+                text = f"输出设备：{label}\n" + diagnostics.render(sample, decision)
             except Exception:
                 text = "采样失败：读取系统媒体信息时出了意外，请稍后重试。"
             finally:
