@@ -1,21 +1,26 @@
 {
   "name": "@dsh-pet/bridge",
-  "version": "0.2.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js"
   },
-  "description": "dsh-pet 桌宠桥接：把 DSH agent 状态事件写入本地 jsonl，并提供可选的 watchdog 控制（仅本地文件，无任何网络请求）",
+  "description": "dsh-pet 桌宠桥接 v2：同一进程写脱敏状态 JSONL，并提供本地回环 HTTP+SSE 聊天通道（提示词、历史、审批、pet_control）",
   "license": "MIT",
   "files": [
     "index.js",
+    "channel.js",
     "cordis.patch.yml"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "manifestVersion": 1,
+    "engines": {
+      "dsh": ">=0.2.0-rc.2"
     }
   }
 }

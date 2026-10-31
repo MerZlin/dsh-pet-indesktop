@@ -823,6 +823,78 @@ def test_settings_page_detect_result_is_shown(app):
     assert page.copy_button.isEnabled() is True
 
 
+def _wait_for_qt(cond, timeout_s: float = 5.0) -> bool:
+    """宽预算等待：设置页的采样在后台线程，结果经排队信号回 GUI 线程。"""
+    from PySide6.QtWidgets import QApplication
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        if cond():
+            return True
+        time.sleep(0.01)
+    QApplication.processEvents()
+    return cond()
+
+
+def test_settings_page_detect_still_renders_partial_diagnostics_when_sampling_raises(
+    app, monkeypatch
+):
+    """采样编排抛异常：三节照样渲染 + 写清原因，按钮必须恢复（不许永久转圈）。"""
+    settings_mod = sys.modules[HOST_PKG].settings_page
+    page = sys.modules[HOST_PKG].MusicPage(_Host({"music_enabled": True}))
+
+    def boom(**_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(settings_mod.sampling, "collect", boom)
+    page._detect()
+
+    assert _wait_for_qt(
+        lambda: page.detect_button.isEnabled() and page.copy_button.isEnabled()
+    )
+    text = page.diagnose_view.toPlainText()
+    assert "SMTC：" in text
+    assert "音频会话：" in text
+    assert "播放器窗口标题：" in text
+    assert "采样中断" in text
+
+
+def test_settings_page_detect_resets_the_shared_reader_and_bounds_the_sources(
+    app, monkeypatch
+):
+    """每次点击都 reset 共用 reader；音频/窗口源按有界预算采集。"""
+    settings_mod = sys.modules[HOST_PKG].settings_page
+    page = sys.modules[HOST_PKG].MusicPage(_Host({"music_enabled": True}))
+
+    class _Reader:
+        resets = 0
+
+        def reset(self):
+            self.resets += 1
+
+        def read(self, **_kwargs):
+            return now_playing.SmtcSample(reason="读取系统媒体会话超时。", degraded=True)
+
+    reader = _Reader()
+    monkeypatch.setattr(settings_mod, "_detect_reader", lambda: reader)
+    seen: dict = {}
+
+    def collect(**kwargs):
+        seen.update(kwargs)
+        return settings_mod.sampling.Sample(audio_error="音频会话：读取超时（8 秒）")
+
+    monkeypatch.setattr(settings_mod.sampling, "collect", collect)
+    page._detect()
+
+    assert _wait_for_qt(
+        lambda: page.detect_button.isEnabled()
+        and "读取超时" in page.diagnose_view.toPlainText()
+    )
+    assert reader.resets == 1, "每次点击都必须先 reset（否则「已停止重试」永远回不来）"
+    assert seen.get("source_timeout") == 8.0
+
+
 def test_settings_page_title_format_round_trips(app):
     page = sys.modules[HOST_PKG].MusicPage(_Host({"music_enabled": True}))
     page.title_format.setText("%artist% - %title%")

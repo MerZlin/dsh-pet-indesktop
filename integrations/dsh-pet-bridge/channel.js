@@ -14,7 +14,7 @@
  *      桌宠点同意 → 记一次性通行证 → 再开一轮 followup 让它接着做。
  */
 import { createServer } from 'node:http'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   mkdirSync,
   writeFileSync,
@@ -28,14 +28,12 @@ import {
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-export const name = 'pet-channel'
-export const inject = ['agents', 'sessionQuery', 'tools']
-
+//: 合并进 `@dsh-pet/bridge`：不再单独导出 Cordis 插件名/inject，由 index.js
+//: 统一声明并调用 `applyChannel(ctx, config)`。
+const VERSION = '2.0.0'
 //: 命令记录与事件记录同一个目录；文件名也以 dsh* 开头，桌宠的 GlobTailer 能扫到。
 const BOOT_ID = randomUUID().replace(/-/g, '')
 const COMMAND_MAX_BYTES = 1024 * 1024
-
-const VERSION = '0.1.0'
 
 const DEFAULTS = {
   port: 6791,
@@ -74,6 +72,36 @@ const textOf = (content) => {
     .join('')
 }
 
+//: DSH 0.2.0 实测用 `reasoning` 块，桌面端与历史里也出现过 `thinking`/`thought`；
+//: 一块思维链可以有多段（同一 step 里多条），段落之间用空行分隔，桌宠按行显示
+//: 「已思考 N 字」才不会把两段粘成一句。
+const reasoningOf = (content) => {
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((b) => b && ['thinking', 'reasoning', 'thought'].includes(String(b.type)))
+    .map((b) => String(b.text ?? b.reasoning ?? ''))
+    .filter((t) => t !== '')
+    .join('\n\n')
+}
+
+//: DSH 每轮会写多条 UserMessage，只有 source.kind="user" 才是真人输入；
+//: runtime-context / skill-catalog / time-context / plugin 都是注入的上下文
+//: （实测首轮就有 3 条、技能目录上万字），history 不能把它们当用户发言回放。
+export const isInternalUser = (ev) => {
+  const source = ev?.data?.source ?? ev?.data?.message?.source
+  const kind = String(source?.kind ?? '')
+  return kind !== '' && kind !== 'user'
+}
+
+const PET_CONTEXT_MARK = '【桌宠上下文·仅供理解】'
+const USER_TEXT_MARK = '【用户】'
+const stripPetContext = (text) => {
+  const value = String(text ?? '')
+  if (!value.startsWith(PET_CONTEXT_MARK)) return value
+  const index = value.lastIndexOf(USER_TEXT_MARK)
+  return index >= 0 ? value.slice(index + USER_TEXT_MARK.length).trim() : value
+}
+
 const clip = (s, n) => {
   const t = String(s ?? '')
   return t.length > n ? `${t.slice(0, n)}…` : t
@@ -87,6 +115,51 @@ function toolArgs(exec) {
     try { return JSON.parse(raw) } catch { return {} }
   }
   return typeof raw === 'object' ? raw : {}
+}
+
+//: 审批只对「真正要执行的东西」负责：DSH 在同意后的续跑里会改写 description
+//: （"Run user-supplied…" → "Retry approved…"），把说明文字算进哈希会让
+//: 一次性通行证永远匹配不上——每次重试都再弹一张卡，桌宠侧看起来就是审批卡死。
+const APPROVAL_IGNORED_KEYS = new Set([
+  'description', 'justification', 'explanation', 'reason', 'timeout', 'timeout_ms',
+])
+
+function approvalArgs(exec) {
+  const raw = toolArgs(exec)
+  const clean = {}
+  for (const key of Object.keys(raw).sort()) {
+    if (APPROVAL_IGNORED_KEYS.has(key)) continue
+    clean[key] = raw[key]
+  }
+  return clean
+}
+
+/** 一次性通行证的匹配键：工具参数（忽略说明类字段）的稳定摘要。 */
+export function approvalFingerprint(exec) {
+  return createHash('sha1')
+    .update(JSON.stringify(approvalArgs(exec)))
+    .digest('hex')
+    .slice(0, 16)
+}
+
+const normalizeCommand = (value) => String(value ?? '').replace(/\s+/g, ' ').trim()
+
+/**
+ * 续跑算不算「同一个操作」：DSH 在同意后会重发同一条命令、**在尾部追加探针**
+ * （2026-11-01 真机实测 `Remove-Item … -Force; "exit=$LASTEXITCODE"`）。
+ * 只比 argsHash 会让这次续跑再弹一张卡——用户看到的是「点了同意又弹一张」。
+ *
+ * 规则：允许「已批准命令 + 非危险装饰」，反过来不行；追加段里出现任何危险动词
+ * 仍然重新审批（`Remove-Item A` 批准后 `; Remove-Item B` 必须再问）。
+ */
+export function sameCommandFamily(approved, next) {
+  const a = normalizeCommand(approved)
+  const b = normalizeCommand(next)
+  if (!a || !b) return false
+  if (a === b) return true
+  if (!b.startsWith(a)) return false
+  const tail = b.slice(a.length)
+  return !DESTRUCTIVE_CMD.test(tail)
 }
 
 /** 这次工具调用要不要先问桌宠。拿不到参数就按危险处理（fail closed）。 */
@@ -104,7 +177,54 @@ function needsApproval(exec) {
   return false
 }
 
-export function apply(ctx, rawConfig = {}) {
+// ---------- 事件 → 桌宠帧 ----------
+/**
+ * sessionQuery 事件 → 桌宠 SSE 帧（纯函数，模块级便于单测）。
+ * assistant/message 同时带 text 与 reasoning：DSH 桌面端显示「已思考 N 字」，
+ * 桌宠视图要对齐同一条信息，所以思维链跟正文一起推过去。
+ */
+export function frameOf(ev) {
+  const d = ev?.data ?? {}
+  switch (ev.type) {
+    case 'turn/start': return { kind: 'turn-start', turn: d.turn }
+    case 'step/start': return { kind: 'step', turn: d.turn, step: d.step }
+    case 'tool/call':
+      return { kind: 'tool-call', turn: d.turn, step: d.step, callId: d.callId, tool: d.name, args: clip(d.arguments, 1200) }
+    case 'tool/result': {
+      const text = textOf(d.message?.content)
+      return {
+        kind: 'tool-result',
+        turn: d.turn,
+        step: d.step,
+        callId: d.message?.toolCallId ?? d.callId,
+        ok: !d.error && !d.message?.isError,
+        error: d.error?.reason ?? d.error?.name ?? null,
+        text: clip(text, 2000),
+      }
+    }
+    case 'assistant/message': {
+      const content = d.message?.content
+      return {
+        kind: 'assistant',
+        turn: d.turn,
+        step: d.step,
+        text: clip(textOf(content), 8000),
+        reasoning: clip(reasoningOf(content), 8000),
+        usage: d.usage ?? null,
+      }
+    }
+    case 'turn/end':
+      return {
+        kind: 'turn-end',
+        turn: d.turn,
+        reason: d.reason?.kind ?? 'unknown',
+        detail: d.reason ? clip(JSON.stringify(d.reason), 800) : null,
+      }
+    default: return null
+  }
+}
+
+export function applyChannel(ctx, rawConfig = {}) {
   try {
     start(ctx, rawConfig)
   } catch (err) {
@@ -131,13 +251,15 @@ function start(ctx, rawConfig) {
   }
 
   // ---------- 持久状态 ----------
-  let state = { sessions: {}, token: '', approved: 0, rejected: 0 }
+  let state = { sessions: {}, archived: [], token: '', approved: 0, rejected: 0 }
   try {
     if (existsSync(stateFile)) state = { ...state, ...JSON.parse(readFileSync(stateFile, 'utf8')) }
   } catch { log('state file unreadable, starting fresh') }
   if (!state.token) state.token = randomUUID().replace(/-/g, '')
   if (cfg.token) state.token = String(cfg.token)
   const token = state.token
+  //: pet_control 是否真的注册进 DSH 的工具表；ping/诊断不能再谎报 true。
+  let petControlReady = false
 
   const saveState = () => {
     try {
@@ -193,9 +315,9 @@ function start(ctx, rawConfig) {
     }
   }
 
-  registerPetControl(ctx, writePetCommand, log).catch((e) => {
-    log('pet_control setup failed', String(e?.message ?? e))
-  })
+  registerPetControl(ctx, writePetCommand, log)
+    .then((ok) => { petControlReady = Boolean(ok) })
+    .catch((e) => { log('pet_control setup failed', String(e?.message ?? e)) })
 
   //: 斜杠命令兜底：模型不需要工具也能驱动桌宠。
   try {
@@ -221,17 +343,30 @@ function start(ctx, rawConfig) {
   const pending = new Map()
   /** 一次性通行证：sessionId -> { tool, until } */
   const grants = new Map()
+  /** 已经处理过的审批 id（重复 answer 幂等返回 200） */
+  const resolvedApprovals = new Set()
   /** 已经挂过闸的会话 */
   const gated = new Set()
 
   // ---------- 推送 ----------
+  //: 传输层 seq（用于 SSE Last-Event-ID / since 重放）；DSH 自己的事件 seq 放 eventSeq。
+  const frameRing = []
+  let frameSeq = 0
   function broadcast(frame) {
-    const payload = `data: ${JSON.stringify(frame)}\n\n`
+    const payload = `id: ${frame.seq}\ndata: ${JSON.stringify(frame)}\n\n`
     for (const res of clients) {
       try { res.write(payload) } catch { clients.delete(res) }
     }
   }
-  const push = (kind, data = {}) => broadcast({ kind, time: Date.now(), ...data })
+  const push = (kind, data = {}) => {
+    const frame = { kind, time: Date.now(), ...data }
+    if (typeof frame.seq === 'number') frame.eventSeq = frame.seq
+    frame.seq = ++frameSeq
+    frameRing.push(frame)
+    if (frameRing.length > 512) frameRing.shift()
+    broadcast(frame)
+    return frame
+  }
 
   // ---------- 读事件 ----------
   async function readEvents(sessionId) {
@@ -245,16 +380,37 @@ function start(ctx, rawConfig) {
   }
 
   // ---------- 审批闸 ----------
+  function clearPending() {
+    let cleared = 0
+    for (const [id, item] of pending) {
+      pending.delete(id)
+      clearTimeout(item.timer)
+      push('approval-resolved', { id, allow: false, cancelled: true, tool: item.tool })
+      cleared += 1
+    }
+    return cleared
+  }
+
   function gate(exec, next, sessionId) {
     if (!cfg.askApproval) return next()
     if (!needsApproval(exec)) return next()
 
     const tool = String(exec?.name ?? '')
+    const args = clip(JSON.stringify(toolArgs(exec)), 1200)
+    const argsHash = approvalFingerprint(exec)
+    const command = String(toolArgs(exec).command ?? toolArgs(exec).cmd ?? '')
     const grant = grants.get(sessionId)
     if (grant && grant.until > Date.now() && grant.tool === tool) {
-      grants.delete(sessionId) // 用掉即焚
-      log('grant consumed', tool)
-      return next()
+      if (grant.argsHash === argsHash) {
+        log('grant consumed', tool)
+        return next()
+      }
+      if (sameCommandFamily(grant.command, command)) {
+        // 同一条命令的续跑（DSH 会追加 exit-code 探针）：放行，且**保留** grant，
+        // 否则模型再重发一次又要点一遍同意。
+        log('grant continued', tool)
+        return next()
+      }
     }
 
     // 同一会话只留一个待审批：旧卡还没点就来了新审批时，取消旧卡再挂新卡。
@@ -267,7 +423,6 @@ function start(ctx, rawConfig) {
     }
 
     const id = randomUUID()
-    const args = clip(JSON.stringify(toolArgs(exec)), 1200)
     const timeoutMs = Math.max(1, Number(cfg.approvalTimeoutMinutes) || 10) * 60_000
     const timer = setTimeout(() => {
       const item = pending.get(id)
@@ -280,12 +435,17 @@ function start(ctx, rawConfig) {
       }).catch(() => { /* 超时后的收尾失败不致命 */ })
     }, timeoutMs)
     timer.unref?.()
-    pending.set(id, { sessionId, tool, args, at: Date.now(), timer })
+    const expiresAt = Date.now() + timeoutMs
+    pending.set(id, {
+      sessionId, tool, args, argsHash, command, at: Date.now(), expiresAt, timer,
+    })
     push('approval-request', {
       id,
       sessionId,
       tool,
       args,
+      argsHash,
+      expiresAt,
       grantMinutes: cfg.grantMinutes,
       timeoutMinutes: Math.round(timeoutMs / 60_000),
       title: `要跑一下 ${tool}`,
@@ -309,12 +469,25 @@ function start(ctx, rawConfig) {
   }
 
   function answer(id, allow) {
-    const p = pending.get(id)
-    if (!p) return false
-    pending.delete(id)
+    const key = String(id ?? '')
+    if (resolvedApprovals.has(key)) return 'ok'
+    const p = pending.get(key)
+    if (!p) return 'expired'
+    pending.delete(key)
+    resolvedApprovals.add(key)
+    if (resolvedApprovals.size > 200) {
+      const first = resolvedApprovals.values().next().value
+      resolvedApprovals.delete(first)
+    }
     clearTimeout(p.timer)
     if (allow) {
-      grants.set(p.sessionId, { tool: p.tool, until: Date.now() + cfg.grantMinutes * 60_000 })
+      grants.set(p.sessionId, {
+        tool: p.tool,
+        argsHash: p.argsHash,
+        //: 续跑比对用：同一条命令尾部被追加探针时仍算同一个操作。
+        command: p.command ?? '',
+        until: Date.now() + cfg.grantMinutes * 60_000,
+      })
       state.approved = (state.approved ?? 0) + 1
       saveState()
       push('approval-resolved', { id, allow: true, tool: p.tool })
@@ -330,7 +503,7 @@ function start(ctx, rawConfig) {
       submit('（主人在桌宠上拒绝了这次操作，别绕开它，说一句你打算怎么换个做法。）', { internal: true })
         .catch(() => { /* 拒绝后的收尾失败不致命 */ })
     }
-    return true
+    return 'ok'
   }
 
   // ---------- 会话车道 ----------
@@ -438,7 +611,24 @@ function start(ctx, rawConfig) {
     return agent
   }
 
-  async function ensureLane() {
+  async function ensureLane(forceNew = false) {
+    if (forceNew) {
+      const old = lanes.get('pet')
+      if (old?.poller) clearInterval(old.poller)
+      try { await old?.agent?.cancel?.(new Error('pet-channel: new session')) } catch { /* noop */ }
+      // 换会话时旧会话的待审批必须收掉：车道已经走了，再点同意也没有重试。
+      clearPending()
+      const oldId = old?.sessionId || state.sessions.pet?.id
+      if (oldId) {
+        state.archived = [
+          { id: oldId, title: `DSH ${new Date().toLocaleString()}`, archivedAt: Date.now() },
+          ...(Array.isArray(state.archived) ? state.archived : []),
+        ].slice(0, 50)
+      }
+      lanes.delete('pet')
+      delete state.sessions.pet
+      saveState()
+    }
     const live = lanes.get('pet')
     if (live?.agent) return live
 
@@ -482,60 +672,35 @@ function start(ctx, rawConfig) {
     return lane
   }
 
-  async function makeUserMessage(text) {
+  async function makeUserMessage(text, opts = {}) {
     const content = [{ type: 'text', text }]
+    const source = { kind: opts.internal ? 'plugin' : 'user' }
     try {
       const mod = await import('@deepseek-ai/dsh-llm')
       if (typeof mod.createUserMessage === 'function') {
-        return mod.createUserMessage({ content, source: { kind: 'user' } })
+        return mod.createUserMessage({ content, source })
       }
     } catch { /* 退化成裸对象，DSH 认这个形状 */ }
-    return { id: randomUUID(), role: 'user', content, source: { kind: 'user' } }
+    return { id: randomUUID(), role: 'user', content, source }
   }
 
-  // ---------- 事件 → 桌宠帧 ----------
-  function frameOf(ev) {
-    const d = ev?.data ?? {}
-    switch (ev.type) {
-      case 'turn/start': return { kind: 'turn-start', turn: d.turn }
-      case 'step/start': return { kind: 'step', turn: d.turn, step: d.step }
-      case 'tool/call':
-        return { kind: 'tool-call', turn: d.turn, step: d.step, callId: d.callId, tool: d.name, args: clip(d.arguments, 1200) }
-      case 'tool/result': {
-        const text = textOf(d.message?.content)
-        return {
-          kind: 'tool-result',
-          turn: d.turn,
-          step: d.step,
-          callId: d.message?.toolCallId ?? d.callId,
-          ok: !d.error && !d.message?.isError,
-          error: d.error?.reason ?? d.error?.name ?? null,
-          text: clip(text, 2000),
-        }
-      }
-      case 'assistant/message':
-        return { kind: 'assistant', turn: d.turn, step: d.step, text: clip(textOf(d.message?.content), 8000), usage: d.usage ?? null }
-      case 'turn/end':
-        return {
-          kind: 'turn-end',
-          turn: d.turn,
-          reason: d.reason?.kind ?? 'unknown',
-          detail: d.reason ? clip(JSON.stringify(d.reason), 800) : null,
-        }
-      default: return null
-    }
-  }
-
+  // ---------- 事件 → 桌宠帧（frameOf 提到模块级，纯函数便于单测） ----------
   function startPoller(lane) {
     if (lane.poller) return
     lane.polling = true
     lane.poller = setInterval(async () => {
-      const events = await readEvents(lane.sessionId)
-      for (const ev of events) {
-        if (typeof ev?.seq !== 'number' || ev.seq <= lane.watermark) continue
-        lane.watermark = ev.seq
-        const frame = frameOf(ev)
-        if (frame) push(frame.kind, { ...frame, sessionId: lane.sessionId, seq: ev.seq })
+      if (lane.pollingBusy) return
+      lane.pollingBusy = true
+      try {
+        const events = await readEvents(lane.sessionId)
+        for (const ev of events) {
+          if (typeof ev?.seq !== 'number' || ev.seq <= lane.watermark) continue
+          lane.watermark = ev.seq
+          const frame = frameOf(ev)
+          if (frame) push(frame.kind, { ...frame, sessionId: lane.sessionId, seq: ev.seq })
+        }
+      } finally {
+        lane.pollingBusy = false
       }
     }, cfg.pollMs)
     lane.poller.unref?.()
@@ -566,7 +731,10 @@ function start(ctx, rawConfig) {
 
   function enqueue(lane, text, opts) {
     lane.chain = lane.chain.then(async () => {
-      const message = await makeUserMessage(text)
+      const composed = opts.context
+        ? `${PET_CONTEXT_MARK}\n${opts.context}\n${USER_TEXT_MARK}\n${text}`
+        : text
+      const message = await makeUserMessage(composed)
       if (!opts.internal) push('user', { sessionId: lane.sessionId, text: clip(text, 2000) })
       startPoller(lane)
       const t0 = Date.now()
@@ -641,8 +809,9 @@ function start(ctx, rawConfig) {
     if (path === '/' || path === '/pet/ping') {
       return json(res, 200, {
         ok: true,
-        plugin: 'dsh-pet-channel',
+        plugin: 'dsh-pet-bridge',
         version: VERSION,
+        bootId: BOOT_ID,
         sessionId: lane?.sessionId ?? null,
         clients: clients.size,
         pending: pending.size,
@@ -651,7 +820,8 @@ function start(ctx, rawConfig) {
         askApproval: Boolean(cfg.askApproval),
         approvalTimeoutMinutes: Number(cfg.approvalTimeoutMinutes) || 10,
         sandboxMode: cfg.sandboxMode,
-        commands: true,
+        commands: petControlReady,
+        sessions: 1 + (Array.isArray(state.archived) ? state.archived.length : 0),
       })
     }
 
@@ -696,7 +866,23 @@ function start(ctx, rawConfig) {
         connection: 'keep-alive',
       })
       res.write(': pet-channel\n\n')
-      res.write(`data: ${JSON.stringify({ kind: 'hello', sessionId: lane?.sessionId ?? null, version: VERSION })}\n\n`)
+      const sinceRaw = url.searchParams.get('since') ?? req.headers['last-event-id']
+      const since = Number(sinceRaw)
+      const oldest = frameRing.length ? frameRing[0].seq : frameSeq + 1
+      const reset = Number.isFinite(since) && since > 0 && since + 1 < oldest
+      res.write(`data: ${JSON.stringify({
+        kind: 'hello',
+        sessionId: lane?.sessionId ?? null,
+        version: VERSION,
+        bootId: BOOT_ID,
+        reset,
+      })}\n\n`)
+      if (Number.isFinite(since) && since > 0) {
+        for (const frame of frameRing) {
+          if (frame.seq <= since) continue
+          try { res.write(`id: ${frame.seq}\ndata: ${JSON.stringify(frame)}\n\n`) } catch { break }
+        }
+      }
       clients.add(res)
       const ka = setInterval(() => { try { res.write(': ka\n\n') } catch { /* noop */ } }, 15_000)
       ka.unref?.()
@@ -711,8 +897,11 @@ function start(ctx, rawConfig) {
       const body = await readBody(req)
       const text = String(body.text ?? '').trim()
       if (!text) return json(res, 400, { ok: false, error: 'empty text' })
+      const context = body.context && typeof body.context === 'object'
+        ? [body.context.persona, body.context.memory].filter(Boolean).join('\n\n')
+        : ''
       try {
-        const out = await submit(text)
+        const out = await submit(text, { context })
         return json(res, 200, { ok: true, ...out })
       } catch (e) {
         log('prompt failed', String(e?.message ?? e))
@@ -722,8 +911,11 @@ function start(ctx, rawConfig) {
 
     if (path === '/pet/answer' && req.method === 'POST') {
       const body = await readBody(req)
-      const ok = answer(String(body.id ?? ''), Boolean(body.allow))
-      return json(res, ok ? 200 : 404, { ok })
+      const status = answer(String(body.id ?? ''), Boolean(body.allow))
+      if (status === 'expired') {
+        return json(res, 410, { ok: false, error: 'expired', reason: 'expired' })
+      }
+      return json(res, 200, { ok: true })
     }
 
     if (path === '/pet/cancel' && req.method === 'POST') {
@@ -731,29 +923,101 @@ function start(ctx, rawConfig) {
       try {
         lane.agent.cancel?.(new Error('pet-channel: user cancel'))
       } catch (e) { log('cancel failed', String(e?.message ?? e)) }
-      for (const [id, p] of pending) {
-        pending.delete(id)
-        clearTimeout(p.timer)
-        push('approval-resolved', { id, allow: false, cancelled: true, tool: p.tool })
-      }
-      return json(res, 200, { ok: true })
+      const cleared = clearPending()
+      // 丢掉已排队的 prompt：DSH 的 agent.cancel 只掐当前轮，chain 里的还会继续跑。
+      lane.chain = Promise.resolve()
+      return json(res, 200, { ok: true, cleared })
     }
 
     if (path === '/pet/history' && req.method === 'GET') {
       if (!lane) return json(res, 200, { ok: true, items: [] })
-      const limit = Math.max(1, Math.min(50, Number(url.searchParams.get('limit') ?? 12)))
+      const requested = String(url.searchParams.get('sessionId') || '')
+      if (requested && requested !== lane.sessionId) {
+        return json(res, 200, { ok: true, items: [], archived: true })
+      }
+      const rawLimit = Number(url.searchParams.get('limit') ?? 200)
+      const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, rawLimit)) : 200
+      const sinceRaw = Number(url.searchParams.get('sinceSeq') ?? 0)
+      const sinceSeq = Number.isFinite(sinceRaw) ? sinceRaw : 0
+      const includeInternal = url.searchParams.get('includeInternal') === '1'
       const events = await readEvents(lane.sessionId)
       const items = []
       for (const ev of events) {
+        if (Number.isFinite(sinceSeq) && sinceSeq > 0 && Number(ev?.seq ?? 0) <= sinceSeq) continue
         if (ev?.type === 'user/message') {
-          const t = textOf(ev.data?.content ?? ev.data?.message?.content)
-          if (t) items.push({ role: 'user', text: clip(t, 1000), seq: ev.seq })
+          if (!includeInternal && isInternalUser(ev)) continue
+          const rawText = textOf(ev.data?.content ?? ev.data?.message?.content)
+          const t = stripPetContext(rawText)
+          if (t) items.push({ role: 'user', text: clip(t, 2000), seq: ev.seq, ts: ev.time ?? 0 })
         } else if (ev?.type === 'assistant/message') {
-          const t = textOf(ev.data?.message?.content)
-          if (t) items.push({ role: 'assistant', text: clip(t, 2000), seq: ev.seq })
+          const content = ev.data?.message?.content
+          const t = textOf(content)
+          const reasoning = reasoningOf(content)
+          if (t || reasoning) {
+            items.push({
+              role: 'assistant',
+              text: clip(t, 8000),
+              reasoning: clip(reasoning, 8000),
+              seq: ev.seq,
+              ts: ev.time ?? 0,
+            })
+          }
+        } else if (ev?.type === 'tool/call') {
+          items.push({
+            role: 'tool',
+            kind: 'call',
+            tool: String(ev.data?.name ?? ''),
+            callId: ev.data?.callId ?? null,
+            text: clip(ev.data?.arguments, 1200),
+            seq: ev.seq,
+            ts: ev.time ?? 0,
+          })
+        } else if (ev?.type === 'tool/result') {
+          items.push({
+            role: 'tool',
+            kind: 'result',
+            callId: ev.data?.message?.toolCallId ?? ev.data?.callId ?? null,
+            ok: !ev.data?.error && !ev.data?.message?.isError,
+            text: clip(textOf(ev.data?.message?.content), 2000),
+            seq: ev.seq,
+            ts: ev.time ?? 0,
+          })
         }
       }
       return json(res, 200, { ok: true, items: items.slice(-limit) })
+    }
+
+    if (path === '/pet/approvals' && req.method === 'GET') {
+      const items = []
+      for (const [id, p] of pending) {
+        items.push({
+          id,
+          sessionId: p.sessionId,
+          tool: p.tool,
+          args: p.args,
+          argsHash: p.argsHash,
+          createdAt: p.at,
+          expiresAt: p.expiresAt,
+          title: `要跑一下 ${p.tool}`,
+        })
+      }
+      return json(res, 200, { ok: true, items })
+    }
+
+    if (path === '/pet/sessions' && req.method === 'GET') {
+      const items = []
+      if (lane) items.push({ id: lane.sessionId, title: 'DSH 当前会话', current: true })
+      for (const item of state.archived ?? []) items.push({ ...item, current: false })
+      return json(res, 200, { ok: true, items })
+    }
+
+    if (path === '/pet/new' && req.method === 'POST') {
+      try {
+        const created = await ensureLane(true)
+        return json(res, 200, { ok: true, sessionId: created.sessionId })
+      } catch (e) {
+        return json(res, 500, { ok: false, error: String(e?.message ?? e) })
+      }
     }
 
     return json(res, 404, { ok: false, error: 'not found' })
@@ -769,6 +1033,7 @@ function start(ctx, rawConfig) {
     server.listen(cfg.port, cfg.host, () => {
       const info = {
         version: VERSION,
+        bootId: BOOT_ID,
         host: cfg.host,
         port: cfg.port,
         origin: `http://${cfg.host}:${cfg.port}`,
@@ -799,55 +1064,66 @@ function start(ctx, rawConfig) {
 }
 
 
-/** 给模型注册一个 pet_control 工具；拿不到 tools 服务就只留斜杠命令。 */
+/** 给模型注册一个 pet_control 工具；拿不到 tools 服务就只留斜杠命令。
+ *
+ * 定义必须是**标准 JSON Schema**：插件从 ``~/.dsh/local-plugins`` 链接加载，
+ * ``@deepseek-ai/dsh-tools`` 解析不到（它在 profile/node_modules 里），
+ * ``defineTool`` 的作者简写路径用不上；而 ``tools.register`` 只校验
+ * ``output.schema`` 是否为受支持的 JSON Schema——写 ``required: true`` 这类
+ * 作者简写会被判非法，工具静默消失（2026-10-31 真机：模型说没有 pet_control）。
+ * 返回是否注册成功，ping 的 commands 字段据此报真实状态。
+ */
 async function registerPetControl(ctx, write, log) {
   const tools = ctx?.tools
   if (!tools || typeof tools.register !== 'function') {
     log('tools service unavailable; pet_control disabled')
-    return
+    return false
   }
-  let defineTool = (definition) => definition
   try {
-    const mod = await import('@deepseek-ai/dsh-tools')
-    if (typeof mod.defineTool === 'function') defineTool = mod.defineTool
-  } catch { /* 没有导出就用裸定义；register 只要求字段齐全 */ }
-  try {
-    tools.register(
-      defineTool({
-        name: 'pet_control',
-        description:
-          '控制桌面宠物：say（说话）、play_animation（播放动作）、notify（提醒）。'
-          + '动作名必须是桌宠当前角色已有的动画；不确定就先 say。',
-        parameters: {
+    tools.register({
+      name: 'pet_control',
+      description:
+        '控制桌面宠物：say（说话）、play_animation（播放动作）、notify（提醒）。'
+        + '动作名必须是桌宠当前角色已有的动画；不确定就先 say。',
+      parameters: {
+        type: 'object',
+        properties: {
           action: {
             type: 'string',
+            enum: ['say', 'play_animation', 'notify'],
             description: 'say | play_animation | notify',
           },
           text: { type: 'string', description: 'say/notify 的内容，最多 200 字' },
           animation: { type: 'string', description: 'play_animation 的动作名' },
-          duration_ms: { type: 'number', description: '气泡停留毫秒，最多 10000' },
+          duration_ms: { type: 'integer', description: '气泡停留毫秒，最多 10000' },
         },
-        output: {
-          schema: {
-            type: 'object',
-            properties: { ok: { type: 'boolean', required: true } },
-          },
-          render: (_args, value) => [
-            { type: 'text', text: value?.ok ? '已发送给桌宠' : '被限流或参数不合法' },
-          ],
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output: {
+        schema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' } },
+          required: ['ok'],
+          additionalProperties: false,
         },
-        async execute(args) {
-          const ok = write(String(args?.action ?? ''), {
-            text: args?.text,
-            name: args?.animation,
-            duration_ms: args?.duration_ms,
-          })
-          return { ok: Boolean(ok) }
-        },
-      }),
-    )
+        render: (_args, value) => [
+          { type: 'text', text: value?.ok ? '已发送给桌宠' : '被限流或参数不合法' },
+        ],
+      },
+      async execute(args) {
+        const ok = write(String(args?.action ?? ''), {
+          text: args?.text,
+          name: args?.animation,
+          duration_ms: args?.duration_ms,
+        })
+        return { ok: Boolean(ok) }
+      },
+    })
     log('pet_control registered')
+    return true
   } catch (e) {
     log('pet_control register failed', String(e?.message ?? e))
+    return false
   }
 }

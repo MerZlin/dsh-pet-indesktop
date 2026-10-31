@@ -9,9 +9,11 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -20,6 +22,7 @@ from .. import __version__
 from ..contracts.archive import BudgetExceeded
 from ..net import errors
 from ..net import http
+from ..net import ranged
 from ..market.errors import TransferCancelled
 from ..market.source import IndexFetch, IndexFetchError
 
@@ -528,6 +531,324 @@ def download_with_outcome(
         existing = 0
 
 
+# ============================================================ 分段下载与镜像竞速
+
+#: 镜像预检的默认超时（秒）：只换一个 head 回来，不该等满整包的超时。
+PROBE_TIMEOUT = 5.0
+#: 分段预检只请求 1 字节，用来确认 206 与总大小。
+_PREFLIGHT_BYTES = 1
+
+
+class RangesUnsupported(Exception):
+    """服务端不用 Range（200）或文件太小：分段任务中止，调用方回退单流一次。"""
+
+
+@dataclass(frozen=True, slots=True)
+class SegmentedOutcome:
+    url: str
+    bytes_written: int
+    resumed_from: int = 0
+    redirects: int = 0
+    connections: int = 1
+    segments: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SourceProbe:
+    """一次 ``Range: bytes=0-0`` 预检的结果：够不够快、支不支持分段。"""
+
+    url: str
+    ok: bool
+    ttfb: float
+    status: int = 0
+    total: int | None = None
+    range_supported: bool = False
+    final_url: str = ""
+    redirects: int = 0
+    error: str = ""
+
+
+def _range_headers(start: int, stop: int) -> dict[str, str]:
+    """分段请求头：显式 ``identity``，避免服务端压缩破坏区间语义。"""
+    return {
+        "User-Agent": USER_AGENT,
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+        "Range": f"bytes={int(start)}-{int(stop) - 1}",
+    }
+
+
+def _range_get(
+    url: str,
+    start: int,
+    stop: int,
+    *,
+    timeout: float,
+    policy: TransportPolicy | None,
+    cancel: CancelCallback | None = None,
+):
+    """发一次 Range 请求并手动逐跳跟随；返回 ``(response, final_url, redirects)``。"""
+    headers = _range_headers(start, stop)
+    current = str(url)
+    redirects = 0
+    safe = _redirect_blocking_opener if policy is not None else None
+    while True:
+        if cancel is not None and cancel():
+            raise TransferCancelled("download cancelled")
+        if policy is not None:
+            _validate_initial(current, policy)
+        request = urllib.request.Request(current, headers=dict(headers))
+        try:
+            response = http.urlopen(
+                request, timeout=timeout, opener=safe, pollute=False
+            )
+        except _RedirectBlocked as exc:
+            _close_quietly(exc)
+            if policy is None:
+                raise errors.NetworkError("跳转未被处理", reason=errors.PROTOCOL) from exc
+            target = urllib.parse.urljoin(current, exc.target) if exc.target else ""
+            redirects += 1
+            if not target:
+                raise errors.NetworkError("跳转缺少 Location", reason=errors.PROTOCOL) from exc
+            validate_redirect(current, target, policy, redirects)
+            current = target
+            continue
+        except urllib.error.HTTPError as exc:
+            _close_quietly(exc)
+            raise errors.http_error(exc) from exc
+        except errors.NetworkError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 传输失败统一分类
+            raise _translate_transport_error(exc) from exc
+        return response, current, redirects
+
+
+def _reject_encoded(response) -> None:
+    encoding = _header(response, "Content-Encoding").strip().lower()
+    if encoding and encoding != "identity":
+        raise errors.NetworkError(
+            f"分段响应带了 Content-Encoding：{encoding}", reason=errors.PROTOCOL
+        )
+
+
+def _check_range_response(response, *, start: int, stop: int, total: int) -> None:
+    """206 必须是「请求的区间、请求的总长」；200 表示服务端忽略了 Range。"""
+    status = int(getattr(response, "status", 200) or 200)
+    if status == 200:
+        raise RangesUnsupported("服务端忽略了 Range")
+    if status != 206:
+        raise errors.NetworkError(f"分段请求返回 {status}", reason=errors.PROTOCOL)
+    _reject_encoded(response)
+    cr_start, cr_end, cr_total = _parse_content_range(_header(response, "Content-Range"))
+    if cr_start is None or cr_end is None or cr_total is None:
+        raise errors.NetworkError("Content-Range 缺失或畸形", reason=errors.PROTOCOL)
+    if cr_start != start or cr_end != stop - 1 or cr_total != total:
+        raise errors.NetworkError(
+            "Content-Range 与请求区间不符", reason=errors.PROTOCOL
+        )
+
+
+def _preflight_range(
+    url: str,
+    *,
+    timeout: float,
+    policy: TransportPolicy | None,
+    cancel: CancelCallback | None,
+) -> tuple[int, str, int]:
+    """``bytes=0-0`` 预检：确认 206、总大小与 Range 支持。"""
+    response, final_url, redirects = _range_get(
+        url, 0, _PREFLIGHT_BYTES, timeout=timeout, policy=policy, cancel=cancel
+    )
+    try:
+        status = int(getattr(response, "status", 200) or 200)
+        if status == 200:
+            raise RangesUnsupported("服务端忽略了 Range")
+        if status != 206:
+            raise errors.NetworkError(f"预检返回 {status}", reason=errors.PROTOCOL)
+        _reject_encoded(response)
+        start, end, total = _parse_content_range(_header(response, "Content-Range"))
+        if start != 0 or end != 0 or total is None or total <= 0:
+            raise errors.NetworkError("预检 Content-Range 不符", reason=errors.PROTOCOL)
+        return total, final_url, redirects
+    finally:
+        _close_quietly(response)
+
+
+def download_segmented(
+    url: str,
+    part_path: Path,
+    *,
+    expected_size: int | None = None,
+    expected_sha256: str = "",
+    timeout: float = 15.0,
+    connections: int = ranged.DEFAULT_CONNECTIONS,
+    progress: ProgressCallback | None = None,
+    cancel: CancelCallback | None = None,
+    policy: TransportPolicy | None = None,
+    max_bytes: int | None = None,
+) -> SegmentedOutcome:
+    """多连接 Range 下载到 ``part_path``（先预检，再交给纯引擎装配）。
+
+    - 200（服务端不支持 Range）或文件太小 → :class:`RangesUnsupported`，调用方
+      回退单流**一次**，绝不把 200 的正文写进段文件；
+    - 429/``Retry-After`` 等明确答复直接抛 :class:`~petcore.net.errors.HttpStatusError`，
+      不换路重试；
+    - 侧车只记 ``url``（索引地址），跳转后的签名 CDN 地址不落盘。
+    """
+    part_path = Path(part_path)
+    part_path.parent.mkdir(parents=True, exist_ok=True)
+    if cancel is not None and cancel():
+        raise TransferCancelled("download cancelled")
+    total, transfer_url, redirects = _preflight_range(
+        url, timeout=timeout, policy=policy, cancel=cancel
+    )
+    if expected_size is not None and int(expected_size) != total:
+        raise errors.NetworkError(
+            f"服务器大小与索引不一致：{total} != {expected_size}", reason=errors.PROTOCOL
+        )
+    if max_bytes is not None and total > int(max_bytes):
+        raise BudgetExceeded("compressed", int(max_bytes), total)
+    if total < ranged.MIN_SEGMENTED_BYTES:
+        raise RangesUnsupported("artifact 太小，不值得切段")
+
+    def fetch(start: int, stop: int, sink) -> None:
+        response, _final, _redirects = _range_get(
+            transfer_url, start, stop, timeout=timeout, policy=policy, cancel=cancel
+        )
+        try:
+            _check_range_response(response, start=start, stop=stop, total=total)
+            expected = stop - start
+            read = 0
+            while read < expected:
+                if cancel is not None and cancel():
+                    raise TransferCancelled("download cancelled")
+                want = min(ranged.CHUNK_BYTES, expected - read)
+                try:
+                    block = response.read(want)
+                except Exception as exc:  # noqa: BLE001 - 读流失败统一分类
+                    raise _translate_transport_error(exc) from exc
+                if not block:
+                    break
+                read += len(block)
+                sink(block)
+            if read != expected:
+                raise errors.NetworkError("分段响应提前结束", reason=errors.PROTOCOL)
+        finally:
+            _close_quietly(response)
+
+    result = ranged.download_segmented(
+        part_path,
+        total=total,
+        sha256=expected_sha256,
+        connections=connections,
+        url=str(url),
+        fetch=fetch,
+        progress=progress,
+        cancel=cancel,
+    )
+    return SegmentedOutcome(
+        url=transfer_url,
+        bytes_written=result.bytes_written,
+        resumed_from=result.resumed_from,
+        redirects=redirects,
+        connections=result.connections,
+        segments=result.segments,
+    )
+
+
+def probe_source(
+    url: str,
+    *,
+    timeout: float = PROBE_TIMEOUT,
+    policy: TransportPolicy | None = None,
+    cancel: CancelCallback | None = None,
+) -> SourceProbe:
+    """用 ``bytes=0-0`` 测一次首字节时间，并顺带确认 Range 支持与总大小。"""
+    started = time.monotonic()
+    try:
+        response, final_url, redirects = _range_get(
+            url, 0, _PREFLIGHT_BYTES, timeout=timeout, policy=policy, cancel=cancel
+        )
+    except TransferCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 竞速里失败只是一条候选记录
+        return SourceProbe(
+            url=str(url),
+            ok=False,
+            ttfb=max(0.0, time.monotonic() - started),
+            error=type(exc).__name__,
+        )
+    ttfb = max(0.0, time.monotonic() - started)
+    try:
+        status = int(getattr(response, "status", 200) or 200)
+        start, end, total = _parse_content_range(_header(response, "Content-Range"))
+        supported = (
+            status == 206 and start == 0 and end == 0 and total is not None and total > 0
+        )
+        return SourceProbe(
+            url=str(url),
+            ok=status in (200, 206),
+            ttfb=ttfb,
+            status=status,
+            total=total,
+            range_supported=supported,
+            final_url=final_url,
+            redirects=redirects,
+        )
+    finally:
+        _close_quietly(response)
+
+
+def probe_sources(
+    urls,
+    *,
+    timeout: float = PROBE_TIMEOUT,
+    policy: TransportPolicy | None = None,
+    cancel: CancelCallback | None = None,
+) -> tuple[SourceProbe, ...]:
+    """并发预检多个镜像；返回顺序与输入一致（排序交给 :func:`rank_sources`）。"""
+    urls = tuple(str(url) for url in urls)
+    if not urls:
+        return ()
+    if len(urls) == 1:
+        return (probe_source(urls[0], timeout=timeout, policy=policy, cancel=cancel),)
+    with ThreadPoolExecutor(
+        max_workers=min(ranged.MAX_CONNECTIONS, len(urls)),
+        thread_name_prefix="market-probe",
+    ) as pool:
+        futures = [
+            pool.submit(
+                probe_source, url, timeout=timeout, policy=policy, cancel=cancel
+            )
+            for url in urls
+        ]
+        return tuple(future.result() for future in futures)
+
+
+def rank_sources(
+    probes,
+    *,
+    prefer_range: bool = True,
+) -> tuple[str, ...]:
+    """按 TTFB 排序可用源；不可用源保持索引顺序排在后面（稳定的回退顺序）。"""
+    probes = tuple(probes)
+    usable = [probe for probe in probes if probe.ok]
+    if prefer_range:
+        segmented = [probe for probe in usable if probe.range_supported]
+        if segmented:
+            usable = segmented
+    ranked = sorted(usable, key=lambda probe: probe.ttfb)
+    chosen: list[str] = []
+    for probe in ranked:
+        if probe.url not in chosen:
+            chosen.append(probe.url)
+    rest: list[str] = []
+    for probe in probes:
+        if probe.url not in chosen and probe.url not in rest:
+            rest.append(probe.url)
+    return tuple(chosen) + tuple(rest)
+
+
 class HttpFetcher:
     """把模块函数包成 market 层使用的协议对象（便于测试替换）。"""
 
@@ -550,6 +871,26 @@ class HttpFetcher:
         return fetch_artifact(
             spec, dest_dir, limits=limits, progress=progress, cancel=cancel
         )
+
+    def rank_sources(
+        self,
+        urls,
+        *,
+        timeout: float = PROBE_TIMEOUT,
+        cancel: CancelCallback | None = None,
+        allowed_hosts: tuple[str, ...] = (),
+        allowed_schemes: tuple[str, ...] = ("https", "http"),
+        prefer_range: bool = True,
+    ) -> tuple[str, ...]:
+        """镜像竞速：按 TTFB 排序（失败/无 Range 的源排在后面，保持索引顺序）。"""
+        urls = tuple(str(url) for url in urls)
+        policy = TransportPolicy(
+            max_redirects=3,
+            allowed_schemes=tuple(allowed_schemes) or ("https",),
+            allowed_hosts=tuple(allowed_hosts),
+        )
+        probes = probe_sources(urls, timeout=timeout, policy=policy, cancel=cancel)
+        return rank_sources(probes, prefer_range=prefer_range)
 
     def download(
         self,

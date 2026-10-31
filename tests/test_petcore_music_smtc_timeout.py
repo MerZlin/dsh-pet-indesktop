@@ -195,6 +195,31 @@ def test_the_degraded_window_re_probes_after_it_expires() -> None:
         reader.stop(1.0)
 
 
+def test_reset_clears_the_giveup_state_so_an_explicit_retry_probes_again() -> None:
+    """设置页每次点「检测当前播放」都 ``reset()``：重试上限耗尽后必须还能再试一次。
+
+    没有这条缝，两次卡死退役之后每次 ``read()`` 都只回 ``SMTC_GIVEUP_REASON``，
+    用户唯一的恢复办法是重启程序。
+    """
+    gate = _Gate()
+    reader = now_playing.SmtcReader(reader=gate, timeout=0.02, degraded_seconds=0.0)
+    try:
+        for _ in range(now_playing.SMTC_MAX_STUCK_THREADS + 4):
+            assert reader.read().degraded is True
+        assert "停止重试" in reader.read().reason
+        dispatched = reader.dispatched
+
+        reader.reset()
+        sample = reader.read()
+        assert "停止重试" not in sample.reason
+        assert "超时" in sample.reason
+        assert sample.degraded is True
+        assert reader.dispatched == dispatched + 1, "reset 后必须真的再派发一次探测"
+    finally:
+        gate.gate.set()
+        reader.stop(1.0)
+
+
 def test_stuck_thread_retries_are_bounded() -> None:
     """每次重试都要退役一条卡死的线程（Python 不能杀线程）：必须封顶。"""
     gate = _Gate()

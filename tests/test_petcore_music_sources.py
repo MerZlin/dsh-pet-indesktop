@@ -397,6 +397,32 @@ def test_window_source_does_not_repeat_the_title_as_artist() -> None:
     assert decision.track.label() == "开不了口 - 周杰伦"
 
 
+def test_netease_window_title_is_split_into_title_and_artist() -> None:
+    """网易云窗口标题 ``歌名 - 歌手 - 网易云音乐``：尾部程序名不许进歌名/歌手。"""
+    decision = recognizer.decide(
+        sample(
+            windows=[window("cloudmusic.exe", "晴天 - 周杰伦 - 网易云音乐")],
+            audio_rows=[audio("cloudmusic.exe")],
+        )
+    )
+    assert decision.source == recognizer.SOURCE_WINDOW
+    assert decision.track is not None
+    assert (decision.track.title, decision.track.artist) == ("晴天", "周杰伦")
+
+
+def test_idle_netease_window_title_is_not_taken_as_a_song() -> None:
+    """空闲标题恰好就是播放器名：只唱歌、不取词，绝不拿"网易云音乐"去搜歌词。"""
+    decision = recognizer.decide(
+        sample(
+            windows=[window("cloudmusic.exe", "网易云音乐")],
+            audio_rows=[audio("cloudmusic.exe")],
+        )
+    )
+    assert decision.status == recognizer.STATUS_PLAYING
+    assert decision.source == recognizer.SOURCE_WINDOW
+    assert decision.track is None
+
+
 def test_paused_smtc_session_does_not_hide_another_playing_player() -> None:
     """SMTC 里挂着暂停会话、另一台不注册 SMTC 的播放器在出声：判定要认后者。
 
@@ -439,6 +465,20 @@ def test_path_shaped_app_id_is_reduced_to_its_executable_name() -> None:
     assert decision.exe == "cloudmusic.exe"
     assert decision.status == recognizer.STATUS_PAUSED  # 静音否决必须生效
     assert "Program Files" not in decision.exe
+
+
+def test_path_shaped_app_id_is_accepted_by_the_configured_player_allowlist() -> None:
+    """识别范围的比对也必须先取 basename：否则「只识别指定播放器」会整条滤掉它。"""
+    full_path = (
+        "C:" + chr(92) + "Program Files" + chr(92) + "Netease" + chr(92)
+        + "CloudMusic" + chr(92) + "cloudmusic.exe"
+    )
+    allowed = now_playing.allowed_app_ids({"netease": "D:/APP/CloudMusic/cloudmusic.exe"})
+    assert now_playing.normalized_app_id(full_path) == "cloudmusic"
+    session = now_playing.Session(
+        app_id=full_path, media_type=now_playing.MEDIA_TYPE_MUSIC, playing=True
+    )
+    assert now_playing.accepts_singing(session, allowed_ids=allowed) is True
 
 
 def test_window_allowlist_reasons_are_deduplicated() -> None:

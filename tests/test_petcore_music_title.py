@@ -462,6 +462,40 @@ def test_window_title_returns_none_when_nothing_to_parse():
     assert title_clean.parse_window_title("《晴》 - AIMP", "aimp.exe") is None
 
 
+def test_window_title_strips_netease_cloud_music_suffix():
+    """网易云默认标题 ``歌名 - 歌手 - 网易云音乐``：尾部标识剥掉，两段各归各位。
+
+    网易云的窗口标题布局是固定的（歌名在前、歌手在后），不是通用猜测；所以这条
+    只对 ``cloudmusic.exe`` 生效——foobar2000 / 浏览器仍然"不猜顺序"。
+    """
+    assert title_clean.parse_window_title(
+        "晴天 - 周杰伦 - 网易云音乐", "cloudmusic.exe"
+    ) == ("晴天", "周杰伦")
+    # 窗口标题里的程序名写法由播放器决定，比较不区分大小写
+    assert title_clean.parse_window_title(
+        "晴天 - 周杰伦 - 网易云音乐", "CloudMusic.exe"
+    ) == ("晴天", "周杰伦")
+
+
+def test_window_title_rejects_idle_player_names():
+    """标题只剩播放器名 = 没在播歌，不许把它当成歌名。
+
+    只对**已登记的播放器 exe** 生效：浏览器/未知播放器的标题照旧整条进入解析
+    （否则会把"标题就叫网易云音乐"的网页误判为空闲）。
+    """
+    for title, exe in (
+        ("网易云音乐", "cloudmusic.exe"),
+        ("网易云音乐", "CloudMusic.exe"),
+        ("网易云 音乐", "cloudmusic.exe"),
+        ("QQ音乐", "qqmusic.exe"),
+        ("QQ 音乐", "QQMusic.exe"),
+        ("酷狗音乐", "kugou.exe"),
+        ("汽水音乐", "sodamusic.exe"),
+    ):
+        assert title_clean.parse_window_title(title, exe) is None, (title, exe)
+    assert title_clean.parse_window_title("网易云音乐", "chrome.exe") == ("网易云音乐", "")
+
+
 # ---------------------------------------------------------------- 与主分支的等价性
 #
 # `title_clean.py` 是 `pet/music_title.py` 的移植件。两份实现同时留在仓库里，

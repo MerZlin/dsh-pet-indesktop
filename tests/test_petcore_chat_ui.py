@@ -681,12 +681,18 @@ def test_history_is_grouped_by_date_and_groups_collapse(controller) -> None:
         for index in range(window.session_list.count())
         if window.session_list.item(index).data(GROUP_ROLE)
     ]
-    assert [item.text() for item in headers][0].endswith("今天")
-    assert any(item.text().endswith("更早") for item in headers)
+    assert any(item.text().endswith("AI 对话") for item in headers)
+    date_headers = [
+        item
+        for item in headers
+        if not str(item.data(GROUP_ROLE)).startswith("channel:")
+    ]
+    assert [item.text() for item in date_headers][0].endswith("今天")
+    assert any(item.text().endswith("更早") for item in date_headers)
 
     old_row = window._row_by_session["old"]
     assert window.session_list.isRowHidden(old_row) is True, "更早默认折叠"
-    older_header = next(item for item in headers if item.text().endswith("更早"))
+    older_header = next(item for item in date_headers if item.text().endswith("更早"))
     window.session_list.itemClicked.emit(older_header)
     assert window.session_list.isRowHidden(old_row) is False
     window.session_list.itemClicked.emit(older_header)
@@ -742,3 +748,150 @@ def test_late_stream_answer_does_not_land_in_archived_fallback_session(controlle
         "迟到的完整回答" not in str(item.get("content") or "")
         for item in new_session.messages
     )
+
+
+def test_channel_sections_and_qq_submit_route(controller) -> None:
+    window = _open(controller)
+    seen: list[tuple[str, int, str]] = []
+    controller.register_channel(
+        "qq", lambda text, slot, conversation: seen.append((text, slot, conversation))
+    )
+    session_id = controller.open_channel(
+        "qq", "private:42", "QQ 私聊", owner="ai.chat"
+    )
+    state = controller.states()[("ai.chat", 0)]
+    assert state.session.session_id == session_id
+    assert state.session.channel == "qq"
+    controller._on_submit(("ai.chat", 0), "在吗")
+    assert seen == [("在吗", 0, "private:42")]
+    assert state.session.messages[-1]["channel"] == "qq"
+
+    ai = state.store.new_session(title="AI 会话")
+    dsh = state.store.new_session(title="DSH 会话", channel="dsh", conversation_id="s1")
+    qq = state.store.load(session_id)
+    # DSH 分组只在 DSH 模式打开时出现（默认关闭）。
+    window.set_dsh_enabled(True)
+    window.set_history([ai, dsh, qq], session_id)
+    headers = [
+        window.session_list.item(index).text()
+        for index in range(window.session_list.count())
+        if str(window.session_list.item(index).data(GROUP_ROLE) or "").startswith("channel:")
+    ]
+    assert any("AI 对话" in text for text in headers)
+    assert any("DSH 对话" in text for text in headers)
+    assert any("QQ 消息" in text for text in headers)
+
+
+def test_ingest_is_idempotent_and_does_not_hijack_ai_session(controller) -> None:
+    controller.open("ai.chat")
+    state = controller.states()[("ai.chat", 0)]
+    ai_id = state.session.session_id
+    record = {
+        "channel": "qq",
+        "conversation_id": "group:7",
+        "role": "user",
+        "text": "群里有人吗",
+        "sender": "小明",
+        "external_id": "m-100",
+    }
+    first = controller.ingest(record, owner="ai.chat")
+    second = controller.ingest(record, owner="ai.chat")
+    assert first == second
+    assert state.session.session_id == ai_id
+    messages = controller.messages(first, owner="ai.chat")
+    assert [item["content"] for item in messages] == ["群里有人吗"]
+    assert messages[0]["sender"] == "小明"
+    assert state.store.find_by_conversation("qq", "group:7").session_id == first
+
+
+def test_dsh_frame_survives_later_state_save(controller) -> None:
+    controller.open("ai.chat")
+    window = controller.window_for("ai.chat")
+    session_id = controller.open_channel(
+        "dsh", "dsh-1", "DSH 会话", owner="ai.chat"
+    )
+    state = controller.states()[("ai.chat", 0)]
+    controller._persist_dsh_frame(
+        state,
+        {"kind": "assistant", "text": "来自 DSH 的回答", "sessionId": "dsh-1", "seq": 1},
+    )
+    # 关闭/归档等路径会走 _save(state)：它必须看到刚写入的帧，而不是打开时的快照。
+    controller._save(state)
+    loaded = state.store.load(session_id)
+    assert any(
+        item.get("content") == "来自 DSH 的回答" for item in loaded.messages
+    )
+
+
+def test_collapsed_channel_hides_date_rows(controller) -> None:
+    window = _open(controller)
+    ai = ChatSession("ai-1", "AI", [], time.time())
+    qq = ChatSession("qq-1", "QQ", [], time.time(), channel="qq")
+    window.set_history([ai, qq], "ai-1")
+    channel_key = "channel:qq"
+    qq_row = window._row_by_session["qq-1"]
+    assert window.session_list.isRowHidden(qq_row) is False
+    window._toggle_group(channel_key)
+    assert window.session_list.isRowHidden(qq_row) is True
+
+
+def test_dsh_sessions_hidden_until_the_mode_is_enabled(controller) -> None:
+    """没开 DSH 的人不该在侧栏看到 DSH 分组（用户明确要求的默认）。"""
+    window = _open(controller)
+    ai = ChatSession("ai-1", "AI", [], time.time())
+    dsh = ChatSession("dsh-1", "DSH", [], time.time(), channel="dsh")
+    window.set_history([ai, dsh], "ai-1")
+    dsh_row = window._row_by_session["dsh-1"]
+    assert window.session_list.isRowHidden(dsh_row) is True
+    assert window._channel_headers["channel:dsh"].isHidden() is True
+
+    window.set_dsh_enabled(True)
+    assert window.session_list.isRowHidden(dsh_row) is False
+    assert window._channel_headers["channel:dsh"].isHidden() is False
+
+    window.set_dsh_enabled(False)
+    assert window.session_list.isRowHidden(dsh_row) is True
+
+
+def test_date_headers_use_a_lighter_font_than_session_rows(controller) -> None:
+    window = _open(controller)
+    ai = ChatSession("ai-1", "今天的会话", [], time.time())
+    dsh = ChatSession("dsh-1", "DSH", [], time.time(), channel="dsh")
+    window.set_dsh_enabled(True)
+    window.set_history([ai, dsh], "ai-1")
+    date_header = next(iter(window._group_headers.values()))
+    channel_header = window._channel_headers["channel:ai"]
+    assert date_header.font().pixelSize() < channel_header.font().pixelSize()
+    assert date_header.font().weight() == 400
+    assert channel_header.font().weight() == 600
+    assert date_header.font().pixelSize() < window._font_size
+
+
+def test_closing_dsh_mode_falls_back_to_the_latest_ai_session(controller) -> None:
+    """关掉 DSH 后在 AI 输入框打字必须发给 AI：会话通道要跟着视图切回来。"""
+    window = _open(controller)
+    state = controller.states()[("ai.chat", 0)]
+    ai = state.store.new_session(title="AI 会话")
+    dsh = state.store.ensure_conversation("dsh", "pet", title="DSH 会话")
+    assert dsh.messages == []
+    state.session = dsh
+    window.set_dsh_enabled(True)
+    window.set_view("dsh")
+    window._on_view_toggled(False)
+    QApplication.processEvents()
+    assert window.current_view() == "ai"
+    assert state.session.channel == "ai"
+    assert state.session.session_id == ai.session_id
+    assert controller._config_get("chat_dsh_mode", True) is False
+
+
+def test_opening_dsh_mode_selects_a_dsh_session(controller) -> None:
+    window = _open(controller)
+    state = controller.states()[("ai.chat", 0)]
+    state.store.new_session(title="AI 会话")
+    window._on_view_toggled(True)
+    QApplication.processEvents()
+    assert window.current_view() == "dsh"
+    assert state.session.channel == "dsh"
+    assert window.dsh_enabled() is True
+    assert controller._config_get("chat_dsh_mode", False) is True

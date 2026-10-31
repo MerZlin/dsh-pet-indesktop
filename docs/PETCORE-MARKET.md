@@ -110,7 +110,10 @@ JSON Schema 见 [`market-index.schema.json`](market-index.schema.json)。
 
 ```text
 读索引 → 选择版本（Core/平台/API/阻止状态）
-→ 逐 URL 下载到 market/downloads/<id>-<version>.zip.part（Range 续传）
+→ 下载到 market/downloads/<id>-<version>.zip.part
+   · market_download_connections=1：逐 URL 单流（Range 续传，旧路径）
+   · 2..8：预检 Range → 分段（≤8 MiB/段）→ 每段独立续传 → 按序装配
+   · market_download_sources=auto：多 URL 时先 TTFB 竞速；ordered：按索引顺序
 → 校验 size + SHA-256
 → 解包到 market/staging（复用 mods/install.py 的 zip-slip 防护）
 → 读 mod.json，交叉校验 id / kind / version
@@ -118,6 +121,11 @@ JSON Schema 见 [`market-index.schema.json`](market-index.schema.json)。
 → mods.install.install(..., force=True) 原子替换
 → 写 market-lock.json（原子替换）
 ```
+
+分段细节见 [`PETCORE-LOG.md`](PETCORE-LOG.md) L143：200（服务端忽略 Range）只回退单流一次；
+206 的 `Content-Range` 起止/总长必须与索引一致；429/`Retry-After` 不重试；取消每 256 KiB 检查并保留
+可续传段；进度 `total` 恒为索引大小、`done` 单调、末值 `(total,total)`。设置页「索引与下载」
+可调连接数与源策略；单流分支的 `.part`/`download.json` 语义保持不变。
 
 - 任一步失败：删除无用的 `.part`/staging，保留旧版本，错误里带阶段与镜像尝试记录。
 - `market-lock.json` 只记录市场来源，不复制「当前安装了什么」（真值仍是 `mods/<id>/mod.json`）：

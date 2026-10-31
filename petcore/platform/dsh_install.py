@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -20,8 +21,9 @@ from pathlib import Path
 
 PLUGINS: tuple[tuple[str, str], ...] = (
     ("dsh-pet-bridge", "@dsh-pet/bridge"),
-    ("dsh-pet-channel", "dsh-pet-channel"),
 )
+#: v2 起聊天通道合并进 bridge；升级时从 profile 摘掉旧包，目录保留不删。
+LEGACY_PACKAGES: tuple[str, ...] = ("dsh-pet-channel",)
 PLUGIN_NAMES = tuple(directory for directory, _package in PLUGINS)
 
 
@@ -87,9 +89,41 @@ def _write_package(path: Path, doc: dict) -> None:
     os.replace(temp, path)
 
 
-def _link_plugin(link: Path, target: Path, runner) -> bool:
-    if link.exists():
+def _is_link(path: Path) -> bool:
+    if path.is_symlink():
         return True
+    predicate = getattr(path, "is_junction", None)
+    try:
+        return bool(predicate and predicate())
+    except OSError:
+        return False
+
+
+def _remove_link(path: Path) -> None:
+    """只摘重解析点；真实目录一律不递归删除（那是用户/其它插件的东西）。"""
+    if path.is_symlink():
+        path.unlink()
+    elif _is_link(path):
+        os.rmdir(path)
+
+
+def _link_plugin(link: Path, target: Path, runner) -> bool:
+    # 升级路径：v1 装好的 node_modules 链接可能指向另一个构建目录（旧程序
+    # 目录/旧仓库），只在链接已存在时早退会把新版插件永远挡在门外。
+    if link.exists() or _is_link(link):
+        if _is_link(link):
+            try:
+                if Path(link).resolve() == Path(target).resolve():
+                    return True
+            except OSError:
+                return True
+            try:
+                _remove_link(link)
+            except OSError:
+                return True
+        else:
+            # pnpm 复制出来的真实目录：保守不动。
+            return True
     link.parent.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
         try:
@@ -108,6 +142,118 @@ def _link_plugin(link: Path, target: Path, runner) -> bool:
         return True
     except OSError:
         return False
+
+
+_PATCH_NAME_RE = re.compile(
+    r"^\s*name:\s*(?P<quote>['\"]?)(?P<name>[^'\"\s#]+)(?P=quote)\s*(?:#.*)?$"
+)
+
+
+def _declares_any(line: str, names: set[str]) -> bool:
+    match = _PATCH_NAME_RE.match(line)
+    return bool(match and match.group("name") in names)
+
+
+def _prune_insert(block: list[str], names: set[str]) -> tuple[list[str], bool]:
+    """只摘 ``insert:`` 列表里声明了旧包名的那几项，其它项与注释原样保留。"""
+    starts = [
+        index
+        for index, line in enumerate(block)
+        if index > 0 and line[:1] in " \t" and line.lstrip().startswith("- ")
+    ]
+    if not starts:
+        return block, False
+    indent = min(len(block[index]) - len(block[index].lstrip()) for index in starts)
+    heads = [
+        index
+        for index in starts
+        if len(block[index]) - len(block[index].lstrip()) == indent
+    ]
+    header = block[: heads[0]]
+    items = [
+        block[start : heads[n + 1] if n + 1 < len(heads) else len(block)]
+        for n, start in enumerate(heads)
+    ]
+    kept = [
+        item for item in items if not any(_declares_any(line, names) for line in item)
+    ]
+    if len(kept) == len(items):
+        return block, False
+    if not kept:
+        return [], True
+    return header + [line for item in kept for line in item], True
+
+
+def _strip_legacy_patch_entries(path: Path, names: tuple[str, ...]) -> bool:
+    """从 profile 的 ``cordis.patch.yml`` 摘除旧包的 loader 条目。
+
+    v1 的聊天通道曾以显式 ``insert`` 条目写进用户 patch；只从
+    bundles/dependencies 摘掉包，DSH 仍会按这条 insert 去加载旧目录，
+    旧通道和新 bridge 会抢同一个端口。这里只删声明了旧包名的列表项，
+    其余字节（含注释与缩进）原样保留。
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    lines = text.splitlines(keepends=True)
+    legacy = set(names)
+    out: list[str] = []
+    changed = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line.startswith("- "):
+            out.append(line)
+            index += 1
+            continue
+        end = index + 1
+        while end < len(lines) and not lines[end].startswith("- "):
+            end += 1
+        block = lines[index:end]
+        if block[0].startswith("- insert:"):
+            pruned, touched = _prune_insert(block, legacy)
+            out.extend(pruned)
+            changed = changed or touched
+        elif any(_declares_any(item, legacy) for item in block):
+            changed = True
+        else:
+            out.extend(block)
+        index = end
+    if not changed:
+        return False
+    try:
+        path.write_text("".join(out), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def _migrate_legacy(profile: Path, stamp: int) -> None:
+    """把 v1 残留（patch 插入条目 + node_modules 旧链接）摘干净；尽力而为。"""
+    patch = profile / "cordis.patch.yml"
+    try:
+        text = patch.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    legacy = set(LEGACY_PACKAGES)
+    if text and any(_declares_any(line, legacy) for line in text.splitlines()):
+        try:
+            shutil.copy2(
+                patch, patch.with_name(f"cordis.patch.yml.dsh-pet-backup-{stamp}")
+            )
+        except OSError:
+            pass
+        _strip_legacy_patch_entries(patch, LEGACY_PACKAGES)
+    node_modules = profile / "node_modules"
+    for legacy_name in LEGACY_PACKAGES:
+        link = node_modules / legacy_name
+        if not _is_link(link):
+            continue
+        try:
+            _remove_link(link)
+        except OSError:
+            pass
 
 
 def install(
@@ -170,6 +316,11 @@ def install(
         dependencies[package_name] = f"file:{target.as_posix()}"
         if package_name not in bundles:
             bundles.append(package_name)
+    # v2 迁移：旧聊天通道包已合并进 bridge，从 profile 摘掉（旧目录保留）。
+    for legacy in LEGACY_PACKAGES:
+        dependencies.pop(legacy, None)
+        while legacy in bundles:
+            bundles.remove(legacy)
     try:
         _write_package(package, doc)
     except OSError:
@@ -191,4 +342,5 @@ def install(
         return InstallResult(
             False, "link_failed", str(profile), tuple(copied), str(backup)
         )
+    _migrate_legacy(profile, int(time.time()))
     return InstallResult(True, "", str(profile), tuple(copied), str(backup))

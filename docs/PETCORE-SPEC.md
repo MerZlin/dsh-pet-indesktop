@@ -1103,3 +1103,27 @@ PrintWindow/BitBlt 非黑占比，不写标题正文。
 **自语每日**：`self_talk_daily_enabled/texts/sequence`；每日句按日期确定性抽取，
 每个 slot 每天只说一次；`self_talk_daily_sequence` 时按 `|`/换行/句末标点拆段，
 复用 `say_sequence` 的逐句展示/朗读。
+
+## 29. 反馈批次 3：音频输出 / 每日池 / 分段下载 / 互通（2026-10-31）
+
+- **音频输出**：全局 `audio_output_device`（空=跟随系统默认）+ `_name`；点击音效、Agent 提示音、
+  自言自语/报时 TTS 共用 `AudioOutputRouter`；手动设备不存在时静音、不回退；`QMediaDevices`
+  热插拔后重建 `QSoundEffect/QMediaPlayer` 缓存。设置落「语音」页顶部。
+- **每日一句**：随包 `daily_lines.json` 1200 句；每天按 `(day, slot)` 抽 `self_talk_daily_count`
+  （1–24，默认 12）；每 tick 显示一句，成功后才推进 `daily.json:index`；抽完回退普通自语；
+  设置页为编号列表预览 + 明天再看 + 可折叠自定义。`self_talk_daily_texts=[]` 表示内置池，
+  旧默认 12 句在 normalize 中迁到 `[]`。
+- **素材下载**：`market_download_connections`（1–8，默认 4）+ `market_download_sources`
+  （auto/ordered/race）；多连接 Range、段级续传、镜像 TTFB 竞速、200 回退单流一次；
+  设置页进度条显示速度/ETA/续传/连接数；语义见 `PETCORE-MARKET.md` §5。
+- **会话 schema 2**：`channel=ai|dsh|qq`、`conversation_id`、消息 `id/ts/channel/sender/external_id/meta`；
+  v1→v2 首次写回前留 `.pre-v2`；侧栏三组（AI/DSH/QQ）+ 日期分节；`ChatPort.register_channel/
+  open_channel/ingest/messages`。
+- **分层人格记忆**：`petcore/interop/memory.py`（inbox/衰减卡/预算渲染）+ `MemoryService`
+  （启动 + 10 分钟）；旧 `feature-data/ai.chat/memory` 一次性导入并保留原文件；AI/DSH/QQ 共用。
+- **DSH v2**：bridge+channel 合并为单插件；SSE id/since/bootId 重放、历史过滤 plugin、
+  `context.memory` 注入、审批 argsHash + 410 expired、cancel 清队列；安装器移除旧 channel。
+- **QQ Beta**：`im.qq` + core `WebhookPort`（回环/token/1MiB）；OneBot v11 入站/出站；
+  回复模式 off/notify/ai；默认关闭、安装器默认不勾选。真机未验证。
+- **联网工具**：多引擎扇出 + URL 去重、article/main 正文抽取、标题/描述/发布时间、
+  `ai_web_search_engines/max_sources/page_chars`；引用编号沿用 `format_results` 的 `[n]`。

@@ -681,3 +681,18 @@ TransferReport(url, bytes_read, path="", resumed_from=0, redirects=0)
 | `petcore/market/install.py` | `install_package(..., allow_feature=False, origin=PackageOrigin.MARKET, limits=MARKET_ARCHIVE_LIMITS, ...)` | T04（已落地：来源授信、交叉校验、锁失败回滚） |
 
 worker 只依赖这些签名，不改契约；主模型改契约必须同批更新本节与测试。
+
+## 8.2 互通 / QQ 扩展（2026-10-31）
+
+- `examples/petcore-mods/im.qq`：OneBot v11 HTTP 适配。`execution=host-only`，capabilities
+  `network.request/notification.present/settings.read/settings.write`；运行时 Qt-free，
+  只经 `HostPorts.http`（出站）与 `HostPorts.webhook`（入站 socket 由 core 持有）。
+- 会话：入站写 `ChatPort.ingest({channel:"qq", conversation_id:"group:<id>"|"private:<id>",
+  role,text,sender,sender_id,external_id,ts})`；出站用 `ChatPort.register_channel("qq", on_submit)`。
+- 凭据：`im.qq/access_token`、`im.qq/webhook_token` 只进钥匙串；`config.extra` 只放
+  `im_qq_*` 偏好（白名单/端口/回复模式），单值 ≤4KB。
+- `MemoryPort`（core）提供 `remember/recall/render_prompt/stats/clear/export`；
+  `ai.chat` 在无端口时回退旧 JSONL。`WebhookPort.start(owner, port, path, token, handler)`
+  只绑 `127.0.0.1`，空 token 拒绝启动，body ≤1MiB。
+- 新增 mod 的市场/安装：`packaging/petcore.iss` 的 `mod_qq` 默认不勾选，勾选才写
+  `{app}\mods\im.qq` + `.trusted`；用户导入仍落数据目录 `mods/`。

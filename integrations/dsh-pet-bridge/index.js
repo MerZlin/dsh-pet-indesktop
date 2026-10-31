@@ -10,6 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { applyChannel } from "./channel.js";
 
 // ===== 零依赖红线 =====
 // 本插件必须保持零外部依赖：profile 经 pnpm 的 link: 协议链接到本目录，
@@ -20,9 +21,9 @@ import { randomUUID } from "node:crypto";
 
 const MAX_BYTES = 1024 * 1024; // 事件文件超过 1MB 时轮转（保留 .1 备份，防无限增长）
 const PLUGIN_ID = "dsh-pet-bridge";
-// 减法后本插件不消费任何 DSH 注入服务（看门狗诊断已删）：保持空 inject，
-// 事件转发在无模型配置时同样可用。
-const inject = [];
+// v2 合并聊天通道：同一进程同时产出脱敏状态 JSONL 和 HTTP+SSE。
+// 通道需要 agents/sessionQuery/tools；DSH 桌面端 0.2+ 均有这三个服务。
+const inject = ["agents", "sessionQuery", "tools"];
 
 // 进程内状态去重 + 多 Agent 聚合：
 // 1) dsh 在 agent 创建/状态切换瞬间会抖动出重复 idle（实测 idle→working 仅隔
@@ -722,7 +723,7 @@ function writeRecordDedup(extra) {
 // 写 record 去重前的代理：需要按 callId 去重的交互记录（问题请求在 assistant/message
 // 与独立 tool/call 两处都会出现）走 writeRecordDedup，其余事件直接走 writeRecord。
 
-export function apply(ctx) {
+export function apply(ctx, config = {}) {
   // Make the resolved runtime destination observable for packaged builds.
   // This is intentionally emitted once per Bridge process and contains only
   // path metadata, never secrets or the full environment.
@@ -1087,6 +1088,13 @@ export function apply(ctx) {
     } catch {}
   });
 
+  // v2：同一进程启动聊天通道（HTTP+SSE、审批、pet_control、历史）。
+  // 通道失败只影响聊天，不拖垮状态事件写入。
+  try {
+    applyChannel(ctx, config);
+  } catch (e) {
+    try { console.error('[dsh-pet-bridge] channel start failed', e); } catch { /* noop */ }
+  }
 }
 
 export { inject };

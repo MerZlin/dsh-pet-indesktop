@@ -526,6 +526,15 @@
   要跳过 SMTC 改判窗口标题源；`runtime.poll()` 另有 `INFLIGHT_LIMIT_SECONDS=3` 的
   在飞看门狗（命中时直接把"读不到"交给判定层，不许只放开标志），`_worker_loop`
   必须包住 `_collect` 的异常。
+- **识别诊断也必须有界**：`sampling.collect` 的 audio / windows 两源一律走
+  `_SourceWorker`（每源一条常驻线程 + 单槽请求；8s 预算，超时后 15s 降级窗，
+  卡住那次返回即解除）。超时只让该源为空并写 `Sample.audio_error/window_error`，
+  其余源照常返回；诊断文本必须带「读取超时（N 秒）」行与候选清单。设置页
+  `_detect` 每次点击先 `SmtcReader.reset()`（否则两次卡死退役后永远显示
+  「已停止重试」直到重启），`finally` 必须恢复 `detect_button`。
+- **播放器窗口标题按播放器解析**：网易云标题形如 `歌名 - 歌手 - 网易云音乐`，走
+  `_PLAYER_TITLE_FORMATS`（只对 `cloudmusic.exe` 生效，默认格式串）；标题就是
+  播放器名（`网易云音乐`/`QQ音乐`…）判空闲、不是曲目。别把这条扩成通用规则。
 - **同播放器暂停的 `peak` 判据**：`recognizer.AUDIBLE_PEAK`（0.005）——残留 Active
   会话峰值为 0，判暂停；SMTC 状态落后但真在响，判在播。只看 `state` 会在两种相反
   的情况下各错一次（"暂停了还在唱" / "在放歌却识别不到"）。这种暂停必须带
@@ -740,6 +749,70 @@
   QTreeWidget 项。`reveal_text` 对下拉/列表只滚动定位，**不许改当前值**。
 - **自语每日句**：状态落 `feature-data/fun.self-talk/daily.json`，按 slot 记日期；
   只有气泡真的显示成功才标记已说；连说复用 `say_sequence`，不许自己拼定时器。
+
+- **音频输出路由唯一**：所有桌宠发声（点击音效、Agent 提示音、自语/报时 TTS）必须经
+  `petcore/media/audio_output.py` 的 `AudioOutputRouter`；空 `audio_output_device` 跟随系统默认，
+  手动设备不存在时 `audible=False` 静音且**绝不回退默认设备**。`SoundPlayer` 的
+  `QSoundEffect/QMediaPlayer` 缓存要在 `apply_route()` 里整体重建；不要把 `QMediaDevices`
+  带进 `--check`（没有 QApplication 会挂）。
+- **会话 schema 2 / 通道**：会话必须带 `channel=ai|dsh|qq` 与消息 `id/ts/channel/sender/external_id`；
+  v1→v2 首次写回前留 `.pre-v2`；`append(external_id=)` 在会话内去重。侧栏必须按
+  AI/DSH/QQ 三组 + 日期分节渲染；`ai` 通道继续走 `on_submit(owner,cb)`，`dsh/qq` 走
+  `register_channel`，不要为 DSH/QQ 在 UI 里写死分支。
+- **记忆单写者**：所有通道只 append `interop/memory/<character>/inbox.jsonl`；只有
+  `MemoryStore.ingest/maintain` 改 `card.json`；全量 `archive.jsonl` 永不进提示词；旧
+  `feature-data/ai.chat/memory` 只做一次性导入（标记幂等），旧文件不删不改。记忆渲染必须
+  按分区 priority + 字数预算裁剪。
+- **DSH v2 单插件**：`integrations/dsh-pet-bridge` 同时写状态 JSONL 与 HTTP+SSE；不要恢复
+  `dsh-pet-channel`。SSE 必须给 `id:/since/Last-Event-ID` 重放、`bootId`、`turnId/step/toolCallId`；
+  **历史只放行 `source.kind=user`**（DSH 每轮注入 `runtime-context`/`skill-catalog`/
+  `time-context`/`plugin`，实测首轮 3 条 10,292 字符，比真人发言多 30 倍）；审批 grant 绑定
+  `(tool, argsHash)`、过期 410，**指纹必须忽略 `description` 等说明字段**——DSH 在同意后的
+  续跑里会改写 description，把说明算进哈希会让通行证永不匹配、每次重试再弹一张卡；cancel 与
+  `/pet/new` 必须清 `lane.chain` **和**旧会话的待审批；`pet_control` 必须用标准 JSON Schema
+  注册（`required: ["action"]`；链接加载时 `@deepseek-ai/dsh-tools` 解析不到，作者简写会让
+  `tools.register()` 抛错且静默消失），`ping.commands` 报真实注册状态。状态 JSONL 仍只写脱敏元数据。
+- **审批是 Hub 级状态，不是视图级**：`DshHub` 必须自己记住 `approval-request`（`pending_approvals()`），
+  与 DSH 视图是否存在无关；`chat_dsh_mode` 打开 + 聊天窗存在时 `acquire_persistent()`
+  常驻订阅，视图 `acquire/release` 只算引用计数。审批到达要冒泡（`force=True`）并
+  把窗口切到 DSH 视图——真机事故：卡片 00:34 挂起、用户停在 AI 视图、00:44 自动作废。
+  历史回放（`_on_history`）重建时间线后必须从 Hub 补画仍在挂着的卡。
+- **SSE 不许在 GUI 线程关**：`DshController.stop()` 只置事件 + 起 daemon 线程
+  `close_active()`。`urllib` 的 `response.close()` 会被读线程的 socket 读挡住
+  （最长到 30s 超时），同步关流就是「DSH→AI 切换卡死」。
+- **审批续跑按「同一条命令 + 非危险装饰」放行**：DSH 在同意后重发时会追加
+  `; "exit=$LASTEXITCODE"`，只比 `argsHash` 会再弹一张卡（模型看到的是反复被拦）。
+  `sameCommandFamily()` 允许前缀相同且追加段无危险动词；追加段里出现新命令仍重新审批，
+  grant 保留到 `grantMinutes`。
+- **DSH 视图行宽只由 viewport 决定**：文本行一律 `_WrapLabel`（`minimumSizeHint` 宽=0 +
+  `QSizePolicy.Ignored`）。`QLabel` 的最小宽是最长不可断词宽度，一条含哈希/长路径的
+  tool-call 会把 `timeline` 撑到 1186px 而横向滚动条是关掉的 ⇒ 每行右侧永久裁掉 450px。
+  工具卡与思考行默认折叠（失败自动展开），assistant 走 `markdown_to_html`。
+- **聊天窗圆角靠透明子面**：`#chat-view-stack` / `#chat-ai-view` / `#dsh-view` /
+  `#dsh-header` / `#dsh-composer` 一律 `background: transparent`，白底只由
+  `phone_shell` 画；`phone_shell` 另加圆角 mask 兜底。QSS 从不裁剪子控件，任何
+  方形白底都会盖掉四角（实测右下角 30 个不透明白像素）。
+- **最大化要真铺满**：`changeEvent(WindowStateChange)` → `_sync_maximized()` 把
+  `SHELL_MARGIN`/圆角置 0；最大化期间 `position_near_pet()`、`_edge_at()` 与标题栏
+  拖动必须直接 return——`move()/setGeometry()` 会静默取消最大化并吃掉还原尺寸。
+- **侧栏 DSH 分组只在 `chat_dsh_mode` 打开时出现**，渠道组头 11px/600、日期组头
+  10px/400（与会话标题分层）。切视图必须切会话通道（`view_changed` →
+  `_on_view_changed`），否则关掉 DSH 后 AI 输入框仍往 DSH 会话里写。
+- **DSH 安装器升级要清三处**：profile 的 `bundles/dependencies`、`cordis.patch.yml` 里的旧
+  `insert` 条目、`node_modules` 里指向旧构建的 junction；只改一处会让旧通道继续抢端口或让新
+  代码不生效。patch 只删命中项、其余字节原样保留，改前备份。
+- **QQ 入站只在 core**：`im.qq` 不得 import socket/http.server；入站由 `WebhookPort`（只绑
+  127.0.0.1、空 token 拒绝、1MiB 上限），出站只经 `HostPorts.http`；token 只进钥匙串
+  `im.qq/access_token`、`im.qq/webhook_token`；空白名单 = 忽略该类消息。
+- **联网多引擎**：`search_many` 顺序扇出 + URL 去重，单引擎失败继续；读页 `html_to_text`
+  优先 `article/main`、去 nav/aside/script、保留标题/描述/发布时间；`fetch_page_text` 的
+  `max_chars` 取 `ai_web_search_page_chars`；不要把完整 URL/查询串写日志。
+- **每日池是包内数据**：`daily_lines.json` 不进 `DEFAULTS`；`self_talk_daily_texts=[]` 表示内置池；
+  旧默认 12 句只在 normalize 里识别为 `[]`；`daily.json:index` 只在气泡真的显示后推进，
+  当天抽完回退普通自语；`--check --strict` 少于 1000 条必须红。
+- **分段下载**：`petcore/net/ranged.py` 纯引擎不得 import urllib/socket；206 必须严格校验
+  `Content-Range` 起止/总长，200 只回退单流一次，429/Retry-After 不重试，取消每 256KiB 检查，
+  成功装配后段文件/侧车全删；所有 `urlopen` 仍 `pollute=False`。
 
 ## 4. 变更纪律
 

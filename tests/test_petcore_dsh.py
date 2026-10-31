@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -60,7 +61,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.path.startswith("/pet/ping"):
-            self._json({"ok": True, "plugin": "dsh-pet-channel", "version": "0.1.0"})
+            self._json({"ok": True, "plugin": "dsh-pet-bridge", "version": "0.1.0"})
             return
         if self.path.startswith("/pet/history"):
             self._json({"ok": True, "items": [{"role": "user", "text": "历史"}]})
@@ -118,7 +119,7 @@ def test_client_reads_info_and_rejects_remote_origin(tmp_path: Path) -> None:
 def test_client_ping_prompt_history_and_events(dsh_server) -> None:
     port, state = dsh_server
     client = DshClient(state_file=state)
-    assert client.ping()["plugin"] == "dsh-pet-channel"
+    assert client.ping()["plugin"] == "dsh-pet-bridge"
     assert client.prompt("你好")["ok"] is True
     assert _Handler.prompts == [{"text": "你好"}]
     assert client.history(5) == [{"role": "user", "text": "历史"}]
@@ -201,7 +202,12 @@ def test_installer_updates_profile_and_backs_up(tmp_path: Path) -> None:
     profile.mkdir(parents=True)
     package = profile / "package.json"
     package.write_text(
-        json.dumps({"dependencies": {}, "dsh": {"profile": {"bundles": []}}}),
+        json.dumps(
+            {
+                "dependencies": {"dsh-pet-channel": "file:old"},
+                "dsh": {"profile": {"bundles": ["dsh-pet-channel"]}},
+            }
+        ),
         encoding="utf-8",
     )
     calls = []
@@ -215,12 +221,12 @@ def test_installer_updates_profile_and_backs_up(tmp_path: Path) -> None:
     )
     assert result.ok is True, result
     doc = json.loads(package.read_text(encoding="utf-8"))
-    assert doc["dependencies"]["dsh-pet-channel"].startswith("file:")
     assert doc["dependencies"]["@dsh-pet/bridge"].startswith("file:")
-    assert "dsh-pet-channel" in doc["dsh"]["profile"]["bundles"]
+    assert "dsh-pet-channel" not in doc["dependencies"]
     assert "@dsh-pet/bridge" in doc["dsh"]["profile"]["bundles"]
+    assert "dsh-pet-channel" not in doc["dsh"]["profile"]["bundles"]
     assert Path(result.backup).is_file()
-    assert (home / ".dsh" / "local-plugins" / "dsh-pet-channel" / "index.js").is_file()
+    assert (home / ".dsh" / "local-plugins" / "dsh-pet-bridge" / "index.js").is_file()
     assert calls
 
 
@@ -253,6 +259,90 @@ def test_installer_rolls_back_profile_when_link_fails(tmp_path: Path) -> None:
     doc = json.loads(package.read_text(encoding="utf-8"))
     assert doc["dependencies"] == {}
     assert doc["dsh"]["profile"]["bundles"] == []
+
+
+def _junction(link: Path, target: Path) -> bool:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    done = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+    )
+    return int(done.returncode or 0) == 0
+
+
+def test_installer_strips_legacy_patch_entries(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    profile = dsh_install.profile_dir(home)
+    profile.mkdir(parents=True)
+    package = profile / "package.json"
+    package.write_text(
+        json.dumps(
+            {
+                "dependencies": {"dsh-pet-channel": "file:old"},
+                "dsh": {"profile": {"bundles": ["dsh-pet-channel"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    patch = profile / "cordis.patch.yml"
+    patch.write_text(
+        "# keep me\n"
+        "- id: ui-chat\n"
+        '  name: "@deepseek-ai/dsh-client-ui-chat"\n'
+        "- insert:\n"
+        "    - id: pet-channel\n"
+        "      name: dsh-pet-channel\n"
+        "      config:\n"
+        "        port: 6791\n"
+        "    - id: keeper\n"
+        "      name: some-other-plugin\n"
+        "- id: tail\n"
+        "  name: tail-plugin\n",
+        encoding="utf-8",
+    )
+    result = dsh_install.install(
+        home,
+        plugin_root_dir=_plugin_root(tmp_path),
+        runner=lambda *a, **k: SimpleNamespace(returncode=0),
+    )
+    assert result.ok is True, result
+    text = patch.read_text(encoding="utf-8")
+    assert "dsh-pet-channel" not in text
+    assert "keeper" in text and "ui-chat" in text and "# keep me" in text
+    assert list(profile.glob("cordis.patch.yml.dsh-pet-backup-*"))
+
+
+def test_installer_repoints_stale_bridge_link_and_drops_legacy_link(
+    tmp_path: Path,
+) -> None:
+    if os.name != "nt":
+        pytest.skip("junction semantics are Windows-only")
+    home = tmp_path / "home"
+    profile = dsh_install.profile_dir(home)
+    profile.mkdir(parents=True)
+    (profile / "package.json").write_text(
+        json.dumps({"dependencies": {}, "dsh": {"profile": {"bundles": []}}}),
+        encoding="utf-8",
+    )
+    stale = tmp_path / "stale-bridge"
+    stale.mkdir()
+    (stale / "index.js").write_text("stale\n", encoding="utf-8")
+    link = profile / "node_modules" / "@dsh-pet" / "bridge"
+    if not _junction(link, stale):
+        pytest.skip("cannot create junction")
+    legacy_target = tmp_path / "stale-channel"
+    legacy_target.mkdir()
+    legacy = profile / "node_modules" / "dsh-pet-channel"
+    if not _junction(legacy, legacy_target):
+        pytest.skip("cannot create junction")
+
+    result = dsh_install.install(
+        home, plugin_root_dir=_plugin_root(tmp_path), runner=subprocess.run
+    )
+    assert result.ok is True, result
+    target = home / ".dsh" / "local-plugins" / "dsh-pet-bridge"
+    assert Path(os.path.realpath(link)) == Path(os.path.realpath(target))
+    assert not legacy.exists() and not legacy.is_junction()
 
 
 # ---------------------------------------------------------------- 审批状态机 / 共享连接
@@ -318,21 +408,30 @@ class _FakeDshClient:
     def ping(self):
         return {"version": "test"}
 
-    def history(self, limit=20):
+    def history(self, limit=200, **kwargs):
         return []
 
-    def events(self, stop, *, idle_sleep=1.0):
+    def events(self, stop, *, idle_sleep=1.0, since=0):
         type(self).connections = self.connections + 1
         self.connections += 1
-        yield {"kind": "hello", "version": "test"}
+        yield {"kind": "hello", "version": "test", "bootId": "boot"}
         while not stop.wait(0.05):
             pass
+
+    def sessions(self):
+        return []
+
+    def new_session(self):
+        return "session-new"
+
+    def approvals(self):
+        return []
 
     def answer(self, request_id, allow):
         self.answers.append((request_id, bool(allow)))
         return {"ok": True}
 
-    def prompt(self, text):
+    def prompt(self, text, *, context=None):
         self.sent.append(str(text))
         return {"ok": True}
 
@@ -393,3 +492,105 @@ def test_hub_replays_connected_state_to_a_second_view(app) -> None:
         hub.shutdown()
         first.deleteLater()
         second.deleteLater()
+
+
+class _SlowCloseClient(_FakeDshClient):
+    """``close_active`` 会卡住：真机现场是 urllib 的 response.close() 被读线程挡住。"""
+
+    def __init__(self, delay: float = 1.0) -> None:
+        super().__init__()
+        self.closed = 0
+        self.delay = delay
+
+    def close_active(self):
+        self.closed += 1
+        time.sleep(self.delay)
+
+
+def test_pending_approval_survives_without_a_view_and_replays(app) -> None:
+    """审批是 Hub 级状态：视图没建/停在 AI 视图时也必须记住并补画。
+
+    真机事故：00:34:43 闸门挂起（pending=1），用户没看到卡，00:44:43 自动作废。
+    """
+    from petcore.ui.chat.dsh_controller import DshHub
+
+    client = _FakeDshClient()
+    hub = DshHub(client)
+    try:
+        hub._relay_frame(
+            {"kind": "approval-request", "id": "a7", "tool": "pwsh", "args": "{}"}
+        )
+        assert [item["id"] for item in hub.pending_approvals()] == ["a7"]
+        view = DshView(client, hub=hub)
+        try:
+            assert "a7" in view._approvals
+            hub._relay_frame({"kind": "approval-resolved", "id": "a7", "allow": True})
+            assert hub.pending_approvals() == []
+        finally:
+            view.deleteLater()
+    finally:
+        hub.shutdown()
+
+
+def test_history_replay_restores_still_pending_approvals(app) -> None:
+    from petcore.ui.chat.dsh_controller import DshHub
+
+    client = _FakeDshClient()
+    hub = DshHub(client)
+    view = DshView(client, hub=hub)
+    try:
+        hub._relay_frame(
+            {"kind": "approval-request", "id": "a8", "tool": "pwsh", "args": "{}"}
+        )
+        # 历史回放会重建整条时间线；待审批必须跟着回来（桥不会重放审批帧）。
+        view._on_history([{"role": "user", "text": "你好"}])
+        assert "a8" in view._approvals
+    finally:
+        hub.shutdown()
+        view.deleteLater()
+
+
+def test_stop_never_closes_the_stream_on_the_calling_thread(app) -> None:
+    """GUI 线程上关 SSE 会让「DSH→AI」切换卡住（真机主因）。"""
+    from petcore.ui.chat.dsh_controller import DshController
+
+    client = _SlowCloseClient(delay=1.0)
+    controller = DshController(client)
+    controller.start()
+    try:
+        started = time.monotonic()
+        controller.stop()
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.2, f"stop() 阻塞了 {elapsed:.2f}s"
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and client.closed == 0:
+            QApplication.processEvents()
+            time.sleep(0.02)
+        assert client.closed == 1
+    finally:
+        controller.shutdown()
+
+
+def test_persistent_hub_keeps_the_stream_after_views_release(app) -> None:
+    from petcore.ui.chat.dsh_controller import DshHub
+
+    client = _FakeDshClient()
+    hub = DshHub(client)
+    view = DshView(client, hub=hub)
+    try:
+        hub.acquire_persistent()
+        view.activate()
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and client.connections < 1:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        view.deactivate()
+        QApplication.processEvents()
+        time.sleep(0.1)
+        QApplication.processEvents()
+        assert client.connections == 1, "常驻订阅不该随视图关闭而断流"
+        hub.release_persistent()
+        QApplication.processEvents()
+    finally:
+        hub.shutdown()
+        view.deleteLater()

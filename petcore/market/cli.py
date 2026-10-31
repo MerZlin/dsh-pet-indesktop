@@ -75,6 +75,19 @@ def _allow_feature_mods(root: Path) -> bool:
         return False
 
 
+def _download_options(root: Path) -> tuple[int, str]:
+    """分段下载设置：连接数（1..8，1 = 旧单流）与镜像策略（auto/ordered/race）。"""
+    try:
+        config = Config.load(root)
+        connections = int(config.get("market_download_connections") or 1)
+        sources = str(config.get("market_download_sources") or "auto").strip().lower()
+    except Exception:
+        return 1, "auto"
+    if sources not in {"auto", "ordered", "race"}:
+        sources = "auto"
+    return max(1, min(8, connections)), sources
+
+
 def _source(args: argparse.Namespace) -> MarketSource:
     fetcher = _OfflineFetcher() if args.offline else HttpFetcher()
     return MarketSource(_root(args), fetcher, urls=DEFAULT_INDEX_URLS)
@@ -210,6 +223,7 @@ def _install_one(
     index_origin: str = "",
 ) -> install.InstallOutcome:
     local_file_root = local_file_root_for_index(index_origin)
+    connections, mirror_policy = _download_options(root)
     return install.install_package(
         root,
         package,
@@ -219,6 +233,8 @@ def _install_one(
         core_version=__version__,
         index_origin=index_origin,
         local_file_root=local_file_root,
+        connections=connections,
+        mirror_policy=mirror_policy,
     )
 
 

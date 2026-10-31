@@ -1,6 +1,6 @@
 """DSH 本地通道客户端（HTTP + SSE，只连 127.0.0.1）。
 
-通道插件 ``dsh-pet-channel`` 监听本机端口，并把 ``{origin, port, token}`` 写到
+通道插件 ``dsh-pet-bridge`` v2 监听本机端口，并把 ``{origin, port, token}`` 写到
 ``%APPDATA%/dsh-pet-bridge/pet-channel.json``。本模块只读这个文件、只发本机请求；
 token 只进请求头，不写日志、不进异常文本。
 """
@@ -37,6 +37,7 @@ class DshInfo:
     port: int = 0
     version: str = ""
     pid: int = 0
+    boot_id: str = ""
 
 
 def _state_file() -> Path:
@@ -52,6 +53,8 @@ def _reason_for(exc: BaseException) -> str:
         code = int(getattr(exc, "code", 0) or 0)
         if code in (401, 403):
             return "auth"
+        if code == 410:
+            return "expired"
         if code == 404:
             return "not_running"
         return "protocol"
@@ -135,6 +138,7 @@ class DshClient:
             port=port,
             version=str(doc.get("version") or ""),
             pid=int(doc.get("pid") or 0) if str(doc.get("pid") or "").isdigit() else 0,
+            boot_id=str(doc.get("bootId") or ""),
         )
 
     def _request(
@@ -177,7 +181,7 @@ class DshClient:
         except urllib.error.HTTPError as exc:
             raise DshError(_reason_for(exc)) from None
         try:
-            raw = response.read(1024 * 1024)
+            raw = response.read(8 * 1024 * 1024)
         finally:
             try:
                 response.close()
@@ -209,39 +213,81 @@ class DshClient:
             raise DshError("protocol") from None
         return doc if isinstance(doc, dict) else {}
 
-    def prompt(self, text: str) -> dict:
+    def prompt(self, text: str, *, context: dict | None = None) -> dict:
         value = str(text or "").strip()
         if not value:
             raise DshError("bad_request")
-        return self._json("/pet/prompt", method="POST", payload={"text": value[:4000]})
+        payload: dict = {"text": value[:4000]}
+        if isinstance(context, dict):
+            payload["context"] = {
+                str(key): str(item)[:8000]
+                for key, item in context.items()
+                if item
+            }
+        return self._json("/pet/prompt", method="POST", payload=payload)
 
     def answer(self, request_id: str, allow: bool) -> dict:
-        return self._json(
-            "/pet/answer",
-            method="POST",
-            payload={"id": str(request_id), "allow": bool(allow)},
-        )
+        try:
+            return self._json(
+                "/pet/answer",
+                method="POST",
+                payload={"id": str(request_id), "allow": bool(allow)},
+            )
+        except DshError as exc:
+            if exc.reason == "expired":
+                raise DshError("expired") from None
+            raise
 
     def cancel(self) -> dict:
         return self._json("/pet/cancel", method="POST", payload={})
 
-    def history(self, limit: int = 20) -> list[dict]:
-        doc = self._json(f"/pet/history?limit={max(1, min(50, int(limit)))}")
+    def sessions(self) -> list[dict]:
+        doc = self._json("/pet/sessions")
         items = doc.get("items")
         return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
 
-    def events(self, stop, *, idle_sleep: float = 1.0) -> Iterator[dict]:
+    def new_session(self) -> str:
+        doc = self._json("/pet/new", method="POST", payload={})
+        return str(doc.get("sessionId") or "")
+
+    def approvals(self) -> list[dict]:
+        doc = self._json("/pet/approvals")
+        items = doc.get("items")
+        return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+    def history(
+        self,
+        limit: int = 200,
+        *,
+        session_id: str = "",
+        since_seq: int = 0,
+        include_internal: bool = False,
+    ) -> list[dict]:
+        params = [f"limit={max(1, min(200, int(limit)))}"]
+        if session_id:
+            params.append(f"sessionId={urllib.parse.quote(str(session_id), safe='')}")
+        if since_seq > 0:
+            params.append(f"sinceSeq={int(since_seq)}")
+        if include_internal:
+            params.append("includeInternal=1")
+        doc = self._json("/pet/history?" + "&".join(params))
+        items = doc.get("items")
+        return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+    def events(self, stop, *, idle_sleep: float = 1.0, since: int = 0) -> Iterator[dict]:
         """SSE 帧迭代器：断线自动重连；``stop`` 是 ``threading.Event``。
 
         连接状态以 ``{"kind": "connection", "ok": bool, "reason": str}`` 帧暴露，
         视图据此把「已连接」改成「已断开」；重连按指数退避，读超时至少 2 倍
-        keepalive，避免机器忙时周期性误重连。
+        keepalive，避免机器忙时周期性误重连。``since`` 用于 Last-Event-ID 重放。
         """
         delay = max(1.0, float(idle_sleep))
+        cursor = max(0, int(since))
         while not stop.is_set():
+            path = "/pet/events" + (f"?since={cursor}" if cursor > 0 else "")
             try:
                 response = self._request(
-                    "/pet/events", timeout=max(30.0, self.timeout * 2.0)
+                    path, timeout=max(30.0, self.timeout * 2.0)
                 )
             except Exception as exc:  # noqa: BLE001 - 通道未起/鉴权失败
                 yield {
@@ -263,6 +309,12 @@ class DshClient:
                     line = bytes(raw).decode("utf-8", errors="replace").strip()
                     if not line or line.startswith(":"):
                         continue
+                    if line.startswith("id:"):
+                        try:
+                            cursor = max(cursor, int(line[3:].strip()))
+                        except ValueError:
+                            pass
+                        continue
                     if line.startswith("data:"):
                         payload = line[5:].strip()
                         try:
@@ -270,6 +322,9 @@ class DshClient:
                         except ValueError:
                             continue
                         if isinstance(frame, dict):
+                            seq = frame.get("seq")
+                            if isinstance(seq, int):
+                                cursor = max(cursor, seq)
                             yield frame
             except (TimeoutError, socket.timeout):
                 pass

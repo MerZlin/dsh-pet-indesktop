@@ -319,6 +319,58 @@ class _PageHost:
         self.features = None
 
 
+class FakeStorage:
+    """最小 StoragePort：每日一句状态落在 ``tmp_path/feature-data/<owner>``。"""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def data_dir(self, owner: str) -> Path:
+        return self.root / "feature-data" / owner
+
+    def config_dir(self, owner: str) -> Path:
+        return self.data_dir(owner)
+
+    def data_root(self) -> Path:
+        return self.root
+
+
+def test_daily_line_comes_before_random_talk_and_never_rolls_an_image(
+    app, tmp_path: Path
+) -> None:
+    import json
+
+    folder = tmp_path / "pics"
+    folder.mkdir()
+    _write_image(folder / "a.png")
+    config = _config(tmp_path, chance=100, image_dir=folder)
+    config.set("self_talk_daily_count", 1)
+    presentation = SpyPresentation()
+    runtime = _load_runtime(
+        SELF_TALK_PACK,
+        "fun.self-talk",
+        HostPorts(
+            presentation=presentation,
+            scheduler=FakeScheduler(),
+            storage=FakeStorage(tmp_path),
+        ),
+        config,
+    )
+    pool = json.loads(
+        (SELF_TALK_PACK / "daily_lines.json").read_text(encoding="utf-8")
+    )["lines"]
+
+    runtime._speak()
+
+    assert presentation.images == [], "每日一句只冒文字气泡，不掷配图"
+    assert presentation.said and presentation.said[0][0] in pool
+
+    # 当天的 1 句说完 → 下一次回到普通自言自语（这里 100% 出图）。
+    runtime._speak()
+    assert presentation.images
+    assert len(presentation.said) == 1
+
+
 def test_image_settings_live_on_the_interaction_page(app, tmp_path: Path) -> None:
     host = _PageHost(tmp_path)
     feature = _load_feature(

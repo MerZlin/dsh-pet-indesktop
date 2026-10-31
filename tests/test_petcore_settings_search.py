@@ -22,6 +22,7 @@ from petcore.ui.settings.base import (
     register_search_terms,
     reveal_text,
 )
+from petcore.ui.settings.folds import CollapsibleSection
 from petcore.ui.settings.tabs import SettingsTabContainer
 
 
@@ -55,6 +56,13 @@ class SearchPage(SettingsPage):
             QLabel("……", self),
             search_keys=("今日台词", "连说"),
         )
+        self.fold = CollapsibleSection("折叠分组", expanded=False, parent=self)
+        self.fold.card().add_row(
+            "自定义台词",
+            QLabel("……", self.fold),
+            search_keys=("自定义台词", "覆盖内置池"),
+        )
+        self._append_section_widget(self.fold)
 
 
 def test_search_texts_include_tree_combo_list_and_registered_keys(app) -> None:
@@ -121,3 +129,20 @@ def test_register_search_terms_is_idempotent(app) -> None:
     register_search_terms(widget, "字号", "预设")
     assert widget.property("searchKeys") == ["字体", "字号", "预设"]
     widget.deleteLater()
+
+
+def test_reveal_expands_a_collapsed_section(app) -> None:
+    """折叠区里的行也要能被搜索定位：先展开，再滚到该行。"""
+    page = SearchPage()
+    try:
+        assert page.fold.is_expanded() is False
+        assert reveal_text(page, "自定义台词") is True
+        QApplication.processEvents()
+        assert page.fold.is_expanded() is True
+        # 搜到折叠区之外的行不该顺手展开无关分组。
+        page.fold.set_expanded(False)
+        assert reveal_text(page, "长期记忆") is True
+        QApplication.processEvents()
+        assert page.fold.is_expanded() is False
+    finally:
+        page.deleteLater()

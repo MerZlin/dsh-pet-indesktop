@@ -149,12 +149,16 @@ class SmtcSample:
 
 
 def normalized_app_id(app_id: str | None) -> str:
-    """归一化 SMTC app_id：小写、去空白、去 ``.exe`` 后缀。
+    """归一化 SMTC app_id：取 basename、小写、去空白、去 ``.exe`` 后缀。
 
     实测同一台机器上形状不统一（``Chrome`` / ``MSEdge`` / ``cloudmusic.exe``），
-    比较前必须归一。
+    有些播放器还把 app_id 报成**完整安装路径**
+    （``C:\\Program Files\\Netease\\CloudMusic\\cloudmusic.exe``）。取 basename 与
+    ``recognizer.normalized_exe`` 同一口径：不取的话「只识别指定播放器」会把这些
+    会话整条滤掉，安装路径也会跟着进诊断文本。
     """
-    value = str(app_id or "").strip().lower()
+    value = str(app_id or "").strip().lower().replace("\\", "/")
+    value = value.rsplit("/", 1)[-1].strip()
     if value.endswith(".exe"):
         value = value[:-4]
     return value
@@ -616,6 +620,8 @@ class SmtcReader:
       返回退化样例、不派发（不排队、不刷屏）；
     - 窗到期仍在卡：退役那条线程、另起一条探测（``SMTC_MAX_STUCK_THREADS`` 次上限），
       读取线程一旦空出来也自动解除降级——不需要重启程序/播放器；
+    - ``reset()`` 是**用户显式重试**（设置页每次点检测）：清降级窗与重试计数，
+      让"已停止重试"的状态回到可再试一次；
     - ``stop()`` 有界；收口后不再建线程，迟到的结果丢弃。
     """
 
@@ -715,6 +721,20 @@ class SmtcReader:
             self._degraded_until = self._clock() + self._degraded_seconds
             self._reason = SMTC_TIMEOUT_REASON
         return self._degraded_sample()
+
+    def reset(self) -> None:
+        """用户显式重试：清掉降级状态与"已停止重试"的计数。
+
+        设置页「检测当前播放」每次点击都调它。两次卡死退役之后 ``read()`` 会一直
+        返回 ``SMTC_GIVEUP_REASON``，没有这条缝就只能重启程序才能再试一次。
+        **不停、不杀**卡住的线程（Python 没有安全的办法）：reset 只是允许下一次
+        ``read()`` 重新派发；若那条线程仍卡着，这次读会在超时后再次进入降级。
+        """
+        with self._lock:
+            self._stuck = False
+            self._degraded_until = 0.0
+            self._reason = ""
+            self._stuck_threads = 0
 
     def stop(self, timeout: float = 1.0) -> bool:
         """收口：唤醒并等待读取线程（有界）；返回线程是否已退出。"""

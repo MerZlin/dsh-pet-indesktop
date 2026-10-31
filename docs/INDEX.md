@@ -144,6 +144,11 @@
 
 ## PR 报告存档
 
+- [DSH v2 真机联调（2026-10-31）](PR-REPORT-DSH-REAL-MACHINE-2026-10-31.md)：在真实 DSH 44.7.0 上补齐 v1→v2 迁移（旧 junction / patch `insert` / 旧 channel 链接三处）、历史只回放 `source.kind=user`（实测注入 10,292 字符）、审批指纹忽略 `description`（修重复弹卡）、`pet_control` 改标准 JSON Schema 并如实报 `commands`、`/pet/new` 清旧审批。**改 DSH 安装器、审批闸、历史过滤或 `pet_control` 前必读**；未验证项见报告末节。
+- [聊天/DSH 视图、审批投递与网易云识别（2026-11-01）](PR-REPORT-CHAT-DSH-UX-2026-11-01.md)：审批升 `DshHub` 级并常驻订阅（真机：AI 视图也能收到卡，允许后 4.0s 续跑、无第二张卡）、SSE 关流移出 GUI 线程（切换 0.0ms）、DSH 行宽按 viewport（修 1186px→每行裁 450px）、工具/思考折叠 + Markdown、窗口圆角与最大化、`chat_dsh_mode` 侧栏开关与视图↔会话通道、音乐诊断有界化（8s 预算 + 15s 降级窗）与网易云标题。**改 `petcore/ui/chat/`、DSH 审批/订阅、聊天窗几何或音乐采样前必读**。
+
+- [用户反馈批次 3：音频输出 / 每日千句 / 并行下载 / 桌宠×DSH×QQ 互通与人格记忆（2026-10-31）](PR-REPORT-FEEDBACK-BATCH3-2026-10-31.md)：音频输出设备（热插拔/不回退）；每日 1200 句池 + 每天 12 句；PCL2 式多连接分段下载 + 进度条；会话 schema 2 + 侧栏 AI/DSH/QQ 分组；分层人格记忆（inbox/衰减卡/预算渲染/迁移）；DSH v2 单插件（SSE 重放/审批/历史过滤/记忆注入）；QQ OneBot Beta（WebhookPort/白名单/AI 回复）；联网多引擎 + 正文抽取。**改上述任一模块前必读**；真机 DSH/QQ 未验证项见报告末节。
+
 - [用户反馈批次 2：聊天 / 语音 / 直播 / 设置搜索 / DSH / 人格 / 会话 / 自语（2026-10-31）](PR-REPORT-FEEDBACK-BATCH2-2026-10-31.md)：聊天输入区紧凑 + 拼音 placeholder；音频输出/麦克风设备；色键直播窗 + GDI 捕获自检；设置搜索定位动画树/下拉/折叠 mod 页；DSH 审批状态机 + 单 SSE + 通道超时；ASR partial 预览；人格卡覆盖/恢复；会话日期分节/归档/三点菜单；AI 助手二级菜单；每日一句/连说。**改聊天窗布局、语音、直播、设置搜索、DSH、人格卡、会话存储或自语前必读**。
 
 - [用户反馈八组需求：动画治理 / 聊天语义 / 语音 / API / DSH / 记忆（2026-10-30）](PR-REPORT-USER-FEEDBACK-BATCH-2026-10-30.md)：动画 12 类分类 + 随机动作总开关 + 逐动画「仅手动/禁用」；AI 回复语义动作与 DSH 六态动作；聊天字体族/字号与 6 个人设预设；WinMM 录音 + 本地 ASR/系统兜底 + 语音对话；API 本地模型预设与 opencode 可选免费档；同窗 DSH 页 + `pet_control` + 历史只读/带入；长期记忆 global/character 两域；附「桌宠卡死」分析不成立的证据。**改动画策略、聊天窗布局/字体、语音输入、API 预设、DSH 通道或记忆前必读**。
@@ -407,6 +412,7 @@
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
 | [`PETCORE-ARCHITECTURE.md`](PETCORE-ARCHITECTURE.md) | `petcore` 的分层、契约、启动路径、数据目录与 VPet 对应关系。 | 改 `petcore/` 任何模块、判断 core 与 mod 边界前必读。 |
+| [`INTEROP-ARCHITECTURE.md`](INTEROP-ARCHITECTURE.md) | 桌宠 × DSH × QQ 互通的进程拓扑、通道契约、会话 schema 2、分层人格记忆、插件边界与未验证项（2026-10-31 基线）。 | 改 DSH 桥接/通道、QQ 互通、会话存储、记忆服务或 WebhookPort 前必读。 |
 | [`PETCORE-MOD-FORMAT.md`](PETCORE-MOD-FORMAT.md) | `mod.json` 字段、校验、发现/启停、安装与能力模型（**字段级参考**）。 | 新增/修改 mod 包、改加载器或安装流程前必读；**动手写一个 mod 先看 [PETCORE-MOD-DEVELOPMENT.md](PETCORE-MOD-DEVELOPMENT.md)**（建包、接线、安装、排错的完整流程）。 |
 | [`PETCORE-MOD-DEVELOPMENT.md`](PETCORE-MOD-DEVELOPMENT.md) | **从零做一个 mod 的动手指南**：三类产物（feature / 角色包 / 内容块）分别放哪、最小可运行骨架（manifest+factory+runtime+设置页，代码已实测）、菜单与设置页的真实接线键、端口选型与线程铁律、本地安装/重载/排错闭环、ZIP 与安装器分发、角色包导入三条路径与不支持项、排错对照表与提交 checklist。 | **第一次写 petcore 扩展、判断「素材包该放哪」、或排查「装了为什么没生效」时先读这篇**；字段级细节再查 `PETCORE-MOD-FORMAT.md`，角色包规格查 `PETCORE-CHARACTER-PACKS.md`。 |
 | [`PETCORE-MARKET.md`](PETCORE-MARKET.md) | 插件市场 v1：静态索引契约、来源与缓存、下载校验、安装/更新/回滚、生效语义、npm 结论与信任边界。 | 改 `petcore/market/`、市场设置页、索引仓库，或排查「插件装不上 / 更新或回滚失败 / 索引过期」时必读。 |

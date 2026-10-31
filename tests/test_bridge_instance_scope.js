@@ -119,8 +119,12 @@ test("状态事件信封带 sourceTurn；没有回合号时整字段不写（接
 test("session/event 真处理函数：整封转发的记录都带回合号，无 turn 时不带", () => {
   // 只驱动真 apply 注册的 session/event 处理函数 + 写队列窥视（不落盘、不起 DSH 宿主）
   const handlers = new Map();
-  applyPlugin({ on: (name, fn) => { handlers.set(name, fn); } });
-  const onSessionEvent = handlers.get("session/event");
+  applyPlugin({ on: (name, fn) => {
+    const list = handlers.get(name) || [];
+    list.push(fn);
+    handlers.set(name, list);
+  } });
+  const onSessionEvent = handlers.get("session/event")?.[0];
   assert.ok(typeof onSessionEvent === "function", "apply 必须注册 session/event 处理函数");
 
   const session = { id: "s-mirror" };

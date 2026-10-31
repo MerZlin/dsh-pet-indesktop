@@ -8,7 +8,15 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QMouseEvent, QPainter, QPainterPath
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QGuiApplication,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QRegion,
+)
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -46,7 +54,9 @@ FLUSH_INTERVAL_MS = 50
 COMPACT_WIDTH = 880
 SIDEBAR_WIDTH = 238
 SHELL_MARGIN = 7
-SHELL_RADIUS = 20.0
+#: 必须与 QSS ``QFrame#phone-shell`` 的 ``border-radius: 14px`` 一致：
+#: 两处不一致时壁纸裁剪会露出一角白边。
+SHELL_RADIUS = 14.0
 #: 跟随桌宠时与身体框的间距；40ms 的单次合并定时器避免 60Hz 移动时反复重排。
 FOLLOW_GAP = 14
 FOLLOW_COALESCE_MS = 40
@@ -66,6 +76,11 @@ class ChatWindow(QDialog):
     session_archive_requested = Signal(str, bool)
     session_delete_requested = Signal(str)
     archived_toggled = Signal(bool)
+    dsh_session_started = Signal(str)
+    dsh_submitted = Signal(str)
+    #: 用户切了 AI/DSH 视图：controller 据此把「当前会话」切到同通道的会话，
+    #: 否则关掉 DSH 后输入框仍往 DSH 会话里写（实测过的错位）。
+    view_changed = Signal(str)
 
     def __init__(
         self,
@@ -75,6 +90,7 @@ class ChatWindow(QDialog):
         font_family: str = "",
         dsh=None,
         dsh_hub=None,
+        dsh_enabled: bool = False,
         character_id: str = "default",
         accent: str = DEFAULT_ACCENT,
         background: str = "",
@@ -90,6 +106,7 @@ class ChatWindow(QDialog):
         self._font_family = str(font_family or "").strip()
         self._dsh_client = dsh
         self._dsh_hub = dsh_hub
+        self._dsh_enabled = bool(dsh_enabled)
         self._base_accent = safe_accent(accent)
         self.accent_color = self._base_accent
         self._bg_value = str(background or "").strip()
@@ -114,6 +131,9 @@ class ChatWindow(QDialog):
         self._group_rows: dict[str, list[int]] = {}
         self._group_headers: dict[str, QListWidgetItem] = {}
         self._group_labels: dict[str, str] = {}
+        self._channel_rows: dict[str, list[int]] = {}
+        self._channel_headers: dict[str, QListWidgetItem] = {}
+        self._channel_labels: dict[str, str] = {}
         self._row_by_session: dict[str, int] = {}
         self._scroll_pin = True
         self._auto_scrolling = False
@@ -140,7 +160,9 @@ class ChatWindow(QDialog):
         # Desktop AI-chat workspace: conversation navigation on the left and
         # the focused message canvas on the right.
         self.setMinimumSize(560, 480)
-        self.setMaximumSize(1600, 1200)
+        # 4K 上限：原来的 1600×1200 会把大屏上的手动缩放卡住（最大化本身不受
+        # maximumSize 限制，但边拖 resize 会被它 clamp）。
+        self.setMaximumSize(3840, 2160)
         self.resize(960, 700)
         # Frameless window has no system resize border on Windows; track the
         # mouse so edge hover can switch to the resize cursor and drags resize.
@@ -190,6 +212,9 @@ class ChatWindow(QDialog):
 
     def position_near_pet(self) -> None:
         """贴到桌宠身体框旁边：右侧优先，溢出换左侧，再不行上下落位并钳制在屏内。"""
+        if self.isMaximized():
+            # 跟随桌宠每 40ms 调一次 move()；最大化时 move() 会取消最大化。
+            return
         pet = self._pet_window
         if pet is None:
             return
@@ -348,19 +373,84 @@ class ChatWindow(QDialog):
         self.pin_toggled.emit(on)
 
     def set_always_on_top(self, on: bool) -> None:
-        """切换聊天窗置顶；保留位置、尺寸与可见/激活状态。"""
+        """切换聊天窗置顶；保留位置、尺寸、最大化状态与可见/激活状态。"""
         was_visible = self.isVisible()
         was_active = self.isActiveWindow()
+        was_maximized = self.isMaximized()
         geometry = self.geometry()
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(on))
-        self.setGeometry(geometry)
-        if was_visible:
-            self.show()
-            if was_active:
-                self.activateWindow()
         self.pin_button.blockSignals(True)
         self.pin_button.setChecked(bool(on))
         self.pin_button.blockSignals(False)
+        if was_maximized:
+            # 最大化时 setGeometry 会被 Qt 当成「取消最大化」，还会把还原尺寸
+            # 写成整屏几何（实测：之后 showNormal() 回不到原尺寸）。
+            if was_visible:
+                self.show()
+                self.showMaximized()
+        else:
+            self.setGeometry(geometry)
+            if was_visible:
+                self.show()
+        if was_visible and was_active:
+            self.activateWindow()
+        self._sync_maximized()
+
+    # ---------------------------------------------------------------- 最大化
+    def toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+        self._sync_maximized()
+
+    def _sync_maximized(self) -> None:
+        """最大化 = 真铺满：去掉 7px 透明外环与圆角，缩放边停用。
+
+        不做这一步时，``showMaximized()`` 只会把窗口撑到工作区，但
+        ``phone_shell`` 仍带着 ``SHELL_MARGIN`` 与 14px 圆角——用户看到的是
+        「四周漏 7px 桌面 + 四个圆角」，不是最大化。
+        """
+        maximized = bool(self.isMaximized())
+        margin = 0 if maximized else SHELL_MARGIN
+        outer = self.layout()
+        if outer is not None:
+            outer.setContentsMargins(margin, margin, margin, margin)
+        self._shell_radius = 0.0 if maximized else SHELL_RADIUS
+        self.phone_shell.setProperty("maximized", maximized)
+        style = self.phone_shell.style()
+        style.unpolish(self.phone_shell)
+        style.polish(self.phone_shell)
+        self.maximize_button.setIcon(
+            tool_icon(self.maximize_button, "restore" if maximized else "maximize", 16)
+        )
+        self.maximize_button.setToolTip("还原" if maximized else "最大化")
+        self.maximize_button.setAccessibleName(
+            "还原聊天窗口" if maximized else "最大化聊天窗口"
+        )
+        self._apply_shell_mask()
+        self.update()
+
+    def _apply_shell_mask(self) -> None:
+        """把子控件裁进圆角：QSS 不裁剪子控件，方形白底会盖掉四角。
+
+        实测（960×700）右下角圆角外有 30 个不透明纯白像素，元凶是
+        ``#chat-view-stack`` / ``#chat-ai-view`` 的方形白底。把这几层改成透明
+        是主修法，这个 mask 是兜底（音频/皮肤等以后新增的表面同样被裁住）。
+        """
+        shell = getattr(self, "phone_shell", None)
+        if shell is None:
+            return
+        radius = float(getattr(self, "_shell_radius", SHELL_RADIUS))
+        width, height = shell.width(), shell.height()
+        if radius <= 0.5 or width <= 0 or height <= 0:
+            shell.clearMask()
+            return
+        path = QPainterPath()
+        path.addRoundedRect(
+            QRectF(0.0, 0.0, float(width), float(height)), radius, radius
+        )
+        shell.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
     def _resolve_background(self) -> None:
         self._bg_pixmap = themes.resolve_background_pixmap(self._bg_value)
@@ -589,6 +679,11 @@ class ChatWindow(QDialog):
         self.pin_button.setCheckable(True)
         self.pin_button.setChecked(self.is_always_on_top())
         title_layout.addWidget(self.pin_button)
+        self.maximize_button = QToolButton(self.title_bar)
+        self.maximize_button.setObjectName("window-maximize-button")
+        self.maximize_button.setIcon(tool_icon(self.maximize_button, "maximize", 16))
+        self.maximize_button.setToolTip("最大化")
+        self.maximize_button.setAccessibleName("最大化聊天窗口")
         self.minimize_button = QToolButton(self.title_bar)
         self.minimize_button.setObjectName("window-minimize-button")
         self.minimize_button.setIcon(tool_icon(self.minimize_button, "minimize", 16))
@@ -618,6 +713,8 @@ class ChatWindow(QDialog):
             self._dsh_client, self.view_stack, hub=self._dsh_hub
         )
         self.dsh_view.context_ready.connect(self._use_dsh_context)
+        self.dsh_view.session_started.connect(self.dsh_session_started)
+        self.dsh_view.send_requested.connect(self.dsh_submitted)
         self.view_stack.addWidget(self.dsh_view)
         chat_main_layout.addWidget(self.view_stack, 1)
 
@@ -718,9 +815,13 @@ class ChatWindow(QDialog):
 
     def _on_view_toggled(self, checked: bool) -> None:
         self.set_view("dsh" if checked else "ai")
+        self.view_changed.emit(self.current_view())
 
     def set_view(self, view: str) -> None:
         dsh = str(view or "").lower() == "dsh"
+        if dsh and not self._dsh_enabled:
+            # 第一次点 DSH 就等于打开模式：侧栏 DSH 分组随之出现。
+            self.set_dsh_enabled(True)
         self.view_stack.setCurrentWidget(self.dsh_view if dsh else self.ai_view)
         self.view_button.blockSignals(True)
         self.view_button.setChecked(dsh)
@@ -732,6 +833,25 @@ class ChatWindow(QDialog):
         else:
             self.dsh_view.deactivate()
 
+    def dsh_enabled(self) -> bool:
+        return bool(self._dsh_enabled)
+
+    def set_dsh_enabled(self, enabled: bool) -> None:
+        """DSH 模式开关：侧栏分组可见性 + 共享 SSE 的常驻订阅。"""
+        enabled = bool(enabled)
+        if enabled == self._dsh_enabled and self._dsh_hub is None:
+            return
+        self._dsh_enabled = enabled
+        hub = self._dsh_hub
+        if hub is not None:
+            # 常驻订阅：用户停在 AI 视图也要收得到审批（否则卡片直接过期）。
+            if enabled:
+                hub.acquire_persistent()
+            else:
+                hub.release_persistent()
+        self._apply_collapsed_groups()
+        self._restore_active_row()
+
     def current_view(self) -> str:
         return "dsh" if self.view_stack.currentWidget() is self.dsh_view else "ai"
 
@@ -740,6 +860,7 @@ class ChatWindow(QDialog):
         self.composer.insert_text(str(text or ""))
 
     def _connect(self) -> None:
+        self.maximize_button.clicked.connect(self.toggle_maximized)
         self.minimize_button.clicked.connect(self.showMinimized)
         self.close_button.clicked.connect(self.close)
         self.pin_button.clicked.connect(self.toggle_always_on_top)
@@ -758,6 +879,19 @@ class ChatWindow(QDialog):
     def is_showing_archived(self) -> bool:
         return bool(self._show_archived)
 
+    def _style_group_header(self, item: QListWidgetItem, *, channel: bool) -> None:
+        """组头字体分层：渠道组头比会话标题小一号，日期组头再小一号且不加粗。
+
+        以前组头吃列表默认字体，和会话标题一模一样，用户分不清「哪一行是可以
+        点的会话」。
+        """
+        base = int(self._font_size or 13)
+        font = QFont(self.font())
+        font.setPixelSize(max(9, base - 2 if channel else base - 3))
+        font.setWeight(QFont.Weight.DemiBold if channel else QFont.Weight.Normal)
+        item.setFont(font)
+        item.setForeground(QColor("#5a6472" if channel else "#98a1ad"))
+
     def set_history(self, sessions, current_id: str = "") -> None:
         sessions = list(sessions or [])
         self._session_titles = {}
@@ -765,46 +899,75 @@ class ChatWindow(QDialog):
         self._group_rows = {}
         self._group_headers = {}
         self._group_labels = {}
+        self._channel_rows = {}
+        self._channel_headers = {}
+        self._channel_labels = {}
         self.session_list.blockSignals(True)
         self.session_list.clear()
-        groups = buckets(sessions)
         current_id = str(current_id or "")
-        # 当前会话所在分区必须展开，否则打开窗口看不到高亮。
-        for bucket in groups:
-            if any(
-                str(getattr(session, "session_id", "") or "") == current_id
-                for session in bucket.sessions
-            ):
-                self._collapsed_groups.discard(bucket.key)
-        for bucket in groups:
+        by_channel: dict[str, list] = {}
+        for session in sessions:
+            channel = str(getattr(session, "channel", "ai") or "ai")
+            by_channel.setdefault(channel, []).append(session)
+        order = [("ai", "AI 对话"), ("dsh", "DSH 对话"), ("qq", "QQ 消息")]
+        known = {key for key, _label in order}
+        extra = [(key, key.upper()) for key in by_channel if key not in known]
+        for channel, label in order + extra:
+            channel_sessions = by_channel.get(channel, [])
+            if not channel_sessions:
+                continue
+            channel_key = f"channel:{channel}"
             header = QListWidgetItem()
-            header.setData(GROUP_ROLE, bucket.key)
+            header.setData(GROUP_ROLE, channel_key)
             header.setFlags(Qt.ItemFlag.ItemIsEnabled)
             header.setSizeHint(QSize(1, 30))
             self.session_list.addItem(header)
-            self._group_headers[bucket.key] = header
-            self._group_labels[bucket.key] = bucket.label
-            rows: list[int] = []
-            for session in bucket.sessions:
-                session_id = str(getattr(session, "session_id", "") or "")
-                title = str(getattr(session, "title", "") or "新会话")
-                archived = bool(float(getattr(session, "archived_at", 0.0) or 0.0))
-                self._session_titles[session_id] = title
-                item = QListWidgetItem()
-                item.setData(Qt.ItemDataRole.UserRole, session_id)
-                item.setToolTip(title + ("（已归档）" if archived else ""))
-                item.setSizeHint(QSize(1, 36))
-                self.session_list.addItem(item)
-                row = self.session_list.row(item)
-                self._row_by_session[session_id] = row
-                self._group_rows.setdefault(bucket.key, []).append(row)
-                rows.append(row)
-                row_widget = SessionListRow(
-                    session_id, title, self.session_list, archived=archived
-                )
-                row_widget.archive_requested.connect(self.session_archive_requested)
-                row_widget.delete_requested.connect(self.session_delete_requested)
-                self.session_list.setItemWidget(item, row_widget)
+            self._style_group_header(header, channel=True)
+            self._channel_headers[channel_key] = header
+            self._channel_labels[channel_key] = label
+            channel_rows: list[int] = []
+            if any(
+                str(getattr(session, "session_id", "") or "") == current_id
+                for session in channel_sessions
+            ):
+                self._collapsed_groups.discard(channel_key)
+            for bucket in buckets(channel_sessions):
+                bucket_key = f"{channel}:{bucket.key}"
+                if any(
+                    str(getattr(session, "session_id", "") or "") == current_id
+                    for session in bucket.sessions
+                ):
+                    self._collapsed_groups.discard(bucket.key)
+                date_header = QListWidgetItem()
+                date_header.setData(GROUP_ROLE, bucket_key)
+                date_header.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                date_header.setSizeHint(QSize(1, 30))
+                self.session_list.addItem(date_header)
+                self._style_group_header(date_header, channel=False)
+                self._group_headers[bucket_key] = date_header
+                self._group_labels[bucket_key] = bucket.label
+                channel_rows.append(self.session_list.row(date_header))
+                for session in bucket.sessions:
+                    session_id = str(getattr(session, "session_id", "") or "")
+                    title = str(getattr(session, "title", "") or "新会话")
+                    archived = bool(float(getattr(session, "archived_at", 0.0) or 0.0))
+                    self._session_titles[session_id] = title
+                    item = QListWidgetItem()
+                    item.setData(Qt.ItemDataRole.UserRole, session_id)
+                    item.setToolTip(title + ("（已归档）" if archived else ""))
+                    item.setSizeHint(QSize(1, 36))
+                    self.session_list.addItem(item)
+                    row = self.session_list.row(item)
+                    self._row_by_session[session_id] = row
+                    self._group_rows.setdefault(bucket_key, []).append(row)
+                    channel_rows.append(row)
+                    row_widget = SessionListRow(
+                        session_id, title, self.session_list, archived=archived
+                    )
+                    row_widget.archive_requested.connect(self.session_archive_requested)
+                    row_widget.delete_requested.connect(self.session_delete_requested)
+                    self.session_list.setItemWidget(item, row_widget)
+            self._channel_rows[channel_key] = channel_rows
         self._apply_collapsed_groups()
 
         selected = self._row_by_session.get(current_id, -1)
@@ -829,18 +992,42 @@ class ChatWindow(QDialog):
         self.archive_button.blockSignals(False)
 
     def _apply_collapsed_groups(self) -> None:
-        for key, header in self._group_headers.items():
+        for key, header in self._channel_headers.items():
+            # DSH 分组只在「DSH 模式」打开时出现：没开 DSH 的人不该看到
+            # 一堆与自己无关的 DSH 会话（用户明确要求的默认）。
+            hidden_channel = key == "channel:dsh" and not self._dsh_enabled
+            header.setHidden(hidden_channel)
+            if hidden_channel:
+                for row in self._channel_rows.get(key, ()):
+                    self.session_list.setRowHidden(row, True)
+                continue
             collapsed = key in self._collapsed_groups
+            label = self._channel_labels.get(key, key)
+            header.setText(f"{'▸' if collapsed else '▾'} {label}")
+            for row in self._channel_rows.get(key, ()):
+                self.session_list.setRowHidden(row, collapsed)
+        for key, header in self._group_headers.items():
+            channel_key = f"channel:{str(key).split(':', 1)[0]}"
+            if channel_key in self._collapsed_groups:
+                continue
+            if channel_key == "channel:dsh" and not self._dsh_enabled:
+                header.setHidden(True)
+                for row in self._group_rows.get(key, ()):
+                    self.session_list.setRowHidden(row, True)
+                continue
+            header.setHidden(False)
+            collapsed = key.rsplit(":", 1)[-1] in self._collapsed_groups
             label = self._group_labels.get(key, key)
             header.setText(f"{'▸' if collapsed else '▾'} {label}")
             for row in self._group_rows.get(key, ()):
                 self.session_list.setRowHidden(row, collapsed)
 
     def _toggle_group(self, key: str) -> None:
-        if key in self._collapsed_groups:
-            self._collapsed_groups.discard(key)
+        target = key if str(key).startswith("channel:") else str(key).rsplit(":", 1)[-1]
+        if target in self._collapsed_groups:
+            self._collapsed_groups.discard(target)
         else:
-            self._collapsed_groups.add(key)
+            self._collapsed_groups.add(target)
         self._apply_collapsed_groups()
         self._restore_active_row()
 
@@ -1282,6 +1469,7 @@ class ChatWindow(QDialog):
             self.message_horizontal_margin, 24, self.message_horizontal_margin, 24
         )
         self._update_bubble_widths()
+        self._apply_shell_mask()
         QTimer.singleShot(0, self, self._update_conversation_height)
         # 改尺寸会让所有气泡重新折行，内容高度随之变化；仍在跟随就重新贴底。
         if self._stream_follow_output:
@@ -1291,6 +1479,10 @@ class ChatWindow(QDialog):
 
     def _edge_at(self, pos) -> set[str]:
         edges: set[str] = set()
+        if self.isMaximized():
+            # 最大化时窗口边缘就是屏幕边缘：这里若还能起拖，setGeometry 会把
+            # 最大化状态静默取消（实测）。
+            return edges
         x, y = pos.x(), pos.y()
         if x < self._EDGE_GRIP:
             edges.add("left")
@@ -1386,8 +1578,16 @@ class ChatWindow(QDialog):
         # 而不是停在上次关闭时的位置。
         if not event.spontaneous():
             self._bottom(always=True)
+            self._sync_maximized()
             if self.current_view() == "dsh":
                 self.dsh_view.activate()
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._sync_maximized()
+        elif event.type() == QEvent.Type.StyleChange:
+            self._apply_shell_mask()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         """关闭=隐藏并复用窗口：收尾流式状态，保留会话供下次打开。"""

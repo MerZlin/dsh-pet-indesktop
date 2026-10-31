@@ -61,6 +61,18 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "active_pets",
         "allow_feature_mods",
         "market_index_url",
+        "market_download_connections",
+        "market_download_sources",
+        # 音频输出是进程级硬件事实：所有桌宠共用一只设备。
+        "audio_output_device",
+        "audio_output_device_name",
+        # 联网检索与 DSH 互通是全局偏好（同一台机器/同一个 DSH）。
+        "ai_web_search_engines",
+        "ai_web_search_max_sources",
+        "ai_web_search_page_chars",
+        "dsh_memory_inject",
+        "dsh_persona_inject",
+        "dsh_history_limit",
         "click_through",
         # 全屏自动隐藏是**进程级**事实（一个共享 watcher、一次探测隐藏所有宠），
         # 所以必须是全局键：子宠设置页勾掉它就该对所有宠生效。
@@ -147,6 +159,7 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "island_collision",
         "chat_always_on_top",
         "chat_follow_pet",
+        "chat_dsh_mode",
         "chat_background",
         "chat_accent",
         "chat_font_size",
@@ -240,6 +253,20 @@ DEFAULTS: dict[str, Any] = {
     "click_sound": True,
     "click_sound_pack": {"kind": "builtin", "id": "default", "path": ""},
     "volume": 0.8,
+    # 音频输出：空串 = 跟随系统默认；手动设备不可用时静音（不回落到默认设备）。
+    "audio_output_device": "",
+    "audio_output_device_name": "",
+    # 素材/mod 下载：连接数 1 = 旧单流；源策略 auto/ordered/race。
+    "market_download_connections": 4,
+    "market_download_sources": "auto",
+    # 联网检索：多引擎扇出、来源数、单页正文上限。
+    "ai_web_search_engines": ["baidu", "duckduckgo"],
+    "ai_web_search_max_sources": 4,
+    "ai_web_search_page_chars": 12000,
+    # DSH 互通：记忆/人设注入与历史条数。
+    "dsh_memory_inject": True,
+    "dsh_persona_inject": True,
+    "dsh_history_limit": 200,
     "ui_font_size": 13,
     "bubble_text_scale": 100,
     "menu_animation_icons": True,
@@ -337,6 +364,7 @@ DEFAULTS: dict[str, Any] = {
     "balance_tier_color_enabled": True,
     "chat_always_on_top": False,
     "chat_follow_pet": False,
+    "chat_dsh_mode": False,
     "chat_background": "",
     "chat_accent": "",
     # 0 = 跟随 ui_font_size；字体族空 = 系统默认。两者只作用于对话窗。
@@ -388,20 +416,9 @@ DEFAULTS: dict[str, Any] = {
         "忙完了就伸个懒腰吧。",
     ],
     "self_talk_daily_enabled": True,
-    "self_talk_daily_texts": [
-        "今天也一起慢慢来吧。",
-        "窗外的光不错，适合做点小事。",
-        "先喝口水，再继续也不迟。",
-        "今天的第一件小事，想做什么？",
-        "如果有点累，就靠一会儿再走。",
-        "别把今天排得太满，留一点空。",
-        "今天的你，也值得被好好对待。",
-        "做不完也没关系，明天还有时间。",
-        "记得起来走两步，肩颈会谢谢你。",
-        "今天适合把一件小事做完。",
-        "有我在旁边，慢慢来就好。",
-        "今天也要给自己留一点喜欢的时间。",
-    ],
+    # 空 = 使用随包 1000 句池；用户填了才覆盖内置池。
+    "self_talk_daily_texts": [],
+    "self_talk_daily_count": 12,
     "self_talk_daily_sequence": False,
     "self_talk_min": 20,
     "self_talk_max": 60,
@@ -508,6 +525,23 @@ DEFAULTS: dict[str, Any] = {
 }
 
 _LEGACY_IMPORT_KEYS = ("character", "scale", "rx", "ry", "screen_name")
+
+#: 旧版内置的 12 句每日台词。用户从未改过时仍会存在于旧配置里；归一化时
+#: 把它视为「未自定义」，改用随包 1000 句池；真改过任一句则保留自定义。
+LEGACY_SELF_TALK_DAILY_TEXTS = (
+    "今天也一起慢慢来吧。",
+    "窗外的光不错，适合做点小事。",
+    "先喝口水，再继续也不迟。",
+    "今天的第一件小事，想做什么？",
+    "如果有点累，就靠一会儿再走。",
+    "别把今天排得太满，留一点空。",
+    "今天的你，也值得被好好对待。",
+    "做不完也没关系，明天还有时间。",
+    "记得起来走两步，肩颈会谢谢你。",
+    "今天适合把一件小事做完。",
+    "有我在旁边，慢慢来就好。",
+    "今天也要给自己留一点喜欢的时间。",
+)
 
 _LEGACY_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "character": ("character",),
@@ -1242,6 +1276,19 @@ class Config:
         normalized["click_sound"] = _bool(normalized.get("click_sound"), True)
         normalized["click_sound_pack"] = _click_sound_pack(normalized.get("click_sound_pack"))
         normalized["volume"] = _number(normalized.get("volume"), 0.8, 0.0, 1.0)
+        normalized["audio_output_device"] = str(
+            normalized.get("audio_output_device") or ""
+        ).strip()[:512]
+        normalized["audio_output_device_name"] = str(
+            normalized.get("audio_output_device_name") or ""
+        ).strip()[:160]
+        normalized["market_download_connections"] = int(
+            round(_number(normalized.get("market_download_connections"), 4.0, 1.0, 8.0))
+        )
+        sources = str(normalized.get("market_download_sources") or "auto").strip().lower()
+        normalized["market_download_sources"] = (
+            sources if sources in {"auto", "ordered", "race"} else "auto"
+        )
         normalized["ui_font_size"] = int(
             round(_number(normalized.get("ui_font_size"), 13.0, 10.0, 18.0))
         )
@@ -1357,8 +1404,12 @@ class Config:
         normalized["self_talk_daily_enabled"] = _bool(
             normalized.get("self_talk_daily_enabled"), True
         )
-        normalized["self_talk_daily_texts"] = _text_list(
-            normalized.get("self_talk_daily_texts")
+        daily_texts = _text_list(normalized.get("self_talk_daily_texts"))
+        if daily_texts == list(LEGACY_SELF_TALK_DAILY_TEXTS):
+            daily_texts = []
+        normalized["self_talk_daily_texts"] = daily_texts
+        normalized["self_talk_daily_count"] = int(
+            round(_number(normalized.get("self_talk_daily_count"), 12.0, 1.0, 24.0))
         )
         normalized["self_talk_daily_sequence"] = _bool(
             normalized.get("self_talk_daily_sequence"), False
@@ -1672,6 +1723,18 @@ class Config:
             _number(normalized.get("ai_web_results"), 5, 1, 10)
         )
         normalized["ai_web_fetch"] = _bool(normalized.get("ai_web_fetch"), True)
+        engines = [
+            item
+            for item in _text_list(normalized.get("ai_web_search_engines"))
+            if item in {"baidu", "duckduckgo", "bocha", "tavily"}
+        ]
+        normalized["ai_web_search_engines"] = list(dict.fromkeys(engines))[:4]
+        normalized["ai_web_search_max_sources"] = int(
+            round(_number(normalized.get("ai_web_search_max_sources"), 4, 1, 8))
+        )
+        normalized["ai_web_search_page_chars"] = int(
+            round(_number(normalized.get("ai_web_search_page_chars"), 12000, 2000, 40000))
+        )
         normalized["ai_proactive_enabled"] = _bool(
             normalized.get("ai_proactive_enabled"), False
         )
@@ -1754,6 +1817,15 @@ class Config:
             normalized[_sound_key] = (
                 str(normalized.get(_sound_key) or "").strip()[:500] or _fallback
             )
+        normalized["dsh_memory_inject"] = _bool(
+            normalized.get("dsh_memory_inject"), True
+        )
+        normalized["dsh_persona_inject"] = _bool(
+            normalized.get("dsh_persona_inject"), True
+        )
+        normalized["dsh_history_limit"] = int(
+            round(_number(normalized.get("dsh_history_limit"), 200.0, 20.0, 500.0))
+        )
         normalized["island_enabled"] = _bool(normalized.get("island_enabled"), False)
         for _island_flag in ("island_show_name", "island_show_status"):
             normalized[_island_flag] = _bool(normalized.get(_island_flag), True)
@@ -1815,6 +1887,7 @@ class Config:
             normalized.get("chat_always_on_top"), False
         )
         normalized["chat_follow_pet"] = _bool(normalized.get("chat_follow_pet"), False)
+        normalized["chat_dsh_mode"] = _bool(normalized.get("chat_dsh_mode"), False)
         normalized["chat_background"] = str(
             normalized.get("chat_background") or ""
         ).strip()[:500]

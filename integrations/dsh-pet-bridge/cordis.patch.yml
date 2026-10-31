@@ -1,4 +1,10 @@
-# dsh-pet 桥接 bundle：挂载 Node 半侧（agent 状态事件 → 本地 jsonl）
+# dsh-pet 桥接 v2 bundle：同一进程
+#   - agent 状态事件 → 本地 jsonl（桌宠动画/灵动岛）
+#   - HTTP+SSE 聊天通道（提示词、历史、审批、pet_control）
 - insert:
     - id: dsh-pet-bridge
       name: '@dsh-pet/bridge'
+      config:
+        port: 6791
+        askApproval: false
+        sandboxMode: danger-full-access

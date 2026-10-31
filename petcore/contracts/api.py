@@ -47,6 +47,12 @@ class WebSearchOptions:
     engine: str = "baidu"
     max_results: int = 5
     fetch_pages: bool = True
+    #: 多引擎扇出（空 = 沿用 ``engine``）；同一查询按顺序取结果并按 URL 去重。
+    engines: tuple[str, ...] = ()
+    #: 合并后交给模型的最多来源数（多引擎时用；单引擎仍取 max_results）。
+    max_sources: int = 4
+    #: 单页正文最多取多少字（readability 抽取后）。
+    page_chars: int = 12000
 
 
 class ApiPort(Protocol):

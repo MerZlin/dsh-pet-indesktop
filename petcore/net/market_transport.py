@@ -17,6 +17,7 @@ from ..contracts.archive import ArchiveLimits, BudgetExceeded
 from ..contracts.http import ResumePolicy, TransferReport, TransferSpec
 from ..market.errors import TransferCancelled
 from . import market as _market
+from . import ranged
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _CHUNK_BYTES = 256 * 1024
@@ -135,11 +136,120 @@ def _effective_schemes(spec: TransferSpec, url: str) -> tuple[str, ...]:
 
 
 def _artifact_name(spec: TransferSpec) -> str:
+    explicit = str(spec.artifact_name or "").strip()
+    if explicit:
+        return explicit
     for url in spec.urls:
         name = Path(urlsplit(url).path).name
         if name:
             return name
     return "artifact.zip"
+
+
+def _wants_segmented(spec: TransferSpec, url: str, connections: int) -> bool:
+    if connections <= 1:
+        return False
+    if urlsplit(url).scheme.lower() == "file":
+        return False
+    expected = spec.expected_size
+    return expected is None or ranged.should_segment(expected, connections)
+
+
+def _ordered_urls(spec: TransferSpec, policy, connections: int, cancel) -> tuple[str, ...]:
+    """多 URL 的 spec：``ordered`` 按索引顺序，其余按 TTFB 竞速排序。"""
+    urls = tuple(str(url) for url in spec.urls)
+    if len(urls) < 2 or str(spec.mirror_policy) == "ordered":
+        return urls
+    if cancel is not None and cancel():
+        raise TransferCancelled("download cancelled")
+    ranked = _market.rank_sources(
+        _market.probe_sources(urls, timeout=_market.PROBE_TIMEOUT, policy=policy,
+                              cancel=cancel),
+        prefer_range=connections > 1,
+    )
+    known = set(urls)
+    ordered = [url for url in ranked if url in known]
+    ordered.extend(url for url in urls if url not in set(ordered))
+    return tuple(ordered) or urls
+
+
+def _monotonic_progress(progress):
+    """进度只能前进：分段尝试写了几个段再回退单流时，done 不许倒退。"""
+    if progress is None:
+        return None
+    state = {"high": 0, "total": 0}
+
+    def report(done, total) -> None:
+        state["total"] = max(state["total"], int(total or 0))
+        value = max(int(done), state["high"])
+        state["high"] = value
+        progress(value, state["total"])
+
+    return report
+
+
+def _transfer_one(
+    spec: TransferSpec,
+    url: str,
+    part: Path,
+    final: Path,
+    *,
+    policy,
+    connections: int,
+    max_bytes: int | None,
+    progress,
+    cancel,
+) -> TransferReport:
+    """单个 URL 的传输：值得切段就先分段，200/太小则回退单流一次。"""
+    report_progress = _monotonic_progress(progress)
+    if _wants_segmented(spec, url, connections):
+        try:
+            outcome = _market.download_segmented(
+                url,
+                part,
+                expected_size=spec.expected_size,
+                expected_sha256=spec.expected_sha256,
+                timeout=spec.timeout,
+                connections=connections,
+                progress=report_progress,
+                cancel=cancel,
+                policy=policy,
+                max_bytes=max_bytes,
+            )
+        except _market.RangesUnsupported:
+            # 服务端不支持 Range：只退回单流一次，绝不把 200 的正文塞进段文件。
+            pass
+        else:
+            os.replace(part, final)
+            return TransferReport(
+                url=outcome.url,
+                bytes_read=outcome.bytes_written,
+                path=str(final),
+                resumed_from=outcome.resumed_from,
+                redirects=outcome.redirects,
+            )
+
+    outcome = _market.download_with_outcome(
+        url,
+        part,
+        expected_size=spec.expected_size,
+        timeout=spec.timeout,
+        progress=report_progress,
+        cancel=cancel,
+        policy=policy,
+        max_bytes=max_bytes,
+    )
+    if connections > 1:
+        # 单流回退成功后，上一次分段尝试留下的段文件就没有意义了。
+        ranged.clear_state(part)
+    os.replace(part, final)
+    return TransferReport(
+        url=outcome.url,
+        bytes_read=outcome.bytes_written,
+        path=str(final),
+        resumed_from=outcome.resumed_from,
+        redirects=outcome.redirects,
+    )
 
 
 def fetch_artifact(
@@ -168,26 +278,32 @@ def fetch_artifact(
     final = dest_dir / name
     if spec.resume is ResumePolicy.RESTART or getattr(spec.resume, "value", spec.resume) == ResumePolicy.RESTART.value:
         part.unlink(missing_ok=True)
+        ranged.clear_state(part)
     policy = _market.TransportPolicy(
         max_redirects=spec.max_redirects,
         allowed_schemes=_effective_schemes(spec, first),
         allowed_hosts=tuple(spec.allowed_hosts),
     )
-    outcome = _market.download_with_outcome(
-        first,
-        part,
-        expected_size=spec.expected_size,
-        timeout=spec.timeout,
-        progress=progress,
-        cancel=cancel,
-        policy=policy,
-        max_bytes=limits.compressed_bytes if limits is not None else None,
-    )
-    os.replace(part, final)
-    return TransferReport(
-        url=outcome.url,
-        bytes_read=outcome.bytes_written,
-        path=str(final),
-        resumed_from=outcome.resumed_from,
-        redirects=outcome.redirects,
-    )
+    connections = ranged.normalize_connections(spec.download_connections)
+    max_bytes = limits.compressed_bytes if limits is not None else None
+
+    urls = _ordered_urls(spec, policy, connections, cancel)
+    for index, url in enumerate(urls):
+        try:
+            return _transfer_one(
+                spec,
+                url,
+                part,
+                final,
+                policy=policy,
+                connections=connections,
+                max_bytes=max_bytes,
+                progress=progress,
+                cancel=cancel,
+            )
+        except (TransferCancelled, BudgetExceeded):
+            raise
+        except Exception:
+            if index + 1 == len(urls):
+                raise
+    raise AssertionError("unreachable: urls must not be empty")

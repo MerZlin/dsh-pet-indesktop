@@ -49,8 +49,8 @@ DSH 通道只有**一个读方**：`DshMonitor`（一个 `DirGlobTailer` + 一�
 
 ### 2.1b 桌宠控制命令（可选，`pet/command`）
 
-`dsh-pet-channel` 的 `pet_control` 工具或 `/pet say|play|notify` 会往
-`dsh-pet-bridge/dsh-petcmd-<pid>.jsonl` 追加：
+`dsh-pet-bridge`（v2 起通道与状态同进程）的 `pet_control` 工具或
+`/pet say|play|notify` 会往 `dsh-pet-bridge/dsh-petcmd-<pid>.jsonl` 追加：
 
 ```json
 {"event":"pet/command","cmd":"play_animation","name":"写代码","agent":"dsh","inst":"..."}
@@ -199,7 +199,7 @@ printf '{"ts": %s, "state": "idle"}\n' "$(date +%s)" >> ~/.gemini/pet-events.jso
 | 事件文件 tail | `ByteOffsetTailer` / `DirGlobTailer` | `examples/petcore-mods/ai.agent/host/tailer.py`（同一套偏移/半行/有界口径） |
 | 六态映射 | `pet/agent_event_normalizer.py` + `dsh_state.py` | `ai.agent/host/protocol.py`（表外事件一律忽略） |
 | 动画/气泡/音效 | `AgentLinkManager` | `ai.agent/host/links.py`（`LinkEngine`） |
-| DSH 桥接插件安装 | 内置 `integrations/dsh-pet-bridge` + pnpm 安装 | 设置页「常规 → DSH 连接」显式安装（`dsh-pet-bridge` + `dsh-pet-channel`），先备份 profile |
+| DSH 桥接插件安装 | 内置 `integrations/dsh-pet-bridge` + pnpm 安装 | 设置页「常规 → DSH 连接」显式安装 v2 单插件（状态 JSONL + HTTP+SSE 聊天通道同进程；旧 `dsh-pet-channel` 升级时从 profile 摘除），先备份 profile |
 | Claude hooks 注入 | 支持 | **未做**（走统一 `agent-events/claude.jsonl`） |
 | Cursor / OpenCode 直读 | 支持 | **未做**（走统一 JSONL） |
 | 审批/提问常驻卡片、live 成本 | 支持 | DSH 页可答审批；live 成本 **未做** |
@@ -207,3 +207,25 @@ printf '{"ts": %s, "state": "idle"}\n' "$(date +%s)" >> ~/.gemini/pet-events.jso
 行为口径（节流、完成确认、动作池、隐私红线）见
 [`PETCORE-SPEC.md`](PETCORE-SPEC.md) §28。写方接入方式不变：仍然只是往
 `agent-events/<agent>.jsonl` 追加一行 JSON。
+
+## 8. v2 合并与 QQ 通道（2026-10-31）
+
+- `integrations/dsh-pet-bridge` v2.0.0 同时承担状态 JSONL 与聊天通道（HTTP+SSE），
+  不再单独加载 `dsh-pet-channel`；安装器升级时备份 profile、移除旧包依赖/bundle，
+  旧目录保留不删。端点/帧/审批/历史语义见 [`INTEROP-ARCHITECTURE.md`](INTEROP-ARCHITECTURE.md) §2.1。
+- **升级要清三处**（2026-10-31 真机）：`bundles/dependencies`、profile 的
+  `cordis.patch.yml` 里旧 `insert` 条目、`node_modules` 里指向旧构建的 junction。
+  只清一处会留下旧通道抢 6791 或让新代码不生效；patch 只删命中项、其余字节不动。
+- **历史只放行 `source.kind=user`**：DSH 每轮注入 `runtime-context`/`skill-catalog`/
+  `time-context`/`plugin`，全过滤（首轮实测 3 条 10,292 字符）。
+- **审批指纹忽略说明字段**：DSH 同意后的续跑会改写 `description`，哈希含它会让
+  一次性通行证永不匹配（重复弹卡）；`/pet/new` 与 `cancel` 都要清旧审批。
+- **`pet_control` 用标准 JSON Schema**（`required: ["action"]`）：链接加载时
+  `@deepseek-ai/dsh-tools` 解析不到，作者简写会让注册静默失败；`ping.commands`
+  报告真实注册状态。
+- 状态 JSONL 的隐私口径不变：不写正文/命令/参数指纹/结果摘要；聊天 SSE 带正文，仅回环 + token。
+- `pet_control` 工具与 `/pet say|play|notify` 命令文件保留，`ai.agent` 继续消费。
+- QQ 走 `im.qq` mod + core `WebhookPort`：OneBot 网关 POST 事件到 `127.0.0.1:<port><path>`，
+  token 只进钥匙串；消息落 `channel=qq` 会话并冒气泡，回复模式 `off|notify|ai`。
+  QQ 真机未在本机验证；`dsh` 自动回复留待下一版。协议细节见
+  [`INTEROP-ARCHITECTURE.md`](INTEROP-ARCHITECTURE.md) §2.2。

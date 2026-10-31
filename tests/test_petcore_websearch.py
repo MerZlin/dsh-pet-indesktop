@@ -200,3 +200,54 @@ def test_search_does_not_lock_the_process_to_direct(monkeypatch) -> None:
         assert attempts == [True, False]
     finally:
         net_http.reset_transport()
+
+
+def test_html_to_text_prefers_article_and_keeps_metadata() -> None:
+    page = """
+    <html><head><title>标题</title>
+    <meta property="og:description" content="摘要说明">
+    <meta property="article:published_time" content="2026-10-31T10:00:00Z">
+    </head><body>
+    <nav>导航噪声</nav>
+    <article><h1>正文标题</h1><p>第一段正文。</p><p>第二段正文。</p></article>
+    <aside>侧栏广告</aside>
+    </body></html>
+    """
+    text = html_to_text(page)
+    assert "标题：标题" in text
+    assert "摘要：摘要说明" in text
+    assert "2026-10-31" in text
+    assert "第一段正文" in text
+    assert "导航噪声" not in text
+    assert "侧栏广告" not in text
+
+
+def test_search_many_dedupes_and_respects_limit(monkeypatch) -> None:
+    from petcore.net import websearch
+
+    calls = []
+
+    def fake_search(query, *, engine="baidu", api_key="", limit=5, **kwargs):
+        calls.append(engine)
+        if engine == "baidu":
+            return [
+                SearchResult("A", "https://a.test/1", ""),
+                SearchResult("B", "https://b.test/1", ""),
+            ]
+        if engine == "duckduckgo":
+            return [
+                SearchResult("A2", "https://a.test/1", ""),
+                SearchResult("C", "https://c.test/1", ""),
+            ]
+        raise websearch.SearchError("blocked")
+
+    monkeypatch.setattr(websearch, "search", fake_search)
+    results = websearch.search_many(
+        "q", engines=("baidu", "duckduckgo", "bocha"), limit=2
+    )
+    assert calls == ["baidu"]
+    assert [item.url for item in results] == ["https://a.test/1", "https://b.test/1"]
+    results = websearch.search_many(
+        "q", engines=("duckduckgo", "bocha"), limit=2
+    )
+    assert [item.url for item in results] == ["https://a.test/1", "https://c.test/1"]

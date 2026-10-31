@@ -67,3 +67,59 @@ def test_session_archive_round_trip_and_old_files(tmp_path) -> None:
 
     store.archive(first.session_id, False)
     assert store.load(first.session_id).archived_at == 0.0
+
+
+def test_schema_v1_migrates_and_keeps_pre_v2_backup(tmp_path) -> None:
+    import json
+
+    store = SessionStore(tmp_path, character_id="legacy")
+    store.directory.mkdir(parents=True, exist_ok=True)
+    path = store.directory / "old.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "session_id": "old",
+                "title": "旧会话",
+                "messages": [{"role": "user", "content": "旧消息"}],
+                "updated_at": 1.0,
+                "archived_at": 0.0,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    loaded = store.load("old")
+    assert loaded is not None
+    assert loaded.channel == "ai"
+    assert loaded.messages[0]["id"]
+    assert loaded.messages[0]["ts"] == 0.0
+    loaded.append("assistant", "新消息")
+    store.save(loaded)
+    backup = path.with_name("old.json.pre-v2")
+    assert backup.is_file()
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["schema"] == 2
+    assert raw["channel"] == "ai"
+
+
+def test_channel_conversations_and_external_id_dedupe(tmp_path) -> None:
+    store = SessionStore(tmp_path, character_id="channels")
+    session = store.ensure_conversation("qq", "group:123", title="群聊")
+    assert session.channel == "qq"
+    assert session.conversation_id == "group:123"
+    session.append("user", "你好", external_id="m-1", sender="小明")
+    session.append("user", "你好", external_id="m-1", sender="小明")
+    store.save(session)
+    assert len(session.messages) == 1
+    assert session.messages[0]["channel"] == "qq"
+    assert session.messages[0]["sender"] == "小明"
+    assert store.find_by_conversation("qq", "group:123").session_id == session.session_id
+    assert store.list_sessions(channel="dsh") == []
+
+    dsh = store.ensure_conversation("dsh", "session-abc", title="DSH")
+    dsh.append("assistant", "DSH 回答")
+    store.save(dsh)
+    assert [item.session_id for item in store.list_sessions(channel="dsh")] == [
+        dsh.session_id
+    ]

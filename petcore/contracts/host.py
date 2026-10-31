@@ -227,6 +227,65 @@ class CapabilityPort(Protocol):
     def require(self, capability: str) -> None: ...
 
 
+class WebhookPort(Protocol):
+    """本地回环 webhook：socket 由 Core 持有，mod 只注册 handler。
+
+    handler 在服务线程调用，参数是
+    ``{"method", "path", "headers", "body", "query"}``；返回 dict 作为 JSON 响应。
+    token 为空时拒绝启动（空 token == 空 token 的坑）。
+    """
+
+    def start(
+        self,
+        owner: str,
+        *,
+        port: int,
+        path: str,
+        token: str,
+        handler: Callable[[dict], dict],
+    ) -> Any: ...
+
+
+class MemoryPort(Protocol):
+    """分层记忆端口：AI/DSH/QQ 共用一份卡；实现方负责持久化与裁剪。"""
+
+    def remember(
+        self,
+        text: str,
+        *,
+        scope: str = "pet",
+        source: str = "",
+        kind: str = "",
+        importance: int | None = None,
+        pet_slot: int | None = None,
+    ) -> bool: ...
+
+    def recall(
+        self,
+        query: str = "",
+        *,
+        scope: str = "pet",
+        limit: int = 3,
+        pet_slot: int | None = None,
+    ) -> list[dict]: ...
+
+    def render_prompt(
+        self,
+        scope: str = "pet",
+        query: str = "",
+        *,
+        max_chars: int = 0,
+        limit: int = 0,
+        pet_slot: int | None = None,
+    ) -> str: ...
+
+    def stats(self, *, pet_slot: int | None = None) -> dict: ...
+
+    def clear(self, scope: str = "", *, pet_slot: int | None = None) -> int: ...
+
+    def export(self, *, pet_slot: int | None = None) -> str: ...
+
+
 @dataclass
 class HostPorts:
     presentation: PresentationPort | None = None
@@ -254,3 +313,5 @@ class HostPorts:
     http: HttpPort | None = None
     speech: SpeechPort | None = None
     reminders: ReminderPort | None = None
+    memory: MemoryPort | None = None
+    webhook: WebhookPort | None = None

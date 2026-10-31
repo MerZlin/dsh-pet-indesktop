@@ -68,6 +68,9 @@ class AiChatPage(SettingsPage):
         "ai_web_engine",
         "ai_web_results",
         "ai_web_fetch",
+        "ai_web_search_engines",
+        "ai_web_search_max_sources",
+        "ai_web_search_page_chars",
         "chat_background",
         "chat_accent",
         "chat_font_size",
@@ -535,6 +538,44 @@ class AiChatPage(SettingsPage):
             "免 Key 的两个引擎互为兜底；遇到人机验证会如实提示，不会绕过。",
         )
 
+        self.web_engines = QLineEdit(self)
+        self.web_engines.setPlaceholderText("baidu, duckduckgo")
+        engines = self._initial.get("ai_web_search_engines") or ["baidu", "duckduckgo"]
+        self.web_engines.setText(", ".join(str(item) for item in engines))
+        self.web_engines.textChanged.connect(self._on_changed)
+        card5.add_row(
+            "多引擎扇出",
+            self.web_engines,
+            "逗号分隔；按顺序搜索并按网址去重。留空 = 只用上面的单引擎。",
+            expand=True,
+            search_keys=("多引擎", "搜索引擎", "扇出"),
+        )
+
+        self.web_sources = QSpinBox(self)
+        self.web_sources.setRange(1, 8)
+        self.web_sources.setSuffix(" 条")
+        self.web_sources.setValue(int(self._initial.get("ai_web_search_max_sources") or 4))
+        self.web_sources.valueChanged.connect(self._on_changed)
+        card5.add_row(
+            "最多采用来源",
+            self.web_sources,
+            "多引擎合并后交给模型的最多来源数。",
+            search_keys=("来源数", "引用"),
+        )
+
+        self.web_page_chars = QSpinBox(self)
+        self.web_page_chars.setRange(2000, 40000)
+        self.web_page_chars.setSingleStep(1000)
+        self.web_page_chars.setSuffix(" 字")
+        self.web_page_chars.setValue(int(self._initial.get("ai_web_search_page_chars") or 12000))
+        self.web_page_chars.valueChanged.connect(self._on_changed)
+        card5.add_row(
+            "单页正文上限",
+            self.web_page_chars,
+            "读网页时最多交给模型多少字；越大越准也越慢。",
+            search_keys=("正文上限", "网页正文"),
+        )
+
         key_row = QWidget(self)
         key_layout = QHBoxLayout(key_row)
         key_layout.setContentsMargins(0, 0, 0, 0)
@@ -916,6 +957,16 @@ class AiChatPage(SettingsPage):
         config.set("ai_web_engine", str(self.engine_combo.currentData() or "baidu"))
         config.set("ai_web_results", int(self.web_results_spin.value()))
         config.set("ai_web_fetch", bool(self.web_fetch_check.isChecked()))
+        config.set(
+            "ai_web_search_engines",
+            [
+                item.strip()
+                for item in str(self.web_engines.text() or "").split(",")
+                if item.strip()
+            ][:4],
+        )
+        config.set("ai_web_search_max_sources", int(self.web_sources.value()))
+        config.set("ai_web_search_page_chars", int(self.web_page_chars.value()))
         config.set("chat_background", self._background_value)
         config.set("chat_accent", self._accent_value())
         config.set(
@@ -1234,6 +1285,18 @@ class AiChatPage(SettingsPage):
         return paths.feature_data_dir(Path(root), "ai.chat") / "memory"
 
     def _refresh_memory_status(self) -> None:
+        service = getattr(self.host, "memory", None)
+        if service is not None:
+            try:
+                stats = service.stats()
+                clarity = stats.get("clarity") or {}
+                self.memory_status.setText(
+                    f"当前角色 {stats.get('entries', 0)} 条 · 置顶 {stats.get('pinned', 0)} 条 · "
+                    f"清晰 {clarity.get('vivid', 0)} / 模糊 {clarity.get('fuzzy', 0)}"
+                )
+                return
+            except Exception:  # noqa: BLE001 - 读不到退回旧存储统计
+                pass
         from .memory import MemoryStore
 
         root = self._memory_root()
@@ -1247,7 +1310,14 @@ class AiChatPage(SettingsPage):
         )
 
     def _open_memory_dir(self) -> None:
-        root = self._memory_root()
+        service = getattr(self.host, "memory", None)
+        path = ""
+        if service is not None:
+            try:
+                path = str((service.stats() or {}).get("path") or "")
+            except Exception:  # noqa: BLE001
+                path = ""
+        root = Path(path) if path else self._memory_root()
         if root is None:
             return
         try:
@@ -1257,6 +1327,14 @@ class AiChatPage(SettingsPage):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
 
     def _clear_memory(self) -> None:
+        service = getattr(self.host, "memory", None)
+        if service is not None:
+            try:
+                removed = service.clear("")
+            except Exception:  # noqa: BLE001
+                removed = 0
+            self.memory_status.setText(f"已清空当前角色记忆（{removed} 条）。")
+            return
         from .memory import MemoryStore
 
         root = self._memory_root()
@@ -1336,6 +1414,15 @@ class AiChatPage(SettingsPage):
         self.web_results_spin.blockSignals(True)
         self.web_results_spin.setValue(results)
         self.web_results_spin.blockSignals(False)
+        engines = config.get("ai_web_search_engines") or ["baidu", "duckduckgo"]
+        self.web_engines.blockSignals(True)
+        self.web_engines.setText(", ".join(str(item) for item in engines))
+        self.web_engines.blockSignals(False)
+        try:
+            self.web_sources.setValue(int(config.get("ai_web_search_max_sources") or 4))
+            self.web_page_chars.setValue(int(config.get("ai_web_search_page_chars") or 12000))
+        except (TypeError, ValueError):
+            pass
         self.web_key_edit.clear()
         self._refresh_web_key_state()
         self._update_thinking_web_visibility()

@@ -46,6 +46,8 @@ VOICE_KEYS = {
 
 #: 页面状态键 → 配置键（用于差异写回与回滚）。
 CONFIG_KEYS = {
+    "output_device": "audio_output_device",
+    "output_device_name": "audio_output_device_name",
     "backend": "speech_backend",
     "fallback": "speech_fallback",
     "rate": "speech_rate",
@@ -106,6 +108,7 @@ class VoicePage(SettingsPage):
         super().__init__(host, parent)
         self._providers = self._provider_infos()
         self._building = True
+        self._build_output()
         self._build_backend()
         self._build_local()
         self._build_asr()
@@ -152,6 +155,107 @@ class VoicePage(SettingsPage):
             return label
         suffix = REASON_TEXT.get(reason, "不可用")
         return f"{label} · {suffix}"
+
+    def _build_output(self) -> None:
+        card = self.section("音频输出")
+        self.output_device = QComboBox(self)
+        self.output_device.setMinimumContentsLength(26)
+        self.output_device.currentIndexChanged.connect(self._on_changed)
+        self.output_device.currentIndexChanged.connect(
+            lambda *_args: self._refresh_output_status()
+        )
+        refresh = make_button("刷新设备", self)
+        refresh.clicked.connect(self.refresh_output_devices)
+        row = QWidget(self)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        row_layout.addWidget(self.output_device, 1)
+        row_layout.addWidget(refresh)
+        card.add_row(
+            "输出设备",
+            row,
+            hint=(
+                "所有桌宠声音（点击音效、Agent 提示音、自言自语/报时语音）都从这只设备出声。"
+                "默认跟随系统默认设备；手动选的设备拔掉后会静音，不会回落到扬声器。"
+                "音乐扩展里的「识别用的输出设备」只影响它判断谁在放歌，和这里无关。"
+            ),
+            expand=True,
+            search_keys=("音频输出", "输出设备", "扬声器", "耳机", "耳麦", "声卡", "外放"),
+        )
+        self.output_status = QLabel("", self)
+        self.output_status.setObjectName("settingHint")
+        self.output_status.setWordWrap(True)
+        card.add_row(
+            "设备状态",
+            self.output_status,
+            search_keys=("音频输出状态", "设备不可用", "声音已暂停"),
+        )
+        self._output_names: dict[str, str] = {}
+        self.refresh_output_devices()
+
+    def refresh_output_devices(self) -> None:
+        config = self.config()
+        saved_id = str(config.get("audio_output_device") or "").strip()
+        saved_name = str(config.get("audio_output_device_name") or "").strip()
+        try:
+            from ...media.audio_output import list_outputs
+
+            outputs = list_outputs()
+        except Exception:  # noqa: BLE001 - 无 QtMultimedia/无 QApplication 时只显示跟随默认
+            outputs = []
+        self._output_names = {device_id: name for device_id, name, _ in outputs}
+        combo = self.output_device
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem("跟随系统默认", "")
+            for device_id, name, is_default in outputs:
+                label = name or device_id
+                if is_default:
+                    label = f"{label}（系统默认）"
+                combo.addItem(label, device_id)
+            current_id = str(combo.currentData() or "")
+            target_id = current_id or saved_id
+            if target_id and not any(device_id == target_id for device_id, _n, _d in outputs):
+                label = saved_name if target_id == saved_id else target_id
+                combo.addItem(f"{label or target_id}（不可用）", target_id)
+            index = combo.findData(target_id)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+        finally:
+            combo.blockSignals(False)
+        self._refresh_output_status()
+
+    def _selected_output_name(self) -> str:
+        device_id = str(self.output_device.currentData() or "")
+        if not device_id:
+            return ""
+        name = self._output_names.get(device_id, "")
+        if name:
+            return name
+        config = self.config()
+        if device_id == str(config.get("audio_output_device") or ""):
+            return str(config.get("audio_output_device_name") or "")
+        return ""
+
+    def _refresh_output_status(self) -> None:
+        status = getattr(self, "output_status", None)
+        if status is None:
+            return
+        device_id = str(self.output_device.currentData() or "")
+        if not device_id:
+            status.setText("跟随系统默认设备；插拔耳机或改默认设备会自动跟随。")
+            return
+        name = self._selected_output_name() or device_id
+        if device_id in self._output_names:
+            status.setText(
+                f"使用「{name}」。这只设备被拔掉时会静音，不会回落到默认设备。"
+            )
+        else:
+            status.setText(
+                f"已保存的设备「{name}」当前不可用；声音已暂停（不会从默认设备外放），"
+                "插回后自动恢复。"
+            )
 
     def _build_backend(self) -> None:
         card = self.section("语音后端")
@@ -581,6 +685,8 @@ class VoicePage(SettingsPage):
     def _snapshot(self) -> dict:
         config = self.config()
         return {
+            "output_device": str(config.get("audio_output_device") or ""),
+            "output_device_name": str(config.get("audio_output_device_name") or ""),
             "backend": str(config.get("speech_backend") or "edge"),
             "fallback": str(config.get("speech_fallback") or ""),
             "rate": round(float(config.get("speech_rate") or 1.0), 3),
@@ -615,6 +721,8 @@ class VoicePage(SettingsPage):
 
     def _current(self) -> dict:
         return {
+            "output_device": str(self.output_device.currentData() or ""),
+            "output_device_name": self._selected_output_name(),
             "backend": self._backend(),
             "fallback": str(self.fallback_combo.currentData() or ""),
             "rate": round(self.rate_slider.value() / 100.0, 3),
@@ -725,6 +833,11 @@ class VoicePage(SettingsPage):
             config = self.config()
             for config_key, value in self._initial_config_items().items():
                 config.set(config_key, value)
+            self.output_device.blockSignals(True)
+            index = self.output_device.findData(str(self._initial["output_device"]))
+            self.output_device.setCurrentIndex(index if index >= 0 else 0)
+            self.output_device.blockSignals(False)
+            self._refresh_output_status()
             self._select(self.backend_combo, self._initial["backend"])
             self._select(self.fallback_combo, self._initial["fallback"])
             self._select(self.local_protocol, self._initial["local_protocol"])
@@ -930,6 +1043,13 @@ class VoicePage(SettingsPage):
             "缓存",
             "语音输入",
             "麦克风",
+            "音频输出",
+            "输出设备",
+            "扬声器",
+            "耳机",
+            "耳麦",
+            "声卡",
+            "外放",
             "实时",
             "预览",
             "字幕",

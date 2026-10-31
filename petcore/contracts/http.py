@@ -132,6 +132,12 @@ class TransferSpec:
     `file://` 还必须同时显式设置 `allow_local_file=True` 和 `local_root`，且目标解析后
     必须位于该根目录内；网络索引或重定向不能借此授权本机文件。
     校验（size / sha256）由 market 层负责，传输层只用 `expected_size` 判断续传是否对齐。
+
+    `download_connections` 是并行连接数：`1` 走旧的单流（`.part` 追加续传），
+    `2..8` 走多连接 Range 分段（每段独立续传，装配后才是 `.part`）。
+    `mirror_policy` 是镜像策略：`ordered` = 按列表顺序回退、`race` = 并发预检取最快、
+    `auto` = 多源时竞速。`artifact_name` 指定产物文件名（空 = URL basename），
+    分段下载靠它直接写调用方的稳定 `.part`，不必整包复制到 staging 目录。
     """
 
     urls: tuple[str, ...]
@@ -146,6 +152,13 @@ class TransferSpec:
     local_root: str | None = None
     resume: ResumePolicy = ResumePolicy.RESUME_IF_MATCH
     timeout: float = 15.0
+    #: 并行连接数：1 = 旧的单流（逐字节追加 + 续传），2..8 = 多连接 Range 分段。
+    download_connections: int = 1
+    #: 镜像策略：``auto``（多源时竞速）/``ordered``（按索引顺序回退）/``race``。
+    mirror_policy: str = "auto"
+    #: 产物文件名（不含目录）；空 = 用 URL 的 basename（旧行为）。
+    #: 分段分支靠它把 `.part` 固定成调用方的稳定路径，免掉整包复制到 staging。
+    artifact_name: str = ""
 
     def __post_init__(self) -> None:
         if not self.urls:
@@ -158,6 +171,15 @@ class TransferSpec:
             raise ValueError("timeout must be positive")
         if any(not str(host).strip() for host in self.allowed_hosts):
             raise ValueError("allowed_hosts must not contain empty entries")
+        if int(self.download_connections) < 1:
+            raise ValueError("download_connections must be >= 1")
+        if str(self.mirror_policy) not in {"auto", "ordered", "race"}:
+            raise ValueError(f"unsupported mirror_policy: {self.mirror_policy}")
+        name = str(self.artifact_name or "")
+        if name and (
+            "/" in name or "\\" in name or name in {".", ".."} or not name.strip()
+        ):
+            raise ValueError("artifact_name must be a plain file name")
 
 
 @dataclass(frozen=True, slots=True)

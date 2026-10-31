@@ -5216,3 +5216,421 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 \
 - 安装向导 GUI 交互（目录页、扩展勾选、卸载器）未在用户机器上逐页点击；
   setup 只验证了编译产物与 onedir 冒烟。
 - OBS/直播姬、DSH 桌面端、真实麦克风内容仍未真机验证（见 L141 / PR 报告）。
+
+## L143 — 2026-10-31 — 市场分段下载（多连接 Range + 镜像竞速 + 进度条）
+
+**主题**：PCL2 式的市场下载——多连接 Range、每段续传、镜像竞速、取消，
+设置页给 QProgressBar + 速度/ETA/续传/连接数。无新依赖（`ThreadPoolExecutor` + 标准库）。
+
+**改动文件**（`git diff --numstat` + 新增文件行数）
+
+| 文件 | 增/删 | 说明 |
+|---|---|---|
+| `petcore/net/ranged.py`（新） | +463 | 纯引擎：`plan_segments` / `should_segment` / 侧车 `.segments.json` / 每段续传 / 按序装配 / 取消 / 进度；不 import urllib、不碰 Qt |
+| `petcore/contracts/http.py` | +22 | `TransferSpec` 增加 `download_connections=1`、`mirror_policy="auto"`、`artifact_name=""`，校验连接数/策略/文件名（不许路径分隔符） |
+| `petcore/net/market.py` | +344 | `download_segmented`（`bytes=0-0` 预检 → 206 严格校验 `Content-Range`、拒绝非 identity 的 `Content-Encoding`、`Accept-Encoding: identity`）、`probe_source`/`probe_sources`/`rank_sources`（TTFB 竞速）、`HttpFetcher.rank_sources` |
+| `petcore/net/market_transport.py` | +134/-18 | 单 URL 传输拆成 `_transfer_one`：值得切段就分段，200/太小回退单流**一次**；多 URL spec 按 ordered/race 排序后逐个回退；`artifact_name` 决定落盘名；`_monotonic_progress` 保证 done 不回退 |
+| `petcore/market/download.py` | +134/-13 | `download_artifact(connections=, mirror_policy=)`；竞速把最快镜像排第一（只认索引里的 URL）；分段分支直写稳定 `<id>-<version>.zip.part`，跳过整包复制到 staging；新增 `resumable_bytes()` |
+| `petcore/market/install.py` | +11 | `install_package(connections=, mirror_policy=)`；`InstallOutcome.resumed_from/connections` |
+| `petcore/market/cli.py` | +16 | `petcore market install/update` 读 `market_download_connections` / `market_download_sources` |
+| `petcore/ui/settings/page_market.py` | +231/-8 | `QProgressBar` + 「已下载/总量 · 速度 · 剩余 · 续传 · N 连接」行；`_InstallJob.progress` 信号节流 10 Hz；新增「取消」按钮（`cancel_button`）与取消收尾 |
+| `tests/test_petcore_market_ui.py` | +125 | 进度条显示/收起、取消按钮、进度文案 |
+| `tests/test_petcore_net_ranged.py`（新） | +312 | 引擎：切段、续传偏移、换源整段重下、取消保状态、装配清理、短段报错 |
+| `tests/test_petcore_net_ranged_http.py`（新） | +525 | loopback：206 校验、`Content-Encoding` 拒绝、200 回退一次且进度不倒退、429、取消可续传、竞速排序、小文件不预检 |
+| `tests/test_petcore_market_download_segmented.py`（新） | +452 | 编排：稳定 `.part`、无 staging 复制、HTTP 分段/续传、ordered/race 回退、`rank_sources` 只认索引 URL |
+
+**行为与口径**
+
+- 默认 4 连接（`market_download_connections`，1 = 旧单流），`market_download_sources`
+  `auto`（多源才竞速）/`ordered`/`race`。`should_segment` = ≥4 MiB 且连接数 > 1。
+- 分段计划：段长上限 8 MiB，并按连接数保证「每连接至少一段」（5 MiB / 4 连接 = 4 段）。
+  每段 `bytes=<start>-<stop-1>`，206 必须逐字段等于请求（start/end/total），否则 protocol 错误。
+- 侧车 `<part>.segments.json` 记 size/sha256/segment_bytes/connections 与每段 `{bytes,url}`；
+  `url` 只存**索引地址**（跳转后的签名 CDN 地址不落盘），换了来源的段整段重下。
+- 200（服务端忽略 Range）→ 中止分段、回退单流**一次**，200 的正文绝不写进段文件；
+  429/`Retry-After` 直接抛 `RateLimitError`（不换路重试）。单流成功后清掉段文件与侧车。
+- 取消：每 256 KiB 检查一次，`finally` 收口所有 worker/文件后才装配；取消保留段文件，
+  `.part` 不出现；成功装配后段文件与侧车全删（安装目录里只剩最终 zip）。
+- 进度：`total` 恒为索引大小、`done` 单调（跨「分段→单流回退」也不回退）、末值
+  `(total,total)`；工作线程只发信号，GUI 线程刷新控件。
+
+**性能（实测，`.scratch/bench_ranged_download.py`）**
+
+本机 loopback `ThreadingHTTPServer`，96 MiB，每连接限速 10 MiB/s，3 采样（下表为最终
+代码的一次完整复跑，与前一版实现的两次结果相差 <2%）：
+
+| 方案 | 墙钟（s，3 次） | 中位吞吐 |
+|---|---|---|
+| 单流 | 10.326 / 10.324 / 10.295 | 9.30 MiB/s |
+| 4 连接 | 2.940 / 2.912 / 2.872 | 32.96 MiB/s（**3.54x**） |
+
+- 200-only 服务端：2 次请求（预检 + 单流），字节完整，无 `.seg*` 残留，0.393 s / 8 MiB。
+- 取消延迟（限速 4 MiB/s，4 连接）：0.056 / 0.066 / 0.066 s，中位 66 ms。
+- 环境：Windows 11 26200、Python 3.12.10、16 逻辑核；本机 SAC 已关，未做公网测速。
+
+**验证**
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest \
+  tests/test_petcore_net_ranged.py tests/test_petcore_net_ranged_http.py \
+  tests/test_petcore_market_download_segmented.py tests/test_petcore_market_install.py \
+  tests/test_petcore_market_net.py tests/test_petcore_market_hardening.py \
+  tests/test_petcore_market_transport_security.py tests/test_petcore_http_safety.py -q
+# 132 passed（含 200-midway 回退、单调进度、SHA 失败清理、安装接线）
+
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest \
+  tests/test_petcore_distribution_contracts.py tests/test_petcore_market_ui.py \
+  tests/test_petcore_market_cli.py tests/test_petcore_market_source.py \
+  tests/test_petcore_market_model.py tests/test_petcore_update.py \
+  tests/test_petcore_architecture.py tests/test_petcore_docs.py \
+  tests/test_petcore_settings_coverage.py tests/test_petcore_settings.py \
+  tests/test_petcore_settings_search.py -q
+# 130 passed
+
+.venv/Scripts/ruff check <全部改动文件>   # All checks passed
+# 注：全仓 ruff 另有 1 个不属于本改动的 F841（petcore/interop/memory.py:496）
+```
+
+**未验证 / 风险**
+
+- 公网镜像（GitHub Release → objects.githubusercontent.com 的签名跳转）只做了逐跳
+  校验逻辑与 loopback 覆盖，未在真实 GitHub 上下载过 96 MiB 大包；真实链路的
+  连接数收益取决于镜像是否真的并行限速，本机数据来自限速 loopback。
+- 同一包**并发安装**未加锁：两个进程/任务同时写同一个 `.part` 与段文件会互相踩。
+  现有入口（设置页 `_busy`、CLI 串行）不会并发，但这是隐含前提。
+- 磁盘占用：分段时峰值 ≈ 整包 + 一段（装配边追加边删段）；取消后段文件保留到下次
+  续传或校验失败被清理。
+- 代理路由：段请求一律 `pollute=False`，沿用系统代理（不回写进程级「固定直连」）；
+  一次下载内不换路由（换路由只发生在镜像之间）。
+- 改连接数不会作废旧进度：引擎沿用侧车里的 segment_bytes/connections 计划。
+- `docs/PETCORE-MARKET.md` §5 仍写「逐 URL 下载到 …zip.part」，未补分段一节（本轮
+  未改市场文档，避免与并行工作流冲突）——待补：分段/竞速/取消语义与两个配置键。
+
+## L144 — 2026-10-31 — 音频输出设备（core 基础设置 + 热插拔 + 不回退）
+
+**改动文件**：`petcore/media/audio_output.py`（新，约 250 行）、`petcore/media/sound.py`（+83/−9）、
+`petcore/ui/ports.py`（+86/−2）、`petcore/ui/app.py`（+60）、`petcore/ui/pet_window.py`（+4/−1）、
+`petcore/ui/settings/page_voice.py`（+117）、`petcore/ui/settings/page_interaction.py`（+4/−1）、
+`petcore/config.py`（+88/−16，含本批其它键）、`tests/test_petcore_audio_output.py`（新，12 测试）。
+
+**行为**：新增全局键 `audio_output_device` / `audio_output_device_name`；空 = 跟随系统默认，
+手动设备存在 = 所有播放器用它，手动设备不存在 = 静音且**不回退默认设备**。
+`AudioOutputRouter` 用 `QMediaDevices.audioOutputsChanged` 热插拔重解析；`SoundPlayer` 在路由
+变化时停播、清空 `QSoundEffect`/`QMediaPlayer` 两套缓存并按已预热路径重建；`AudioAdapter`
+在 `play_tracked()` 前 `QAudioOutput.setDevice()`；TTS/点击音效/报时/Agent 提示音共用同一路由。
+设置页「语音」顶部新增「音频输出」卡片（跟随默认 + 设备列表 + 刷新 + 不可用状态）；
+无 QtMultimedia/无 QApplication 时 `mode=unavailable`，行为与旧版逐位一致。
+
+**实测**：`QMediaDevices.audioOutputs()` 冷 78ms / 暖 <0.001ms；`QSoundEffect` 真机
+`audioDevice().id()` 与 `AudioOutputRouter.route().device_id` 完全一致；`AudioAdapter` 真机
+`QMediaOutput.device()` 一致且 0.3s 静音 wav 播完；本机只有一只输出设备，多设备拔插由假设备测试覆盖。
+
+**验证**：`tests/test_petcore_audio_output.py` 12 passed；`settings_voice/click_sound/speech/live_settings`
+57 passed；`settings_search/settings` 51 passed；ruff clean。
+
+**未验证 / 风险**：真实多设备/蓝牙重配对只做了 Qt 对象级验证；SAC 关闭下未跑打包产物音频。
+
+## L145 — 2026-10-31 — 每日一句：随包 1200 句 + 每天抽 12 句 + 设置预览
+
+**改动文件**：`petcore/builtin/features/fun.self-talk/daily_lines.json`（新，1200 条/1200 唯一）、
+`host/daily_pool.py`（新，117 行）、`host/daily.py`（+44/−7）、`host/factory.py`（+302/−90）、
+`mod.json` 1.2.0、`scripts/generate_daily_lines.py`（新，608 行）、`petcore/cli.py`（+44/−2）、
+`scripts/build_petcore.ps1`（+6/−2）、4 个测试文件（+547/−18）。
+
+**行为**：`self_talk_daily_texts` 默认改为 `[]`（= 内置池）；旧默认 12 句在 normalize 中识别为
+「未自定义」并迁到 `[]`，真改过任一句则保留。每天按 `(day, slot)` 确定性抽 `self_talk_daily_count`
+（1–24，默认 12）句；每次自语只显示当天下一句，气泡真的显示成功才推进 `daily.json` 的 `index`；
+当天抽完回退普通自语。设置页改为圆角编号列表预览 + 句数 + 「明天再看」+ 可折叠自定义台词；
+「试听连说」改走 `presentation.say_sequence`，预览 salt 与运行时同 slot。
+`--check --strict` 新增 `self_talk_daily`（缺文件/少于 1000 条直接红），构建脚本同步断言。
+
+**性能（实测）**：冷加载池 0.71ms、缓存 0.19ms、抽 12 句 0.31ms、读状态 0.09ms、
+写状态 1.48ms、预览渲染 0.68ms（12）/0.81ms（24）、页面构造 4.9ms；每个自语 tick 额外约
+0.6ms（20–60s 一次），每个每日句一次 1.5ms 原子写；无新线程/定时器/网络。
+
+**验证**：`self_talk_daily/self_talk/settings_search/cli` 60 passed；settings/mod/architecture
+邻域 156+167+13+46 passed；`--check --strict` 报 `count=1200, unique=1200`；ruff clean。
+设置页离屏截图 `.scratch/daily/self_talk_page.png`。
+
+**未验证 / 风险**：池是模板合成，个别句子略公式化，发布前值得人工过一遍；未在真机桌宠上连续跑满一天。
+
+## L146 — 2026-10-31 — 会话 schema 2 + 通道路由 + 分层人格记忆
+
+**改动文件**：`petcore/chat/session_store.py`（+183/−24）、`petcore/ui/chat/controller.py`（+301/−5）、
+`petcore/ui/chat/window.py`（+76/−37）、`petcore/contracts/chat.py`（+30）、`petcore/contracts/host.py`（+60）、
+`petcore/interop/{__init__,memory,messages,persona}.py`（新，约 700 行）、`petcore/ui/memory_service.py`（新，约 230 行）、
+`examples/petcore-mods/ai.chat/host/runtime.py`（+43/−8）、`host/settings_page.py`（+88/−1）、
+`tests/test_petcore_interop_memory.py`、`test_petcore_memory_service.py`、`test_petcore_sessions.py`（+56）、
+`test_petcore_chat_ui.py`（+61/−3）。
+
+**行为**：`ChatSession` 增加 `channel(ai|dsh|qq)/conversation_id/created_at`，消息增加
+`id/ts/channel/sender/external_id/meta`；schema 1→2 幂等迁移，首次写回前留 `<file>.pre-v2`。
+`SessionStore` 支持 `list_sessions(channel=)`、`find_by_conversation`、`ensure_conversation`、
+`append(external_id=)` 去重。`ChatPort` 增加 `register_channel/open_channel/ingest/messages`；
+侧栏改成「AI 对话 / DSH 对话 / QQ 消息」三个可折叠分组，组内仍按日期分节。
+新增 `MemoryStore`：append-only `inbox.jsonl` + 单写者 `card.json` + `prompt-<scope>.md`；
+重要度/情绪/清晰度/衰减/pin/容量压缩/分区预算渲染全部纯函数；旧
+`feature-data/ai.chat/memory/*.jsonl` 一次性导入并保留原文件；`MemoryService` 启动 + 每 10 分钟维护，
+`MemoryPort` 接到 `ai.chat`（无端口时回退旧 JSONL）。AI/DSH/QQ 消息统一进 inbox。
+
+**验证**：`interop_memory/memory_service/sessions/chat_ui` 共 74 passed；`ai_memory/ai_mod` 56 passed；
+`--check --strict` 通过；ruff clean。
+
+**未验证 / 风险**：DSH/QQ 自动入库只在假端口/假事件下验证；旧记忆导入后的检索质量未做人工抽样评估。
+
+## L147 — 2026-10-31 — DSH v2：单插件合并 + SSE 重放 + 审批闭环 + 历史过滤
+
+**改动文件**：`integrations/dsh-pet-bridge/{index.js,channel.js,package.json,cordis.patch.yml,verify_import.mjs}`
+（channel.js 由旧 `dsh-pet-channel` 并入；package 2.0.0）、`petcore/platform/dsh_install.py`（+~20）、
+`petcore/net/dsh.py`（+~90）、`petcore/ui/chat/dsh_controller.py`（+49/−9）、`dsh_view.py`（+61/−1）、
+`tests/test_petcore_dsh.py`（+~40）、`tests/test_bridge_manifest.js`、`test_bridge_instance_scope.js`、
+`.github/workflows/pr-test.yml`（移除已删 channel 的 verify 行）、`packaging/petcore.iss`（见 L148）。
+
+**行为**：一个 Cordis 进程同时写脱敏状态 JSONL 与 HTTP+SSE；保留 `/pet/ping/prompt/events/history/answer/cancel`，
+新增 `/pet/sessions|/pet/new|/pet/approvals`；SSE 增加 `id:`/`since`/`Last-Event-ID` 512 帧重放、
+`bootId`、`turnId/step/toolCallId`；历史默认过滤 `source.kind=plugin` 与内部审批 follow-up，
+返回 reasoning/activity/ts；`/pet/prompt` 接受 `{context:{memory,persona}}` 作为内部 system 注入；
+审批 grant 绑定 `(tool, argsHash)`，过期/未知返回 410 expired；cancel 清空排队 prompt + pending。
+安装器只装 bridge，并从 profile 移除旧 `dsh-pet-channel`（旧目录保留）。宠物侧 `DshHub` 维护
+`cursor/bootId` 重连重放，DSH 帧持久化到 `channel=dsh` 会话；DshView 显示本地历史并注入记忆上下文。
+
+**验证**：`node --test tests/test_bridge_*.js` 44 passed；`verify_import.mjs` 通过；
+`tests/test_petcore_dsh.py` 14 passed；`--check --strict` 通过。
+
+**未验证 / 风险**：本机没有 DSH 桌面端，v2 的 `sessionQuery.observeSession`/审批/`/pet/new` 真机未验证；
+真机失败先取 `%APPDATA%\dsh-pet-bridge\pet-channel.json` 与 DSH 日志。
+
+## L148 — 2026-10-31 — QQ OneBot Beta + WebhookPort + 联网工具增强
+
+**改动文件**：`petcore/net/webhook.py`（新，约 190 行）、`petcore/contracts/host.py`（WebhookPort/MemoryPort）、
+`petcore/ui/ports.py`（CoreWebhookPort）、`examples/petcore-mods/im.qq/{mod.json,host/__init__,runtime,settings_page}.py`
+（新，约 700 行）、`packaging/petcore.iss`（mod_qq 默认不勾选 + `.trusted`）、
+`petcore/net/websearch.py`（search_many + article/main 正文抽取 + 标题/描述/发布时间）、
+`petcore/api/chat.py`（多引擎/正文上限）、`petcore/contracts/api.py`（engines/page_chars）、
+`examples/petcore-mods/ai.chat/host/{runtime,settings_page}.py`、`tests/test_petcore_webhook.py`、
+`test_petcore_qq_mod.py`、`test_petcore_websearch.py`。
+
+**行为**：`WebhookPort` 只绑 127.0.0.1、token 必填 + 常量时间比较、1MiB body 上限；
+`im.qq` 用 OneBot v11 HTTP：入站 POST 事件 → 白名单/去重/CQ 解析 → `channel=qq` 会话 + 气泡，
+出站 `send_private_msg/send_group_msg`；回复模式 `off/notify/ai`（AI 用现有服务 + 记忆 + 人设，
+`dsh` 自动回复留到下一版）；token 只进钥匙串。联网检索支持多引擎扇出、URL 去重、
+`ai_web_search_max_sources/page_chars` 设置，readability 式正文抽取（article/main、去 nav/aside/script）。
+`im.qq` 默认关闭、安装器默认不勾选。
+
+**验证**：`webhook` 3 passed；`qq_mod` 3 passed；`websearch` 14 passed；`ai_mod/ai_memory` 68 passed；
+`--check --strict` 通过；ruff clean。
+
+**未验证 / 风险**：本机没有 QQ 网关/账号，真机未联调；QQ 群消息只按白名单接收，空白名单 = 全忽略；
+QQ `dsh` 自动回复尚未接线；Webhook token 由运行时生成，设置页可查看/复制/生成（生成后需重启桌宠生效）。
+
+## L149 — 2026-10-31 — 反馈批次 3 安装包（0.3.0）构建与实机冒烟
+
+**产物**：`rel-interop-2026-10-31c/dsh-pet-core-setup.exe`，305,360,147 B，
+SHA-256 `0d6b52d1553c0918d0cd71228b438219facf411a3a3595ab63c4c215bf5dd724`；
+同目录 `dsh-pet-core/dsh-pet-core.exe` 15,830,519 B。ProductVersion 0.3.0，未签名；
+本机 SAC 已关闭，可直接运行。
+
+**构建门**：`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 -Clean -Installer -OutputRoot rel-interop-2026-10-31c`
+→ PyInstaller onedir + Inno `Successful compile (117.984 sec)`；`check.json` 的
+`strict.problems=[]`、`self_talk_daily.count=1200/unique=1200`、`version=0.3.0`。
+setup 内 `im.qq` 默认不勾选（`mod_qq`）、勾选才写 `{app}\mods\im.qq` + `.trusted`。
+
+**冒烟**：用 `Start-Process -Wait` 跑打包 exe `--check --strict --out check-built.json`
+→ `exit=0`，同样 `strict=[] / daily=1200/1200 / version=0.3.0`；
+再用 `--root .scratch\run-interop-c` 启动打包 onedir，8 秒后进程存活、窗口标题
+`dsh-pet-core`（真实 GUI 子系统，非源码树）。
+
+**验证**：`QT_QPA_PLATFORM=offscreen pytest tests/test_petcore_*.py -q` → **2729 passed, 1 skipped**
+（最终代码；含 4 个新测试域）；`ruff check pet/ tests/ petcore/ examples/petcore-mods/` 通过；
+`node --test tests/test_bridge_*.js` 44 passed + `verify_import.mjs` 通过。
+
+**未验证**：DSH 桌面端、QQ 网关真机；安装向导逐页交互；真实多音频设备/蓝牙重配对。
+
+## L150 — 2026-10-31 — DSH v2 真机联调：升级迁移 / 历史过滤 / 审批指纹 / pet_control
+
+**现场**：`D:\APP\DSH\DeepSeek Harness.exe`（外壳 44.7.0，`runtime.json` 的
+`desktopVersion=0.2.0-rc.2`），profile `desktop`。联调前跑的是旧
+`dsh-pet-channel` v0.1.0（`/pet/ping` 实证），`node_modules/@dsh-pet/bridge`
+仍指向旧仓库构建目录。
+
+**改了什么**（`git diff --numstat`）：
+
+| 文件 | 增删 | 改动 |
+|---|---|---|
+| `petcore/platform/dsh_install.py` | +155 / −3 | 升级迁移三件事：①已有 junction/symlink 指向旧目录时重指向本地插件目录；②从 profile 的 `cordis.patch.yml` 摘掉声明旧包名的 `insert` 项（只删命中项，其余字节原样）；③删掉 `node_modules/dsh-pet-channel` 旧链接。任一失败都不动真实目录。 |
+| `integrations/dsh-pet-bridge/channel.js` | 新文件行数 1078（本轮改约 60 行） | ①`/pet/history` 只回放 `source.kind=user` 的 UserMessage；②审批指纹忽略 `description/timeout` 等说明字段；③`/pet/new` 清掉旧会话的待审批；④`pet_control` 改用标准 JSON Schema 注册；⑤`ping.commands` 报告真实注册状态。 |
+| `tests/test_petcore_dsh.py` | +109 / −10 | 新增：旧 patch 条目被摘除、旧 junction 被重指向、旧 channel 链接被清。 |
+| `tests/test_bridge_approval_fingerprint.js` | 新增 51 行 | 审批指纹在「只改 description」时不变、命令变化时变；注入上下文不算真人发言。 |
+
+**真机实测的问题与修复**：
+
+1. **升级迁移缺口**：旧 profile 同时有 `bundles/dependencies` 里的
+   `dsh-pet-channel`、`cordis.patch.yml` 里的显式 `insert` 条目、以及
+   `node_modules/@dsh-pet/bridge` 指向旧构建的 junction。只改 `package.json`
+   会让旧通道继续被 DSH 加载并抢 6791；旧 junction 还会让新代码永远不生效。
+   安装器现在三处一起迁移，实测安装后 `bundles` 只剩 `@dsh-pet/bridge`，
+   patch 里的 `pet-channel` 条目消失，junction 指向
+   `~/.dsh/local-plugins/dsh-pet-bridge`，旧链接已删。
+2. **历史污染**：DSH 每轮写多条 `UserMessage`，`source.kind` 为
+   `runtime-context / skill-catalog / time-context / plugin`。旧逻辑只过滤
+   `plugin`，桌宠把整段技能目录当用户发言。实测首会话：真人 4 条共 325 字符，
+   注入 3 条共 **10,292 字符**（技能目录单条 9,314）。改为只放行
+   `kind=user`（缺失也算真人，兼容旧版本）后，`/pet/history` 只剩真实对话。
+3. **审批无限重问**：DSH 在同意后的续跑里把 `description` 从
+   "Run user-supplied…" 改成 "Retry approved…"；旧指纹对整段参数 JSON 求
+   SHA-1，通行证永远匹配不上。实测旧行为：点一次同意后立刻出现第二张卡
+   （`pending=1`），命令仍未执行。现在指纹只取动作参数（排序键、忽略
+   `description/justification/explanation/reason/timeout/timeout_ms`），
+   实测允许后 0 张新卡，续跑轮真实执行 `Remove-Item`（路径不存在 → 预期报错）。
+4. **pet_control 静默消失**：插件经 `~/.dsh/local-plugins` 链接加载，
+   `import('@deepseek-ai/dsh-tools')` 解析不到（包在 profile/node_modules），
+   退回裸定义后 `output.schema` 用了作者简写 `required: true`，
+   `tools.register()` 判非法并抛错，工具从未注册；`ping.commands` 却恒为
+   `true`。问模型「有没有 pet_control」得到「没有」。改用标准 JSON Schema + 
+   `required: [...]` 后，模型实际调用 `pet_control`，命令写进
+   `%APPDATA%/dsh-pet-bridge/dsh-petcmd-<pid>.jsonl`（`text="DSH 已连接"`）。
+5. **换会话遗留审批**：`/pet/new` 归档旧会话但不收旧卡，旧卡会留 10 分钟。
+   现在换会话时与 `cancel` 共用清卡逻辑，实测新会话后 `approvals=[]`，
+   旧卡收到 `approval-resolved(cancelled=true)`。
+
+**验证**：
+
+- `QT_QPA_PLATFORM=offscreen pytest tests/test_petcore_*.py -q` →
+  **2731 passed, 1 skipped in 192.44s**（新增 2 个安装器回归）。
+- 文档/架构门：`test_petcore_docs + test_pr_report_discipline +
+  test_petcore_architecture + test_architecture + test_ci_workflows` → **429 passed**。
+- `node --test tests/test_bridge_*.js` → **48 passed**（原 44 + 新 4）；
+  `node integrations/dsh-pet-bridge/verify_import.mjs` → 通过。
+- `ruff check petcore/ tests/ integrations/` → 通过。
+- 真机：`/pet/ping` → `version=2.0.0 / bootId=49385d98… / commands=true`；
+  prompt→`user/turn-start/step/assistant/turn-end/idle`；记忆注入
+  （`context.memory=主人喜欢蓝色`）回答「蓝色，绿色。」且注入正文不出现在
+  history；`cancel` → `turn-end(reason=unknown)+idle`；`/pet/new` → 旧会话
+  `archived`、新会话 `history=[]`。
+- 真实 UI（独立 `ChatWindow` + `DshHub` + `DshClient`）：界面发送消息并渲染
+  回答；审批卡显示「需要你确认：要跑一下 pwsh」，点「允许」后卡片消失、
+  头部转「DSH 正在执行…」、续跑命令执行完成，界面全程可响应（无卡死）。
+
+**产物**：`rel-dsh-real-2026-10-31/dsh-pet-core-setup.exe`，301,117,166 B，
+SHA-256 `8a37990024d068af084d8f94caad5b86da8c1fa637fa8f69bf9abe6e07cb3b92`；
+onedir `dsh-pet-core/dsh-pet-core.exe` 15,834,270 B。构建脚本冒烟
+`--check --strict` → `strict.problems=[] / daily=1200/1200 / version=0.3.0`；
+Inno `Successful compile (100.969 sec)`；包内
+`_internal/integrations/dsh-pet-bridge/channel.js` 已含 `approvalFingerprint`。
+打包 onedir 真机启动 10 秒后进程存活、窗口 `dsh-pet-core`、`Responding=True`。
+
+**未验证 / 边界**：`askApproval=true` 只在 pwsh 上实测；文件写入类工具未实测。
+联调时发现桌宠窗口在光标位于角色上时带 `WS_EX_TRANSPARENT`（逐像素穿透轮询
+判定为透明），导致外部自动化点不到角色——疑似混合 DPI 下 `mapFromGlobal`
+与 `is_transparent_at` 的坐标口径问题，本轮未复现/未修，留作后续排查。
+
+## L151 — 2026-11-01 — 聊天/DSH 视图、审批投递与网易云识别（用户反馈批次 4）
+
+**主题**：用户报了 7 条现场问题：DSH 文本右侧被裁、窗口右下角圆角失败、工具过程/思考要折叠、
+DSH→AI 切换卡顿、关掉 DSH 仍停在 DSH、执行测试指令没有审批卡、网易云识别不到。
+全部先取证再改；其中「审批卡没弹」在生产数据里被证明是**桥侧正常、桌宠侧丢了事件**
+（DSH 会话记录：00:34:43 `pending:1`，00:44:43 超时作废）。
+
+**行为变化**
+
+1. **审批投递（`dsh_controller.py` / `dsh_view.py` / `controller.py`）**
+   - `DshHub` 自己记 `approval-request`（`pending_approvals()`），与视图是否存在无关；
+     `chat_dsh_mode` 打开 + 窗口存在时 `acquire_persistent()` 常驻订阅，视图
+     `acquire/release` 只算引用计数（原来视图不可见就 `stop()`，AI 视图收不到审批）。
+   - 审批到达：`presentation_port.for_slot(slot).say(force=True)` 冒泡 + 切到 DSH 视图 +
+     显示窗口；历史回放后从 Hub 补画仍挂着的卡（桥不会在 `/pet/history` 重放审批帧）。
+   - `DshController.stop()` 不再在 GUI 线程 `close_active()`：置事件 + daemon 线程关流。
+     实测（fake client 的 `close_active` 睡 1.0s）：`set_view("ai")` **0.0ms**，旧实现等满 1s。
+   - 桥接 `sameCommandFamily()`：同意后 DSH 会重发同一条命令并**追加**
+     `; "exit=$LASTEXITCODE"`，只比 argsHash 会再弹一张卡（真机模型原话「这是第四次」）。
+     现在「已批准命令 + 非危险装饰」直接放行，追加段含危险动词仍重新审批，grant 保留到
+     `grantMinutes`。
+2. **DSH 视图排版（`dsh_view.py`）**
+   - 新增 `_WrapLabel`（`minimumSizeHint` 宽=0 + `QSizePolicy.Ignored`）：一条含 64 位哈希
+     /长路径的 tool-call 曾把 `timeline.minimumSizeHint()` 抬到 **1186px**，而横向滚动条
+     是关掉的 → 每行右侧永久裁掉 **450px**（560 宽窗口 612px）。实测现在
+     `timeline == viewport == 706`、`horizontalScrollBar().maximum() == 0`。
+   - assistant 行改走 `markdown_to_html`（与 AI 气泡同一套）；新增折叠思考行
+     （`▸ 已思考 N 字`）与折叠工具卡（`▸ pwsh · 完成`，失败自动展开并染红）。
+   - 视口 resize 触发 `_reflow()`：折行标签按新宽度重排（窗口 960→620 时行高实测增加）。
+3. **窗口（`window.py` / `styles.py` / `icons.py`）**
+   - 圆角：`#chat-view-stack` / `#chat-ai-view` / `#dsh-view` / `#dsh-header` /
+     `#dsh-composer` 全部改透明，白底只由 `phone_shell` 画；`phone_shell` 另加圆角 mask
+     兜底。实测根因是方白子控件盖住 4 个角（右下角 30 个不透明白像素），`paintEvent`
+     半径 20 与 QSS 14 也不一致，统一为 14。
+   - 最大化：新增按钮 + `changeEvent` → `_sync_maximized()`（外环 0 / 圆角 0 / 缩放边停用）；
+     最大化期间 `position_near_pet()`、`_edge_at()`、标题栏拖动都直接 return
+     （实测 `move()/setGeometry()` 会静默取消最大化并吃掉还原尺寸）；上限 1600×1200 → 3840×2160。
+4. **侧栏（`window.py` / `controller.py` / `config.py`）**
+   - 新增全局键 `chat_dsh_mode`（默认 False，三处登记）：关着时侧栏不出现「DSH 对话」组；
+     打开时 DSH 会话仍在，关掉只隐藏不删除。
+   - 渠道组头 11px/600、日期组头 10px/400（与会话标题分层）。
+   - `view_changed` → `_on_view_changed`：切视图必须切会话通道。原来只换栈页，
+     `state.session` 仍是 DSH，关掉 DSH 后 AI 输入框照样发给 DSH。
+5. **音乐（`media.music`）**
+   - `sampling._SourceWorker`：audio/windows 两源各一条常驻线程 + 单槽请求，8s 预算，
+     超时后 **15s 降级窗**（卡住那次返回即解除）。原来音频会话的 5 处同步 COM 一卡，
+     设置页「正在采样…」永久转圈、按钮永久 disabled。
+   - `Sample` 新增 `audio_error/window_error`；`diagnostics.render` 增加超时行与「候选清单」，
+     `app_id` 过 basename（不再把安装路径/用户名带进可复制文本）。
+   - `SmtcReader.reset()`：每次点「检测」先清降级状态（原来两次卡死退役后永远「已停止重试」）。
+   - `now_playing.normalized_app_id` 取 basename（修「只识别指定播放器」时路径形 app_id 被整条滤掉）。
+   - `title_clean`：网易云标题 `歌名 - 歌手 - 网易云音乐` 按 `%title% - %artist%` 切；
+     标题就是播放器名时判空闲（不再把「网易云音乐」当一首歌）。
+6. **桥接（`channel.js`）**：`assistant/message` 帧带 `reasoning`（原来直接丢），供思考行。
+
+**改动文件（`git diff --numstat`，仅本批）**
+
+| 文件 | +/- |
+|---|---|
+| `petcore/ui/chat/controller.py` | +447/−7（本批约 +120；其余为前批未提交） |
+| `petcore/ui/chat/dsh_controller.py` | +170/−25 |
+| `petcore/ui/chat/dsh_view.py` | +293/−49 |
+| `petcore/ui/chat/window.py` | +246/−46 |
+| `petcore/ui/chat/styles.py` | +24/−7 |
+| `petcore/ui/chat/icons.py` | +5/−0 |
+| `petcore/config.py` | 本批 +3（其余为前批） |
+| `integrations/dsh-pet-bridge/channel.js` | 本批约 +75/−45（新文件，1129 行） |
+| `examples/petcore-mods/media.music/host/sampling.py` | +165/−5 |
+| `.../settings_page.py` | +78/−20 |
+| `.../diagnostics.py` | +66/−2 |
+| `.../now_playing.py` | +23/−3 |
+| `.../title_clean.py` | +23/−7 |
+| `tests/test_petcore_chat_dsh_ui.py`（新） | 303 行 |
+| `tests/test_petcore_chat_ui.py` | +156/−3 |
+| `tests/test_petcore_dsh.py` | +211/−10 |
+| `tests/test_petcore_music_bounded_diagnostics.py`（新） | 262 行 |
+| `tests/test_bridge_reasoning_frames.js`（新） | 79 行 |
+| `tests/test_bridge_approval_grant.js`（新） | 50 行 |
+
+**验证**
+
+- `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_petcore_*.py -q` →
+  **2768 passed, 1 skipped in 234.99s**。
+- `node --test tests/test_bridge_*.js` → **60 passed**（原 48 + reasoning 7 + grant 5）。
+- `ruff check petcore/ tests/ integrations/ examples/` → 全绿。
+- 实机（详见 `docs/PR-REPORT-CHAT-DSH-UX-2026-11-01.md`）：真实 DSH 44.7.0 + 真实
+  `ChatWindow/ChatController`，停在 **AI 视图** 发「用 pwsh 执行 Remove-Item…」→
+  7.6s 内气泡「需要你确认：要跑一下 pwsh」+ 自动切 DSH + 卡片出现；点「允许」→
+  **4.0s** 续跑并真实执行（`[stderr] … 路径不存在 [exit code: 1]`），**没有第二张卡**。
+- 网易云 3.1.42 本机实测：空闲时 `SMTC 非播放 / 音频 inactive` →「暂停」且曲目
+  `《Love Song》—方大同`（标题切分生效）；媒体键播放后 `SMTC PLAYING / peak=0.65`
+  →「在播 · 有音频证据」，采样 median 4.02–5.01ms、冷启动 181–192ms。
+
+**未验证 / 风险**
+
+- 自动切 DSH 视图会抢焦点（审批是 10 分钟过期的阻塞事件，判断为可接受）；
+  若用户正在全屏游戏，气泡与窗口仍会出现。
+- 审批 grant 在 `grantMinutes`（默认 5）内对「同一条命令 + 非危险装饰」不再询问；
+  追加段里出现危险动词仍会重新审批（有单测钉住）。
+- 桥接的 reasoning 帧要 DSH 重启后生效；本轮为验证重启过 DSH，随后关闭（开工前它未运行）。
+- 最大化只做了 offscreen 几何断言，没有在真机上截图对比；圆角有像素级断言
+  （壳内角 alpha=0、中心 alpha=255，素色与壁纸两种背景）。
+
+**产物**：`rel-chat-ux-2026-11-01/dsh-pet-core-setup.exe`，301,134,920 B，SHA-256
+`70ea1230efc90b727af031e918805d852cf1877d2058b8a9e2c2ccc522c58363`；onedir
+`dsh-pet-core/dsh-pet-core.exe` 15,847,279 B。构建脚本冒烟 `--check --strict` →
+`strict.problems=[] / daily=1200/1200 / version=0.3.0`；Inno `Successful compile (112.718 sec)`；
+包内 `_internal/integrations/dsh-pet-bridge/channel.js` 含 `sameCommandFamily` 与
+`reasoningOf`。打包 onedir 真机启动 10 秒：进程存活、窗口 `dsh-pet-core`、`Responding=True`。
+安装包未签名（本机 SAC 已关时可直接运行；对外分发要换正式证书）。

@@ -83,7 +83,7 @@ QFrame#chat-main-header { min-height: 55px; background: #ffffff; border: none; b
 QLabel#title-label { color: #252a32; font-size: @F_14@; font-weight: 600; }
 QLabel#subtitle-label { color: #7189c7; font-size: @F_10@; }
 QToolButton#sidebar-toggle-button, QToolButton#window-minimize-button, QToolButton#window-close-button,
-QToolButton#window-pin-button {
+QToolButton#window-maximize-button, QToolButton#window-pin-button {
     width: 29px; height: 29px; border: none; border-radius: 8px; background: transparent;
     color: #252a32; /* 深色系统下无 QSS color 会落到 palette 白字，白底上看不清 */
 }
@@ -94,12 +94,14 @@ QToolButton#view-toggle-button {
 }
 QToolButton#view-toggle-button:hover { background: #f0f2f5; }
 QToolButton#view-toggle-button:checked { color: #ffffff; background: @ACCENT@; }
-QStackedWidget#chat-view-stack { background: #ffffff; }
-QWidget#chat-ai-view, QWidget#dsh-view { background: #ffffff; }
-QFrame#dsh-header { background: #ffffff; border: none; border-bottom: 1px solid #f0f1f4; }
+/* 圆角只由 phone-shell 画：QSS 从不裁剪子控件，方形白底会盖掉右下角
+   （实测圆角外有 30 个不透明纯白像素的楔形）。栈页与 DSH 表面一律透明。 */
+QStackedWidget#chat-view-stack { background: transparent; }
+QWidget#chat-ai-view, QWidget#dsh-view { background: transparent; }
+QFrame#dsh-header { background: transparent; border: none; border-bottom: 1px solid #f0f1f4; }
 QLabel#dsh-status { color: #53606d; font-size: @F_11@; }
 QLabel#dsh-status[state="error"] { color: #cf3f38; }
-QScrollArea#dsh-scroll, QWidget#dsh-timeline { background: #ffffff; border: none; }
+QScrollArea#dsh-scroll, QWidget#dsh-timeline { background: transparent; border: none; }
 QLabel#dsh-user {
     background: #f0f3f8; border-radius: 12px; padding: 8px 12px;
     color: #252a32; font-size: @FONT_SIZE@px;
@@ -109,7 +111,10 @@ QFrame#dsh-tool, QFrame#dsh-approval {
     background: #f7f8fa; border: 1px solid #e6e9ef; border-radius: 8px;
 }
 QLabel#dsh-tool-title { color: #252a32; font-size: @F_11@; font-weight: 600; }
+QLabel#dsh-tool-title[state="error"] { color: #b3261e; }
 QLabel#dsh-tool-detail { color: #626a76; font-size: @F_10@; }
+QLabel#dsh-error { color: #b3261e; font-size: @F_11@; padding: 4px 2px; }
+QLabel#dsh-thinking { color: #626a76; font-size: @F_10@; }
 QFrame#dsh-composer { background: #ffffff; border: none; border-top: 1px solid #f0f1f4; }
 QPlainTextEdit#dsh-input {
     border: 1px solid #dfe3e9; border-radius: 10px; padding: 6px 8px;
@@ -119,11 +124,23 @@ QPushButton#dsh-send {
     background: @ACCENT@; color: #ffffff; border: none; border-radius: 8px;
     padding: 6px 14px; font-weight: 600;
 }
-QPushButton#dsh-retry, QPushButton#dsh-stop, QPushButton#dsh-context {
+QPushButton#dsh-retry, QPushButton#dsh-stop, QPushButton#dsh-context, QPushButton#dsh-new,
+QPushButton#dsh-deny {
     background: #eef0f3; color: #252a32; border: none; border-radius: 8px;
     padding: 6px 12px;
 }
-QToolButton#window-minimize-button:hover { background: #f0f2f5; }
+QPushButton#dsh-retry:hover, QPushButton#dsh-stop:hover, QPushButton#dsh-context:hover,
+QPushButton#dsh-new:hover, QPushButton#dsh-deny:hover { background: #e3e7ee; }
+/* 审批卡的允许/拒绝：没有这两条时用的是 palette 默认色，深色系统下实测白字白底 */
+QPushButton#dsh-allow {
+    background: @ACCENT@; color: #ffffff; border: none; border-radius: 8px;
+    padding: 6px 16px; font-weight: 600;
+}
+QPushButton#dsh-allow:hover { background: @ACCENT@; }
+QPushButton#dsh-allow:disabled, QPushButton#dsh-deny:disabled {
+    background: #eef0f3; color: #9aa1ab;
+}
+QToolButton#window-minimize-button:hover, QToolButton#window-maximize-button:hover { background: #f0f2f5; }
 QToolButton#window-close-button:hover { background: #fbe8e8; }
 QToolButton#window-pin-button:hover { background: #f0f2f5; }
 QToolButton#window-pin-button:checked { color: #ffffff; background: @ACCENT@; }

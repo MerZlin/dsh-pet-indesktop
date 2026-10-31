@@ -907,3 +907,61 @@ C 盘剩余空间显示选项（性能占用要低）」。
    设置行保留并说明原因（不创建伪控件）。
 5. **文档/视觉**：本记录 + L141 + PR 报告 + `INDEX.md` 登记；直播三选一与色键颜色
    在真机 1100×800 / 720×500 由设置页几何测试覆盖，OBS 真机截图未做（见报告）。
+
+### 2026-10-31 — petcore 反馈批次 3：音频输出 / 每日池 / 分段下载 / 互通与人格记忆
+
+本刀新增/变更的持久键。`im_qq_*` 是 mod 的 `config.extra` 键（无 DEFAULTS 类型，值上限
+4KB/总量 64KB）；其余进 core `DEFAULTS`，全局键同时进 `GLOBAL_CONFIG_KEYS`。
+
+| 键 | 默认 | 作用域 | 披露 | 依赖 / 失败路径 | 搜索别名 |
+|---|---|---|---|---|---|
+| `audio_output_device` | `""` | 全局 | primary | 空=跟随系统默认；手动设备不存在时静音且不回退（`AudioRoute.mode=missing`），配置不写脏；无 QtMultimedia=unavailable | 音频输出 / 输出设备 / 耳机 / 外放 |
+| `audio_output_device_name` | `""` | 全局 | primary | 仅回显；设备 id 在上一键，名字不参与路由 | 输出设备 |
+| `self_talk_daily_count` | `12` | 本宠 | primary | 1–24；当天抽完回退普通自语 | 每天几句 / 每日一句 |
+| `self_talk_daily_texts` | `[]`（原 12 句） | 本宠 | primary | **默认语义变更**：空=随包 1200 句池；旧默认 12 句在 normalize 识别为「未自定义」→ `[]`；用户改过任一句则保留自定义 | 每日台词 / 自定义台词 |
+| `market_download_connections` | `4` | 全局 | advanced | 1–8；1=旧单流；分段失败自动回退单流一次 | 下载连接数 / 分段下载 |
+| `market_download_sources` | `"auto"` | 全局 | advanced | `auto|ordered|race`；多源时竞速，单源不额外探测 | 下载源 / 镜像 |
+| `ai_web_search_engines` | `["baidu","duckduckgo"]` | 全局 | primary | 多引擎扇出 + URL 去重；空=只用 `ai_web_engine`；单引擎失败继续下一个 | 多引擎 / 搜索引擎 / 联网 |
+| `ai_web_search_max_sources` | `4` | 全局 | advanced | 1–8；合并后交给模型的最多来源数 | 来源数 / 引用 |
+| `ai_web_search_page_chars` | `12000` | 全局 | advanced | 2000–40000；读页正文上限，越大越慢 | 正文上限 / 网页正文 |
+| `chat_dsh_mode` | `False` | 全局 | primary | 聊天窗的 DSH 模式：开=侧栏出现「DSH 对话」分组 + 共享 SSE 常驻（审批在 AI 视图也收得到）；关=分组隐藏、当前会话回落最近 AI 对话 | DSH 模式 / DSH 分组 / 侧栏 |
+| `dsh_memory_inject` | `True` | 全局 | primary | 为真时 DSH prompt 带 `context.memory`（内部 system，不进历史） | DSH 记忆 / 互通 |
+| `dsh_persona_inject` | `True` | 全局 | advanced | 预留给人设注入；当前 DSH 只注入记忆，人设仍由 DSH preset 决定 | DSH 人设 |
+| `dsh_history_limit` | `200` | 全局 | advanced | 20–500；DSH 历史回放条数上限 | DSH 历史 |
+| `im_qq_enabled` | `False`（extra） | 全局 | primary | 默认关；缺 webhook/凭据端口时只通知不启动 | QQ / OneBot |
+| `im_qq_api_base` | `""`（extra） | 全局 | primary | 空=只监听不发送；非法地址发送失败会冒泡 | OneBot API |
+| `im_qq_webhook_port` | `8790`（extra） | 全局 | advanced | 1024–65535；端口占用启动失败可见 | webhook / 端口 |
+| `im_qq_webhook_path` | `/onebot`（extra） | 全局 | advanced | 必须与网关 POST 路径一致 | webhook |
+| `im_qq_reply_mode` | `"notify"`（extra） | 全局 | primary | `off|notify|ai`；`dsh` 自动回复留待下一版 | 自动回复 / 回复模式 |
+| `im_qq_notify_bubble` | `True`（extra） | 全局 | primary | 收到消息冒气泡；群聊只显示前 120 字 | 气泡 / 通知 |
+| `im_qq_allowed_groups` | `[]`（extra） | 全局 | primary | 空=忽略所有群消息；非空按群号白名单 | 群白名单 |
+| `im_qq_allowed_users` | `[]`（extra） | 全局 | primary | 空=忽略所有私聊 | 私聊白名单 |
+
+**凭据**：`im.qq/access_token`、`im.qq/webhook_token` 只进钥匙串；`config.json`/`api.json`
+不出现。webhook token 首次启动自动生成，设置页只显示「自动生成」。
+
+**迁移 / 兼容**
+
+- `self_talk_daily_texts` 的默认值从 12 句改成 `[]`：旧配置里的**原样 12 句**被 normalize
+  识别为 `[]`；用户真编辑过的列表保留。没有新增迁移标记文件，因为这是值级幂等判断。
+- 会话 schema 1→2 的迁移不属于「设置键」，见 L146 与 `docs/INTEROP-ARCHITECTURE.md`。
+- `audio_output_device` 与 `music_audio_device` 是两个键：前者控制桌宠发声，后者只控制
+  音乐识别采样设备；设置页 hint 已写明。
+
+**准出对应**
+
+1. **契约**：上表键、默认、作用域、失败路径；音频路由实时扇出到所有宠物窗 + AudioAdapter；
+   分段下载配置实时被下一次安装读取；DSH/QQ 设置页保存/取消按各自页面语义。
+2. **TDD**：`test_petcore_audio_output.py`、`test_petcore_self_talk_daily.py`、
+   `test_petcore_net_ranged*.py`、`test_petcore_market_download_segmented.py`、
+   `test_petcore_interop_memory.py`、`test_petcore_memory_service.py`、`test_petcore_dsh.py`、
+   `test_petcore_webhook.py`、`test_petcore_qq_mod.py`、`test_petcore_websearch.py` 覆盖默认、
+   round-trip、取消回滚、坏值归一、缺失设备静音、200 回退单流、审批 410、去重与白名单。
+3. **布局/可访问性**：音频输出行在「语音」顶部，设备下拉 + 刷新按钮 + 状态行；
+   每日池预览是编号列表 + 句数 + 明天再看 + 折叠自定义；QQ 设置页各行均 `expand=True`，
+   搜索别名覆盖 QQ/OneBot/群白名单/私聊白名单/令牌。
+4. **跨平台**：音频端点/直播读回仅 Windows，非 Windows 返回空端点并保留设置行；
+   QQ webhook 只绑 127.0.0.1；无 QtMultimedia 时音频路由 `unavailable` 保持旧行为。
+5. **文档/视觉**：本节 + L144–L148 + `PR-REPORT-FEEDBACK-BATCH3-2026-10-31.md` +
+   `INTEROP-ARCHITECTURE.md` + `INDEX.md` 登记；离屏截图见 `.scratch/daily/` 与
+   `.scratch/capture_market_progress.py` 产物。

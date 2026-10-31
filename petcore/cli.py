@@ -11,6 +11,9 @@ from .config import Config
 from .log import get_logger, setup_logging
 from .performance import runtime_metrics
 
+#: 内置「每日一句」池的最小条数：生成脚本、设置页与构建门共用这一口径。
+MIN_DAILY_LINES = 1000
+
 
 def _ensure_streams() -> None:
     """窗口化打包（PyInstaller --windowed）下 sys.stdout/stderr 是 None。
@@ -34,7 +37,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="--check 的构建门模式：菜单模板/内置配图/角色缺失即退出 1",
+        help="--check 的构建门模式：菜单模板/内置配图/每日台词池/角色缺失即退出 1",
     )
     parser.add_argument("--out", type=Path, default=None, help="write --check report to this path")
     parser.add_argument("--character", default=None)
@@ -114,6 +117,37 @@ def _speech_report(root: Path, config: Config) -> dict:
         }
     except Exception as exc:  # noqa: BLE001 - 诊断不能把 --check 拖垮
         return {"error": f"{type(exc).__name__}: {exc}"[:200]}
+
+
+def _self_talk_daily_report(path: Path | None = None) -> dict:
+    """`--check` 的每日一句证据：随包台词池是否真的随安装包存在。
+
+    冻结包整棵 ``petcore/builtin`` 一起拷；池文件缺失时运行时只会静默回落
+    普通自语，所以必须有构建门（``--strict``）把它变成红的。
+    """
+    target = path or (
+        paths.builtin_features_dir() / "fun.self-talk" / "daily_lines.json"
+    )
+    payload: object = {}
+    try:
+        payload = json.loads(Path(target).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = {}
+    raw = payload.get("lines") if isinstance(payload, dict) else None
+    lines = [
+        str(item).strip()
+        for item in (raw if isinstance(raw, list) else ())
+        if isinstance(item, str) and str(item).strip()
+    ]
+    return {
+        "path": str(target),
+        "schema": payload.get("schema") if isinstance(payload, dict) else None,
+        "generated": str((payload or {}).get("generated") or "")
+        if isinstance(payload, dict)
+        else "",
+        "count": len(lines),
+        "unique": len(set(lines)),
+    }
 
 
 def _migration_report(root: Path) -> dict:
@@ -225,6 +259,7 @@ def _check(
             "builtin_count": len(talk_images.image_files(builtin_dir)),
             "builtin_readable": len(talk_images.readable_images(builtin_dir)),
         },
+        "self_talk_daily": _self_talk_daily_report(),
         "speech": _speech_report(root, config),
         "update": UpdateService(root).diagnose(),
         # 运行时计数器只写不读就是死代码：`--check` 是它们的读出口。
@@ -235,12 +270,19 @@ def _check(
     }
     problems: list[str] = []
     if strict:
-        # 构建门的唯一判据：这三项就是「包打全了没有」的证据（AGENTS 已写明
+        # 构建门的唯一判据：这几项就是「包打全了没有」的证据（AGENTS 已写明
         # `self_talk_images` 是素材/Qt 插件是否正常的第一证据）。
         if menu_template_source != "json":
             problems.append(f"menu_template={menu_template_source}")
         if int(report["self_talk_images"].get("builtin_readable") or 0) <= 0:
             problems.append("builtin self-talk images unreadable")
+        # 每日一句池缺失时运行时只会静默回落普通自语，必须在这里变红。
+        if int(report["self_talk_daily"].get("unique") or 0) < MIN_DAILY_LINES:
+            problems.append(
+                "builtin self-talk daily lines missing "
+                f"({report['self_talk_daily'].get('unique') or 0}"
+                f" < {MIN_DAILY_LINES})"
+            )
         if not report.get("characters"):
             problems.append("no characters packaged")
         problems.extend(f"diagnostic:{item}" for item in (report.get("diagnostics") or []))

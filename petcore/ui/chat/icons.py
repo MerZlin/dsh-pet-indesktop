@@ -55,6 +55,11 @@ def _draw(name: str, painter: QPainter, color: QColor) -> None:
         painter.drawLine(QPointF(8.0, 10.0), QPointF(8.0, 14.0))
     elif name == "minimize":
         painter.drawLine(QPointF(3.0, 11.5), QPointF(13.0, 11.5))
+    elif name == "maximize":
+        painter.drawRoundedRect(QRectF(3.0, 3.0, 10.0, 10.0), 1.4, 1.4)
+    elif name == "restore":
+        painter.drawRoundedRect(QRectF(2.6, 5.4, 8.0, 8.0), 1.2, 1.2)
+        painter.drawRoundedRect(QRectF(5.4, 2.6, 8.0, 8.0), 1.2, 1.2)
     elif name == "exit":
         painter.drawLine(QPointF(3.0, 3.0), QPointF(13.0, 13.0))
         painter.drawLine(QPointF(13.0, 3.0), QPointF(3.0, 13.0))

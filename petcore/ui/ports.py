@@ -134,10 +134,59 @@ class QtConfigPort:
 
 
 class AudioAdapter:
-    def __init__(self, window) -> None:
+    def __init__(self, window, route_provider=None) -> None:
         self.window = window
+        self._route_provider = route_provider
+        self._route = None
+        self._route_key = None
+
+    def _sync_route(self):
+        if self._route_provider is None:
+            return None
+        try:
+            route = self._route_provider()
+        except Exception:
+            logger.debug("audio route provider failed", exc_info=True)
+            if self._route is None:
+                from ..media.audio_output import AudioRoute
+
+                self._route = AudioRoute(None, False, "missing")
+                self._route_key = self._route.key
+            return self._route
+        key = getattr(route, "key", None) if route is not None else None
+        if key != self._route_key:
+            self._route_key = key
+            self._route = route
+            self._apply_device()
+        return self._route
+
+    def _audible(self) -> bool:
+        if self._route is None:
+            return True
+        return bool(getattr(self._route, "audible", True))
+
+    def _apply_device(self) -> bool:
+        output = getattr(self, "_output", None)
+        if output is None:
+            return True
+        device = getattr(self._route, "device", None) if self._route is not None else None
+        if device is None:
+            return True
+        try:
+            output.setDevice(device)
+        except Exception:
+            logger.debug("audio output device set failed", exc_info=True)
+        return True
+
+    def apply_route(self, route) -> None:
+        self._route = route
+        self._route_key = getattr(route, "key", None) if route is not None else None
+        self._apply_device()
 
     def play(self, path: Path | str, volume: float | None = None) -> bool:
+        self._sync_route()
+        if not self._audible():
+            return False
         try:
             player = self.window.sound
             if volume is not None:
@@ -151,6 +200,9 @@ class AudioAdapter:
         from PySide6.QtCore import QUrl
         from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
+        self._sync_route()
+        if not self._audible():
+            return False
         self.stop()
         if not hasattr(self, "_player"):
             self._player = QMediaPlayer()
@@ -158,6 +210,7 @@ class AudioAdapter:
             self._player.setAudioOutput(self._output)
             self._player.mediaStatusChanged.connect(self._media_status)
             self._player.errorOccurred.connect(self._media_error)
+        self._apply_device()
         self._completion = (on_finished, on_error)
         self._output.setVolume(max(0.0, min(1.0, float(volume))))
         url = QUrl.fromLocalFile(str(Path(path).resolve()))
@@ -224,6 +277,39 @@ class AudioAdapter:
             self.window.sound.set_volume(float(volume))
         except Exception:
             pass
+
+
+class CoreWebhookPort:
+    """进程级 webhook 管理器：每个 owner 最多一个监听，退出统一关闭。"""
+
+    def __init__(self) -> None:
+        self._servers: dict[str, object] = {}
+
+    def start(self, owner, *, port, path, token, handler):
+        from ..net.webhook import WebhookServer
+
+        self.stop(owner)
+        server = WebhookServer(
+            owner=str(owner),
+            port=int(port),
+            path=str(path),
+            token=str(token),
+            handler=handler,
+        ).start()
+        self._servers[str(owner)] = server
+        return server
+
+    def stop(self, owner: str) -> None:
+        server = self._servers.pop(str(owner), None)
+        if server is not None:
+            try:
+                server.stop()
+            except Exception:
+                logger.debug("webhook stop failed", exc_info=True)
+
+    def close(self) -> None:
+        for owner in list(self._servers):
+            self.stop(owner)
 
 
 class StorageAdapter:
@@ -898,7 +984,8 @@ def build_ports(host, window) -> HostPorts:
     config = getattr(host, "config", None)
     api = CoreApiPort(host, store, credentials) if store is not None and credentials is not None else None
     scheduler = QtScheduler()
-    audio = AudioAdapter(window)
+    route_provider = getattr(getattr(host, "audio_output", None), "route", None)
+    audio = AudioAdapter(window, route_provider=route_provider)
     from .reminders import ReminderDelivery
     delivery = ReminderDelivery(getattr(host, "quiet", None), scheduler)
     host.reminders = delivery
@@ -935,4 +1022,6 @@ def build_ports(host, window) -> HostPorts:
             if speech_service is not None
             else None
         ),
+        memory=getattr(host, "memory", None),
+        webhook=getattr(host, "webhook", None),
     )

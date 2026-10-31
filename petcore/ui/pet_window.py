@@ -130,7 +130,10 @@ class PetWindow(QWidget):
         self.slingshot = SlingshotController(self)
         self.feeding = FeedingController(self)
         self.library = ClipLibrary(str(config.get("frameseq") or "auto"))
-        self.sound = SoundPlayer(float(config.get("volume") or 0.8))
+        route_provider = getattr(getattr(host, "audio_output", None), "route", None)
+        self.sound = SoundPlayer(
+            float(config.get("volume") or 0.8), route_provider=route_provider
+        )
         self._click_sound_pair = ClickSoundPair(self.sound.play)
         self._click_sound_token: int | None = None
         # 从属窗口（owned window）：气泡的层级跟着桌宠走——桌宠置顶它才置顶。但

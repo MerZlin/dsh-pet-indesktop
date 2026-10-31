@@ -225,14 +225,18 @@ if ($report.menu_template -ne "json") {
 if ([int]$report.self_talk_images.builtin_readable -le 0) {
     throw "packaged builtin self-talk images are unreadable (assets or Qt image plugin missing)"
 }
+# 每日一句池（1000+ 句）与配图一样是随包素材：缺了运行时只会静默回落普通自语。
+if ([int]$report.self_talk_daily.unique -lt 1000) {
+    throw "packaged builtin self-talk daily lines are missing or too few (got $($report.self_talk_daily.unique), need >= 1000)"
+}
 if (-not $report.characters -or $report.characters.Count -eq 0) {
     throw "packaged build contains no characters"
 }
 if ($report.diagnostics -and $report.diagnostics.Count -gt 0) {
     throw "packaged --check reported $($report.diagnostics.Count) diagnostic(s): $($report.diagnostics -join '; ')"
 }
-Write-Host ("check: menu_template={0} characters={1} builtin_images={2} strict={3}" -f `
-    $report.menu_template, $report.characters.Count, $report.self_talk_images.builtin_readable, $report.strict.enabled)
+Write-Host ("check: menu_template={0} characters={1} builtin_images={2} daily_lines={3} strict={4}" -f `
+    $report.menu_template, $report.characters.Count, $report.self_talk_images.builtin_readable, $report.self_talk_daily.unique, $report.strict.enabled)
 Write-Host "built: $(Join-Path $distRoot 'dsh-pet-core')"
 
 if ($Installer) {

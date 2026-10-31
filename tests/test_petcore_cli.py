@@ -42,6 +42,39 @@ def test_check_reports_legacy_character(tmp_path) -> None:
     assert report["self_talk_images"]["builtin_dir"]
 
 
+def test_check_reports_the_builtin_daily_pool(tmp_path) -> None:
+    result = _run(["--check", "--strict"], tmp_path)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    daily = report["self_talk_daily"]
+    assert daily["schema"] == 1
+    assert daily["generated"]
+    assert daily["unique"] >= 1000
+    assert daily["count"] == daily["unique"]
+    assert Path(daily["path"]).is_file()
+    assert report["strict"]["problems"] == []
+
+
+def test_strict_check_fails_when_the_daily_pool_is_missing(tmp_path, monkeypatch, capsys) -> None:
+    """池文件缺失时运行时只会静默回落普通自语：`--strict` 必须把它变成红的。"""
+    from petcore import cli, paths
+
+    monkeypatch.setattr(paths, "builtin_features_dir", lambda: tmp_path / "features")
+    code = cli.main(["--check", "--strict", "--root", str(tmp_path / "data")])
+    report = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert report["self_talk_daily"]["unique"] == 0
+    assert any(
+        "daily lines missing" in item for item in report["strict"]["problems"]
+    )
+
+
+def test_build_script_gates_the_daily_pool() -> None:
+    text = (ROOT / "scripts" / "build_petcore.ps1").read_text(encoding="utf-8")
+    assert "$report.self_talk_daily.unique" in text
+    assert "self_talk_daily" in text.split("ConvertFrom-Json", 1)[1]
+
+
 def test_pack_legacy_and_check_mod_character(tmp_path) -> None:
     pack = tmp_path / "packs" / "character.shenshen"
     result = _run(["pack-legacy", "shenshen", "--out", str(pack)], tmp_path)

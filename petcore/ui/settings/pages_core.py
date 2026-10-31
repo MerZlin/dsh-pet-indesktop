@@ -204,7 +204,7 @@ class GeneralPage(SettingsPage):
         dsh_card.add_row(
             "通道插件",
             dsh_row,
-            "把随包 dsh-pet-bridge / dsh-pet-channel 写入 ~/.dsh，并注册到 desktop profile；需要重启 DSH 桌面端。",
+            "把随包 dsh-pet-bridge v2（状态事件 + 聊天通道）写入 ~/.dsh，并注册到 desktop profile；升级时移除旧 dsh-pet-channel；需要重启 DSH 桌面端。",
         )
         self.dsh_status = QLabel("", self)
         self.dsh_status.setObjectName("settingHint")
@@ -289,7 +289,7 @@ class GeneralPage(SettingsPage):
         try:
             info = client.ping()
             self.dsh_status.setText(
-                f"通道在线：{info.get('plugin') or 'dsh-pet-channel'} · v{info.get('version') or '?'}"
+                f"通道在线：{info.get('plugin') or 'dsh-pet-bridge'} · v{info.get('version') or '?'}"
             )
         except Exception as exc:  # noqa: BLE001
             reason = str(getattr(exc, "reason", "") or "offline")

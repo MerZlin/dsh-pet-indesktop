@@ -10,8 +10,8 @@ const bridgeDir = path.resolve(here, "../integrations/dsh-pet-bridge");
 test("bridge loads standalone (zero external dependencies)", async () => {
   const bridge = await import(pathToFileURL(path.join(bridgeDir, "index.js")).href);
   assert.equal(typeof bridge.apply, "function");
-  // 减法后不消费任何注入服务（看门狗 LLM 诊断已删），纯事件转发
-  assert.deepEqual(bridge.inject, []);
+  // v2 合并聊天通道：需要 agents/sessionQuery/tools；状态事件写入本身不依赖它们。
+  assert.deepEqual(bridge.inject, ["agents", "sessionQuery", "tools"]);
 });
 
 test("bridge manifest declares no runtime dependencies (zero-dependency red line)", () => {

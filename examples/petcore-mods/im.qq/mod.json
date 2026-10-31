@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "kind": "feature",
+  "id": "im.qq",
+  "name": "QQ bridge",
+  "name_zh": "QQ 互通",
+  "version": "0.1.0",
+  "api_version": "1",
+  "core_requires": ">=0.1.0,<1.0.0",
+  "author": "dsh-pet",
+  "execution": "host-only",
+  "entrypoint": "host/__init__.py:create_host",
+  "capabilities": [
+    "network.request",
+    "notification.present",
+    "settings.read",
+    "settings.write"
+  ]
+}

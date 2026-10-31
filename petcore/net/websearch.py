@@ -38,6 +38,7 @@ __all__ = [
     "parse_baidu_html",
     "parse_duckduckgo_html",
     "search",
+    "search_many",
 ]
 
 ENGINE_LABELS = {
@@ -241,23 +242,53 @@ def parse_baidu_html(page: str, limit: int) -> list[SearchResult]:
 
 
 def html_to_text(page: str) -> str:
-    """粗粒度正文提取：去脚本/样式/导航，块级标签转换行。"""
+    """正文提取：优先 article/main，去脚本/样式/导航/侧栏，保留标题与描述。"""
     title_match = re.search(r"<title[^>]*>(.*?)</title>", page, re.S | re.I)
+    description = ""
+    for pattern in (
+        r'<meta[^>]+(?:property|name)=["\'](?:og:description|description)["\'][^>]+content=["\'](.*?)["\']',
+        r'<meta[^>]+content=["\'](.*?)["\'][^>]+(?:property|name)=["\'](?:og:description|description)["\']',
+    ):
+        match = re.search(pattern, page, re.S | re.I)
+        if match:
+            description = _clean_text(match.group(1))
+            break
+    published = ""
+    for pattern in (
+        r'<meta[^>]+(?:property|name)=["\'](?:article:published_time|datePublished)["\'][^>]+content=["\'](.*?)["\']',
+        r"<time[^>]+datetime=[\"']([^\"']+)[\"']",
+    ):
+        match = re.search(pattern, page, re.S | re.I)
+        if match:
+            published = _clean_text(match.group(1))[:40]
+            break
+    main = re.search(r"<(article|main)\b[^>]*>(.*?)</\1\s*>", page, re.S | re.I)
+    body = main.group(2) if main else page
     body = re.sub(
-        r"<(script|style|noscript|svg|nav|footer|header|form|iframe)\b.*?</\1\s*>",
+        r"<(script|style|noscript|svg|nav|footer|header|aside|form|iframe|button|dialog)\b.*?</\1\s*>",
         " ",
-        page,
+        body,
         flags=re.S | re.I,
     )
     body = re.sub(r"<!--.*?-->", " ", body, flags=re.S)
     body = re.sub(
-        r"<(br|/p|/div|/li|/h[1-6]|/tr|/section|/article)\b[^>]*>", "\n", body, flags=re.I
+        r"<(br|/p|/div|/li|/h[1-6]|/tr|/section|/article|/blockquote)\b[^>]*>",
+        "\n",
+        body,
+        flags=re.I,
     )
     body = _html.unescape(re.sub(r"<[^>]+>", " ", body))
     lines = [" ".join(line.split()) for line in body.splitlines()]
     text = "\n".join(line for line in lines if len(line) > 1)
     title = _clean_text(title_match.group(1)) if title_match else ""
-    return (f"标题：{title}\n" if title else "") + text
+    header = ""
+    if title:
+        header += f"标题：{title}\n"
+    if published:
+        header += f"发布时间：{published}\n"
+    if description:
+        header += f"摘要：{description}\n"
+    return header + text
 
 
 # ---------------------------------------------------------------- 对外入口
@@ -297,6 +328,67 @@ def search(
             return _search_engine(_FREE_FALLBACK[engine], query, **options)
         except SearchError as second:
             raise SearchError(f"{first}；备用引擎也失败：{second}") from None
+
+
+def search_many(
+    query: str,
+    *,
+    engines: tuple[str, ...] | list[str] = (),
+    fallback_engine: str = "baidu",
+    api_key: str = "",
+    limit: int = 5,
+    engine_limit: int = 5,
+    timeout: float = 15.0,
+    verify_ssl: bool = True,
+    opener=None,
+) -> list[SearchResult]:
+    """多引擎扇出：按引擎顺序取结果，按 URL 去重，凑够 limit 即停。
+
+    单个引擎失败不拖垮整次搜索；全部失败才抛最后一个错误（带引擎名）。
+    ``engines`` 为空时使用 ``fallback_engine``（即设置页的单引擎选择）。
+    """
+    wanted = [str(item) for item in (engines or ()) if str(item) in ENGINE_LABELS]
+    if not wanted:
+        return search(
+            query,
+            engine=str(fallback_engine or "baidu"),
+            api_key=api_key,
+            limit=limit,
+            timeout=timeout,
+            verify_ssl=verify_ssl,
+            opener=opener,
+        )
+    merged: list[SearchResult] = []
+    seen: set[str] = set()
+    last_error: Exception | None = None
+    for engine in wanted:
+        remaining = max(1, int(limit) - len(merged))
+        try:
+            results = search(
+                query,
+                engine=engine,
+                api_key=api_key,
+                limit=max(remaining, int(engine_limit or 3)),
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+                opener=opener,
+            )
+        except Exception as exc:  # noqa: BLE001 - 单引擎失败继续下一个
+            last_error = exc
+            continue
+        for item in results:
+            url = str(item.url or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            merged.append(item)
+            if len(merged) >= int(limit):
+                return merged
+    if merged:
+        return merged
+    if last_error is not None:
+        raise SearchError(f"全部搜索引擎都失败：{last_error}", reason=getattr(last_error, "reason", errors.NETWORK))
+    return []
 
 
 def _search_engine(

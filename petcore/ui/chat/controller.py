@@ -87,6 +87,8 @@ class ChatController(QObject):
         self._states: dict[tuple[str, int], _ChatState] = {}
         self._submit_registry: dict[str, Callable[[str, int], None]] = {}
         self._stop_registry: dict[str, Callable[[int], None]] = {}
+        self._channel_submit: dict[str, Callable[[str, int, str], None]] = {}
+        self._channel_stop: dict[str, Callable[[int, str], None]] = {}
         self._recording_key: tuple[str, int] | None = None
         self._dsh_hub: DshHub | None = None
         self._asr = getattr(host, "asr", None)
@@ -103,6 +105,7 @@ class ChatController(QObject):
         self.done_received.connect(self._apply_done)
         self.error_received.connect(self._apply_error)
         self.record_received.connect(self._apply_record)
+        self.register_channel("dsh", self._submit_dsh, self._stop_dsh)
 
     # ---------------------------------------------------------------- 公共状态
     def states(self) -> dict[tuple[str, int], _ChatState]:
@@ -136,6 +139,7 @@ class ChatController(QObject):
             state.window.append_message(role, text)
         state.session.append(role, text)
         self._save(state)
+        self._memory_note(state, role, text)
 
     def record(
         self, owner: str, role: str, text: str, *, pet_slot: int | None = None
@@ -180,6 +184,293 @@ class ChatController(QObject):
         state = self._ensure(owner, pet_slot, with_window=False)
         return [dict(item) for item in state.session.messages]
 
+    def register_channel(
+        self,
+        channel: str,
+        on_submit: Callable[[str, int, str], None],
+        on_stop: Callable[[int, str], None] | None = None,
+    ) -> Callable[[], None]:
+        """注册某个通道的提交/停止处理；``ai`` 仍走兼容的 ``on_submit``。
+
+        ``on_submit(text, slot, conversation_id)``；返回反注册函数。
+        """
+        name = str(channel or "").strip().lower()
+        if not name:
+            raise ValueError("channel is empty")
+        self._channel_submit[name] = on_submit
+        if on_stop is not None:
+            self._channel_stop[name] = on_stop
+
+        def unregister() -> None:
+            if self._channel_submit.get(name) is on_submit:
+                self._channel_submit.pop(name, None)
+            if on_stop is not None and self._channel_stop.get(name) is on_stop:
+                self._channel_stop.pop(name, None)
+
+        return unregister
+
+    def _memory_note(
+        self, state: _ChatState, role: str, text: str, *, external_id: str = ""
+    ) -> None:
+        memory = getattr(self.host, "memory", None)
+        if memory is None:
+            return
+        try:
+            memory.append_message(
+                text,
+                role=str(role or "user"),
+                channel=str(state.session.channel or "ai"),
+                conversation_id=str(state.session.conversation_id or ""),
+                is_owner=str(role or "") == "user",
+                external_id=external_id,
+                pet_slot=state.slot,
+            )
+        except Exception:
+            logger.debug("memory note failed", exc_info=True)
+
+    def open_channel(
+        self,
+        channel: str,
+        conversation_id: str,
+        title: str = "",
+        *,
+        owner: str,
+        pet_slot: int | None = None,
+    ) -> str:
+        """打开/新建一个外部通道会话（DSH / QQ），并切到对应视图。"""
+        state = self._ensure(owner, pet_slot)
+        session = state.store.ensure_conversation(
+            channel, conversation_id, title=title or "新会话"
+        )
+        self._cancel_stream_for_switch(state)
+        state.session = session
+        if state.window is not None:
+            if session.channel == "dsh":
+                state.window.dsh_view.load_local(session.messages)
+                state.window.set_view("dsh")
+                state.window.dsh_view.activate()
+            else:
+                state.window.load_messages(session.messages)
+                state.window.set_view("ai")
+        self._refresh_history(state)
+        return session.session_id
+
+    def ingest(
+        self,
+        record: dict,
+        *,
+        owner: str,
+        pet_slot: int | None = None,
+    ) -> str:
+        """幂等写入一条外部消息（QQ/DSH），按 external_id 去重。
+
+        不创建窗口；窗口已存在且当前正看这个会话时才补气泡。
+        """
+        item = dict(record or {})
+        text = str(item.get("text") or item.get("content") or "").strip()
+        if not text:
+            return ""
+        channel = str(item.get("channel") or "ai")
+        conversation = str(item.get("conversation_id") or "")
+        state = self._ensure(owner, pet_slot, with_window=False)
+        session = state.store.ensure_conversation(
+            channel, conversation, title=text.replace("\n", " ")[:40]
+        )
+        added = session.append(
+            str(item.get("role") or "user"),
+            text,
+            message_id=str(item.get("id") or ""),
+            ts=item.get("ts"),
+            channel=channel,
+            sender=str(item.get("sender") or ""),
+            external_id=str(item.get("external_id") or ""),
+            meta=item.get("meta") if isinstance(item.get("meta"), dict) else None,
+        )
+        if added:
+            state.store.save(session)
+            memory = getattr(self.host, "memory", None)
+            if memory is not None:
+                try:
+                    memory.append_message(
+                        text,
+                        role=str(item.get("role") or "user"),
+                        channel=channel,
+                        conversation_id=conversation,
+                        sender=str(item.get("sender") or ""),
+                        sender_id=str(item.get("sender_id") or ""),
+                        is_owner=str(item.get("role") or "user") == "user",
+                        external_id=str(item.get("external_id") or ""),
+                        ts=item.get("ts"),
+                        pet_slot=state.slot,
+                    )
+                except Exception:
+                    logger.debug("memory ingest note failed", exc_info=True)
+            if state.window is not None:
+                if state.session.session_id == session.session_id:
+                    state.session = session
+                    state.window.append_message(str(item.get("role") or "user"), text)
+                self._refresh_history(state)
+        return session.session_id
+
+    def messages(
+        self, session_id: str, *, owner: str, pet_slot: int | None = None
+    ) -> list[dict]:
+        state = self._ensure(owner, pet_slot, with_window=False)
+        session = state.store.load(str(session_id or ""))
+        return [] if session is None else [dict(item) for item in session.messages]
+
+    def _dsh_conversation(self, state: _ChatState) -> str:
+        sessions = state.store.list_sessions(include_archived=True, channel="dsh")
+        if sessions:
+            return str(sessions[0].conversation_id or "pet")
+        return "pet"
+
+    def _dsh_local(self, state: _ChatState) -> list[dict]:
+        sessions = state.store.list_sessions(include_archived=True, channel="dsh")
+        if not sessions:
+            return []
+        return [dict(item) for item in sessions[0].messages]
+
+    def _dsh_context(self, state: _ChatState, text: str) -> dict:
+        if not bool(self._config_get("dsh_memory_inject", True)):
+            return {}
+        memory = getattr(self.host, "memory", None)
+        render = getattr(memory, "render_prompt", None)
+        if not callable(render):
+            return {}
+        try:
+            block = str(render("dsh", text, pet_slot=state.slot) or "").strip()
+        except Exception:
+            block = ""
+        return {"memory": block, "source": "petcore"} if block else {}
+
+    def _state_for_slot(self, slot: int) -> _ChatState | None:
+        for state in self._states.values():
+            if state.slot == int(slot):
+                return state
+        return None
+
+    def _submit_dsh(self, text: str, slot: int, conversation: str) -> None:
+        hub = self._dsh_hub
+        if hub is None:
+            return
+        state = self._state_for_slot(slot)
+        context = self._dsh_context(state, text) if state is not None else {}
+        hub.send(text, context=context)
+
+    def _stop_dsh(self, slot: int, conversation: str) -> None:
+        hub = self._dsh_hub
+        if hub is not None:
+            hub.cancel()
+
+    def _on_dsh_new(self, key: tuple[str, int], session_id: str) -> None:
+        state = self._states.get(key)
+        if state is None or not session_id:
+            return
+        self.open_channel(
+            "dsh",
+            str(session_id),
+            "DSH 会话",
+            owner=state.owner,
+            pet_slot=state.slot,
+        )
+        hub = self._dsh_hub
+        if hub is not None:
+            clear = getattr(hub, "clear_history", None)
+            if callable(clear):
+                clear()
+
+    def _on_dsh_submit(self, key: tuple[str, int], text: str) -> None:
+        state = self._states.get(key)
+        hub = self._dsh_hub
+        if state is None or hub is None:
+            return
+        value = str(text or "").strip()
+        if not value:
+            return
+        if state.session.channel != "dsh":
+            conversation = self._dsh_conversation(state)
+            state.session = state.store.ensure_conversation(
+                "dsh", conversation, title="DSH 会话"
+            )
+        state.session.append("user", value, channel="dsh")
+        self._save(state)
+        self._memory_note(state, "user", value)
+        context = self._dsh_context(state, value)
+        hub.send(value, context=context)
+
+    def _persist_dsh_frame(self, state: _ChatState, frame) -> None:
+        if not isinstance(frame, dict):
+            return
+        kind = str(frame.get("kind") or "")
+        if kind not in {"user", "assistant", "tool-call", "tool-result"}:
+            return
+        conversation = str(frame.get("sessionId") or "pet")
+        session = state.store.ensure_conversation(
+            "dsh", conversation, title="DSH 会话"
+        )
+        boot = ""
+        hub = self._dsh_hub
+        if hub is not None:
+            getter = getattr(hub, "boot_id", None)
+            if callable(getter):
+                boot = str(getter() or "")
+        external = f"dsh:{boot or 'boot'}:{conversation}:{frame.get('seq')}:{kind}"
+        if kind == "user":
+            text = str(frame.get("text") or "")
+            last = session.messages[-1] if session.messages else None
+            if (
+                isinstance(last, dict)
+                and last.get("role") == "user"
+                and str(last.get("content") or "") == text
+            ):
+                return
+            added = session.append(
+                "user",
+                text,
+                channel="dsh",
+                external_id=external,
+            )
+        elif kind == "assistant":
+            added = session.append(
+                "assistant",
+                str(frame.get("text") or ""),
+                channel="dsh",
+                external_id=external,
+                meta={"reasoning": str(frame.get("reasoning") or "")},
+            )
+        elif kind == "tool-call":
+            added = session.append(
+                "tool",
+                f"{frame.get('tool') or ''} {frame.get('args') or ''}".strip(),
+                channel="dsh",
+                external_id=external,
+                meta={"kind": "call", "callId": frame.get("callId") or ""},
+            )
+        else:
+            added = session.append(
+                "tool",
+                str(frame.get("text") or ""),
+                channel="dsh",
+                external_id=external,
+                meta={
+                    "kind": "result",
+                    "callId": frame.get("callId") or "",
+                    "ok": bool(frame.get("ok", True)),
+                },
+            )
+        if added:
+            try:
+                state.store.save(session)
+            except OSError:
+                logger.debug("dsh frame persist failed", exc_info=True)
+            if state.session.session_id == session.session_id:
+                # 同一会话的新对象才是磁盘真相；否则关闭窗口时 _save(state) 会用
+                # 打开时的旧快照把刚写入的 assistant/tool 消息覆盖掉。
+                state.session = session
+            if state.window is not None:
+                self._refresh_history(state)
+
     def append_to_session(
         self, owner: str, role: str, text: str, *, pet_slot: int | None = None
     ) -> None:
@@ -189,6 +480,7 @@ class ChatController(QObject):
             return
         state.session.append(role, text)
         self._save(state)
+        self._memory_note(state, role, text)
         if state.window is not None:
             state.window.append_message(role, text)
             self._refresh_history(state)
@@ -218,6 +510,13 @@ class ChatController(QObject):
                 state.stop_callback(state.slot)
             except Exception:
                 logger.exception("chat stop callback failed")
+        channel = str(state.session.channel or "ai")
+        channel_stop = self._channel_stop.get(channel)
+        if channel != "ai" and channel_stop is not None:
+            try:
+                channel_stop(state.slot, str(state.session.conversation_id or ""))
+            except Exception:
+                logger.exception("chat channel stop callback failed")
         if state.window is not None:
             state.window.finish_stream(state.window.stream_text())
         state.active = False
@@ -367,7 +666,7 @@ class ChatController(QObject):
         state = self._states.get(key)
         if state is None:
             store = SessionStore(self.root, slot=slot, character_id=self._character_for(slot))
-            sessions = store.list_sessions()
+            sessions = store.list_sessions(channel="ai")
             session = sessions[0] if sessions else store.new_session()
             state = _ChatState(
                 owner=owner, slot=slot, store=store, session=session, window=None
@@ -382,13 +681,23 @@ class ChatController(QObject):
         dsh = getattr(self.host, "dsh", None)
         if dsh is not None and self._dsh_hub is None:
             # 一个进程一条 SSE：多个聊天窗共享同一份 DSH 帧与审批状态。
-            self._dsh_hub = DshHub(dsh, self)
+            self._dsh_hub = DshHub(
+                dsh,
+                self,
+                on_frame=lambda frame, state=state: self._persist_dsh_frame(state, frame),
+                local_history=lambda state=state: self._dsh_local(state),
+                history_limit=int(self._config_get("dsh_history_limit", 200) or 200),
+            )
+            # 审批是全局事件：只在创建 Hub 时接一次，别按窗口重复接（否则每开
+            # 一个聊天窗就会把同一条审批通知多次）。
+            self._dsh_hub.approval_pending.connect(self._on_dsh_approval)
         window = ChatWindow(
             title=self._title(state.owner, state.slot),
             font_size=self._font_size(),
             font_family=self._font_family(),
             dsh=dsh,
             dsh_hub=self._dsh_hub,
+            dsh_enabled=bool(self._config_get("chat_dsh_mode", False)),
             character_id=self._character_for(state.slot),
             accent=str(self._config_get("chat_accent", "") or ""),
             background=str(self._config_get("chat_background", "") or ""),
@@ -418,6 +727,21 @@ class ChatController(QObject):
         window.archived_toggled.connect(
             lambda _checked=False, s=state: self._refresh_history(s)
         )
+        window.dsh_view.set_context_provider(
+            lambda text, s=state: self._dsh_context(s, text)
+        )
+        window.dsh_session_started.connect(
+            lambda session_id, s=key: self._on_dsh_new(s, session_id)
+        )
+        window.dsh_submitted.connect(
+            lambda text, s=key: self._on_dsh_submit(s, text)
+        )
+        window.view_changed.connect(
+            lambda view, s=key: self._on_view_changed(s, view)
+        )
+        if window.dsh_enabled() and self._dsh_hub is not None:
+            # 窗口存在 + DSH 模式开着 → 常驻订阅，用户停在 AI 视图也收得到审批。
+            self._dsh_hub.acquire_persistent()
         if self._asr is None:
             window.composer.record_button.hide()
         try:
@@ -553,6 +877,7 @@ class ChatController(QObject):
         state.active = False
         state.stream_session_id = ""
         self._save(state)
+        self._memory_note(state, "assistant", final)
         self._refresh_history(state)
 
     @staticmethod
@@ -579,8 +904,14 @@ class ChatController(QObject):
         if state is None or state.window is None:
             return
         attachments = state.window.take_attachments()
+        channel = str(state.session.channel or "ai")
         callback = self._submit_registry.get(state.owner)
-        if callback is None:
+        channel_callback = self._channel_submit.get(channel)
+        if channel == "ai":
+            handler = callback
+        else:
+            handler = channel_callback
+        if handler is None:
             state.window.show_error("no_handler", "没有扩展接管这个对话窗口")
             return
         if attachments:
@@ -590,9 +921,13 @@ class ChatController(QObject):
         state.window.append_message("user", text)
         state.session.append("user", text)
         self._save(state)
+        self._memory_note(state, "user", text)
         self._refresh_history(state)
         try:
-            callback(text, state.slot)
+            if channel == "ai":
+                handler(text, state.slot)
+            else:
+                handler(text, state.slot, str(state.session.conversation_id or ""))
         except Exception:
             logger.exception("chat submit callback failed")
             state.window.show_error("handler_failed", "扩展处理消息时出错")
@@ -628,9 +963,102 @@ class ChatController(QObject):
                 return
             state.session = loaded
             if state.window is not None:
-                state.window.load_messages(loaded.messages)
+                if loaded.channel == "dsh":
+                    state.window.dsh_view.load_local(loaded.messages)
+                    state.window.set_view("dsh")
+                else:
+                    state.window.load_messages(loaded.messages)
+                    state.window.set_view("ai")
         state.active = False
         self._refresh_history(state)
+
+    def _channel_session(self, state: _ChatState, channel: str) -> ChatSession:
+        """取该通道最近更新的会话；没有就新建一条（DSH 用固定 conversation）。"""
+        channel = str(channel or "ai")
+        try:
+            sessions = state.store.list_sessions(channel=channel)
+        except OSError:
+            sessions = []
+        if sessions:
+            return sessions[0]
+        if channel == "dsh":
+            return state.store.ensure_conversation("dsh", "pet", title="DSH 会话")
+        return state.store.new_session()
+
+    def _on_view_changed(self, key: tuple[str, int], view: str) -> None:
+        """视图切换 = 会话通道切换：界面显示哪一路，输入就发到哪一路。
+
+        以前只换 ``QStackedWidget`` 的页，``state.session`` 还是 DSH 会话，
+        关掉 DSH 后在 AI 输入框里打字仍然发给 DSH（用户说的「还卡在 DSH 里」）。
+        """
+        state = self._states.get(key)
+        if state is None:
+            return
+        target = "dsh" if str(view or "").lower() == "dsh" else "ai"
+        config = self._config()
+        if config is not None:
+            try:
+                if bool(config.get("chat_dsh_mode")) != (target == "dsh"):
+                    config.set("chat_dsh_mode", target == "dsh")
+                    config.save()
+            except OSError:
+                logger.warning("chat dsh mode save failed", exc_info=True)
+        if state.window is not None:
+            state.window.set_dsh_enabled(target == "dsh")
+        current = str(getattr(state.session, "channel", "ai") or "ai")
+        if current == target:
+            self._refresh_history(state)
+            return
+        session = self._channel_session(state, target)
+        self._cancel_stream_for_switch(state)
+        state.session = session
+        state.active = False
+        if state.window is not None:
+            if target == "dsh":
+                state.window.dsh_view.load_local(session.messages)
+            else:
+                state.window.load_messages(session.messages)
+        self._refresh_history(state)
+
+    def _on_dsh_approval(self, frame) -> None:
+        """审批到达：气泡 + 把聊天窗切到 DSH（窗口关着也要让它可见）。
+
+        真机事故：卡片在 00:34:43 挂起，用户停在 AI 视图看不到，10 分钟后
+        自动作废，命令行什么也没执行。
+        """
+        if not self._states or not isinstance(frame, dict):
+            return
+        state = next(iter(self._states.values()), None)
+        if state is None:
+            return
+        tool = str(frame.get("tool") or "工具")
+        port = getattr(self.host, "presentation_port", None)
+        if callable(port):
+            try:
+                port().for_slot(state.slot).say(
+                    f"需要你确认：要跑一下 {tool}（AI 对话 → DSH）",
+                    duration_ms=8000,
+                    force=True,
+                )
+            except Exception:  # noqa: BLE001 - 冒泡失败不能挡审批
+                logger.debug("dsh approval bubble failed", exc_info=True)
+        if state.window is None:
+            state = self._ensure(state.owner, state.slot)
+        window = state.window
+        if window is None:
+            return
+        if not window.dsh_enabled():
+            window.set_dsh_enabled(True)
+            config = self._config()
+            if config is not None:
+                try:
+                    config.set("chat_dsh_mode", True)
+                    config.save()
+                except OSError:
+                    logger.warning("chat dsh mode save failed", exc_info=True)
+        window.set_view("dsh")
+        window.show()
+        window.raise_()
 
     def _on_archive(
         self, state: _ChatState, session_id: str, archived: bool
@@ -685,8 +1113,15 @@ class ChatController(QObject):
         # stream_session_id 守卫丢弃，不会写进新会话。
         self._cancel_stream_for_switch(state)
         showing = bool(state.window and state.window.is_showing_archived())
+        channel = str(state.session.channel or "ai")
         try:
-            sessions = state.store.list_sessions(include_archived=showing)
+            sessions = state.store.list_sessions(
+                include_archived=showing, channel=channel
+            )
+            if not sessions and channel != "ai":
+                sessions = state.store.list_sessions(
+                    include_archived=showing, channel="ai"
+                )
         except OSError:
             sessions = []
         if sessions:
@@ -695,7 +1130,12 @@ class ChatController(QObject):
             state.session = state.store.new_session()
         state.active = False
         if state.window is not None:
-            state.window.load_messages(state.session.messages)
+            if state.session.channel == "dsh":
+                state.window.dsh_view.load_local(state.session.messages)
+                state.window.set_view("dsh")
+            else:
+                state.window.load_messages(state.session.messages)
+                state.window.set_view("ai")
 
     # ---------------------------------------------------------------- 语音输入
     def _window_for_key(self, key: tuple[str, int]) -> ChatWindow | None:

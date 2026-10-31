@@ -45,11 +45,43 @@ def _detect_reader() -> "now_playing.SmtcReader":
     return _DETECT_READER
 
 
+#: 「识别诊断」给音频会话 / 窗口枚举两源的单次预算（秒）。音频会话里有 5 处同步
+#: COM 调用，卡住时用户最多等这么久就能看到"哪个源超时"，而不是永久停在
+#: 「正在采样…」（那一版的唯一恢复办法是重建设置页）。
+_DETECT_SOURCE_TIMEOUT = 8.0
+
+
+def _diagnostics_text(sample, *, allowed, title_format: str, label: str) -> str:
+    """一次采样 → 完整诊断文本；渲染本身出意外也不许吞掉三个来源的章节。
+
+    用户报障时贴的就是这段文本：把整段替换成一句"采样失败"等于把排障线索全丢了。
+    """
+    header = f"输出设备：{label}\n"
+    try:
+        decision = recognizer.decide(
+            sample,
+            allowed_ids=allowed,
+            title_format=title_format,
+        )
+        return header + diagnostics.render(sample, decision)
+    except Exception:
+        return header + (
+            "SMTC：本节不可用（判定/渲染出错）\n"
+            "音频会话：本节不可用（判定/渲染出错）\n"
+            "播放器窗口标题：本节不可用（判定/渲染出错）\n"
+            "\n判定：读取失败（保留上一次状态） · 来源=无\n"
+            "理由：\n  · 采样中断：诊断渲染时出了意外，请稍后重试。"
+        )
+
+
 class MusicPage(SettingsPage):
     title = "音乐"
     detect_done = Signal(str)
     diagnose_done = Signal(str)
     transport_done = Signal(str)
+    #: 采样线程的 ``finally`` 一定发它：按钮的启用/禁用只能在 GUI 线程碰，后台线程
+    #: 通过这条排队信号收回按钮，任何退出路径都不会把「检测当前播放」永久 disable。
+    detect_finished = Signal()
     #: 设备枚举在短命线程里跑，结果用 Qt 排队信号回 GUI（不跨线程碰控件）。
     devices_loaded = Signal(object)
 
@@ -343,6 +375,7 @@ class MusicPage(SettingsPage):
 
         self.detect_done.connect(self._on_detect_done)
         self.diagnose_done.connect(self._on_diagnose_done)
+        self.detect_finished.connect(self._on_detect_finished)
         self.transport_done.connect(self._on_transport_done)
         self._initial = self._snapshot()
 
@@ -614,43 +647,68 @@ class MusicPage(SettingsPage):
         device_name = str(
             self.config().get("music_audio_device_name", "") or ""
         ).strip()
+        label = "跟随系统默认" if not device_id else (device_name or device_id)
 
         def work() -> None:
             # SMTC 走有界读取线程：系统媒体服务卡死时，诊断按钮不许永远转圈。
             # reader 是本模块共用的（一次性线程里新建会在卡死机器上累积泄漏）。
             reader = _detect_reader()
+            # 用户显式点检测 = 一次显式重试：清掉「已停止重试」的降级状态，否则
+            # 两次卡死退役后这里永远只会读到一句"已停止重试"。
             try:
-                sample = sampling.collect(
-                    browser_media_enabled=browser_media,
-                    allowed_ids=allowed or None,
-                    targets=targets,
-                    smtc=reader.read,
-                    # 诊断必须看用户手选的那台设备，不能退回无参默认端点。
-                    audio=lambda: audio_sessions.snapshot(device_id),
-                )
-                decision = recognizer.decide(
-                    sample,
-                    allowed_ids=allowed,
-                    title_format=title_format,
-                )
-                label = (
-                    "跟随系统默认"
-                    if not device_id
-                    else (device_name or device_id)
-                )
-                text = f"输出设备：{label}\n" + diagnostics.render(sample, decision)
+                reader.reset()
             except Exception:
-                text = "采样失败：读取系统媒体信息时出了意外，请稍后重试。"
+                pass
+            try:
+                try:
+                    sample = sampling.collect(
+                        browser_media_enabled=browser_media,
+                        allowed_ids=allowed or None,
+                        targets=targets,
+                        smtc=reader.read,
+                        # 诊断必须看用户手选的那台设备，不能退回无参默认端点。
+                        audio=lambda: audio_sessions.snapshot(device_id),
+                        # 音频会话（5 处同步 COM）与窗口枚举都必须有界：它们一卡，
+                        # 整次采集就再也不返回，用户只能看到"正在采样…"。
+                        source_timeout=_DETECT_SOURCE_TIMEOUT,
+                    )
+                except Exception:
+                    # 采样编排本身出意外：退化成"这一拍没读到"，三节照常渲染。
+                    sample = sampling.Sample(
+                        smtc_error=True,
+                        smtc_reason="采样中断：读取某一层时出了意外，请稍后重试。",
+                    )
+                text = _diagnostics_text(
+                    sample,
+                    allowed=allowed,
+                    title_format=title_format,
+                    label=label,
+                )
             finally:
-                # 音频会话缓存绑在这条一次性线程的 COM apartment 上，必须配对收尾。
+                # 音频会话读取跑在 sampling 的常驻线程上（COM 线程亲和），这里只
+                # 清本线程可能残留的状态；配对收尾仍是 cheap 且幂等的。
                 audio_sessions.close()
+                # 按钮只能在 GUI 线程碰：用排队信号收回（任何路径都必须恢复）。
+                try:
+                    self.detect_finished.emit()
+                except RuntimeError:
+                    # 设置窗口在采样期间被销毁：信号对象已失效，丢弃结果即可。
+                    return
             try:
                 self.diagnose_done.emit(text)
             except RuntimeError:
-                # 设置窗口在采样期间被销毁：信号对象已失效，丢弃结果即可。
                 pass
 
         threading.Thread(target=work, name="music-detect", daemon=True).start()
+
+    def _on_detect_finished(self) -> None:
+        """采样线程收尾：把「检测当前播放」与「复制诊断」恢复可用。
+
+        以前只靠 ``diagnose_done`` 恢复：采样线程在发结果之前异常退出，按钮就永久
+        disabled，用户唯一的恢复办法是重建设置页。
+        """
+        self.detect_button.setEnabled(True)
+        self.copy_button.setEnabled(bool(self.diagnose_view.toPlainText().strip()))
 
     def _on_diagnose_done(self, text: str) -> None:
         self.diagnose_view.setPlainText(text)

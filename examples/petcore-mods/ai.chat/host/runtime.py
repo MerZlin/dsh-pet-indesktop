@@ -273,7 +273,14 @@ class AiChatRuntime:
         return WebSearchOptions(
             engine=engine,
             max_results=max(1, min(10, limit)),
+            max_sources=max(1, min(8, int(self._config_value("ai_web_search_max_sources", 4) or 4))),
             fetch_pages=bool(self._config_value("ai_web_fetch", True)),
+            engines=tuple(
+                item
+                for item in (self._config_value("ai_web_search_engines", []) or [])
+                if str(item) in {"baidu", "duckduckgo", "bocha", "tavily"}
+            ),
+            page_chars=int(self._config_value("ai_web_search_page_chars", 12000) or 12000),
         )
 
     # ---------------------------------------------------------------- 线程/宠物
@@ -463,9 +470,29 @@ class AiChatRuntime:
             max_entries=max_entries,
         )
 
-    def _memory_context(self, text: str) -> str:
+    def _memory_context(self, text: str, slot: int | None = None) -> str:
         if not bool(self._config_value("ai_memory_enabled", True)):
             return ""
+        ports = getattr(self.context, "ports", None)
+        port = getattr(ports, "memory", None)
+        render = getattr(port, "render_prompt", None)
+        if callable(render):
+            try:
+                limit = int(self._config_value("ai_memory_inject", 3) or 3)
+            except (TypeError, ValueError):
+                limit = 3
+            try:
+                return str(
+                    render(
+                        "pet",
+                        text,
+                        max_chars=2200,
+                        limit=limit,
+                        pet_slot=slot,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - 坏记忆不该让对话失败
+                return ""
         store = self._memory_store()
         if store is None:
             return ""
@@ -479,18 +506,28 @@ class AiChatRuntime:
             return ""
         return format_context(entries) if entries else ""
 
-    def _remember_text(self, text: str) -> None:
+    def _remember_text(self, text: str, slot: int | None = None) -> None:
         if not bool(self._config_value("ai_memory_enabled", True)):
             return
         content = extract_memory(text)
         if not content:
             return
+        ports = getattr(self.context, "ports", None)
+        port = getattr(ports, "memory", None)
+        remember = getattr(port, "remember", None)
+        scope = "shared" if str(text).strip().startswith(("全局", "永久")) else "pet"
+        if callable(remember):
+            try:
+                remember(content, scope=scope, source="ai", kind="explicit", pet_slot=slot)
+                return
+            except Exception:  # noqa: BLE001 - 端口失败退旧存储
+                pass
         store = self._memory_store()
         if store is None:
             return
-        scope = "global" if str(text).strip().startswith(("全局", "永久")) else "character"
+        old_scope = "global" if scope == "shared" else "character"
         try:
-            store.add(content, scope=scope)
+            store.add(content, scope=old_scope)
         except OSError:
             logger.warning("memory write failed")
 
@@ -631,9 +668,9 @@ class AiChatRuntime:
             for item in attachments
             if item.get("image_data_url")
         ]
-        self._remember_text(text)
+        self._remember_text(text, slot)
         messages = chat_messages(self._prompt(), history, text, images, limit=MAX_HISTORY)
-        memory = self._memory_context(text)
+        memory = self._memory_context(text, slot)
         if memory:
             messages.insert(1, {"role": "system", "content": memory})
         self._start(slot, messages)
@@ -655,11 +692,11 @@ class AiChatRuntime:
             history = quick.history(OWNER, pet_slot=slot)
         except Exception:
             history = []
-        self._remember_text(text)
+        self._remember_text(text, slot)
         messages = chat_messages(
             self._prompt(), history, text, [], limit=QUICK_HISTORY
         )
-        memory = self._memory_context(text)
+        memory = self._memory_context(text, slot)
         if memory:
             messages.insert(1, {"role": "system", "content": memory})
         self._start_quick(slot, messages)

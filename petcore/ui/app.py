@@ -21,6 +21,8 @@ from ..config import Config
 from ..content.collect import collect_characters as _collect
 from ..contracts.host import AnimationState
 from ..log import setup_logging
+from ..media.audio_output import AudioOutputRouter
+from .memory_service import MemoryService
 from ..net.errors import describe as describe_net_error
 from ..platform import hotkey_spec
 from ..platform.hotkeys import GlobalHotkeyService
@@ -319,6 +321,12 @@ class CoreHost:
         self.root = root
         self.mod_dirs = mod_dirs
         self.scheduler = QtScheduler()
+        self.audio_output = AudioOutputRouter(self.config)
+        self.audio_output.subscribe(self._on_audio_route_changed)
+        self.memory = MemoryService(self, self.root)
+        from .ports import CoreWebhookPort
+
+        self.webhook = CoreWebhookPort()
         self.api_store = ApiStore(self.root)
         if not self.api_store.path.exists():
             try:
@@ -925,6 +933,12 @@ class CoreHost:
         targets = pets.each() if pets is not None else ([self.window] if getattr(self, "window", None) else [])
         for window in targets:
             self._apply_live_to(window)
+        router = getattr(self, "audio_output", None)
+        if router is not None:
+            try:
+                router.refresh()
+            except Exception:
+                logger.debug("audio route refresh failed", exc_info=True)
         self._apply_live_fonts()
         self.apply_island_settings()
         chat = getattr(self, "chat", None)
@@ -934,6 +948,33 @@ class CoreHost:
                 apply_appearance()
             except Exception:
                 logger.exception("failed to refresh chat appearance")
+
+    def _on_audio_route_changed(self, route) -> None:
+        windows = []
+        pets = getattr(self, "pets", None)
+        if pets is not None:
+            try:
+                windows = list(pets.each())
+            except Exception:
+                windows = []
+        if not windows:
+            window = getattr(self, "window", None)
+            if window is not None:
+                windows = [window]
+        for window in windows:
+            apply_route = getattr(getattr(window, "sound", None), "apply_route", None)
+            if callable(apply_route):
+                try:
+                    apply_route(route)
+                except Exception:
+                    logger.debug("sound route apply failed", exc_info=True)
+        ports = getattr(self, "ports", None)
+        apply_route = getattr(getattr(ports, "audio", None), "apply_route", None)
+        if callable(apply_route):
+            try:
+                apply_route(route)
+            except Exception:
+                logger.debug("audio port route apply failed", exc_info=True)
 
     def _apply_live_fonts(self) -> None:
         """界面字号实时生效：菜单下次构建生效，打开中的设置页立即重排。"""
@@ -1605,6 +1646,24 @@ class CoreHost:
                 close = getattr(service, "close", None)
                 if callable(close):
                     close()
+        memory = getattr(self, "memory", None)
+        if memory is not None:
+            try:
+                memory.stop()
+            except Exception:
+                logger.debug("memory stop failed", exc_info=True)
+        webhook = getattr(self, "webhook", None)
+        if webhook is not None:
+            try:
+                webhook.close()
+            except Exception:
+                logger.debug("webhook close failed", exc_info=True)
+        router = getattr(self, "audio_output", None)
+        if router is not None:
+            try:
+                router.close()
+            except Exception:
+                logger.debug("audio router close failed", exc_info=True)
         self.app.quit()
 
 
@@ -1663,6 +1722,7 @@ def run(config: Config, *, root: Path, mod_dirs, instance: str | None = None) ->
     window = manager.create_primary(character)
     host.window = window
     host.attach_window(window)
+    host.memory.start()
     manager.restore()
     host.reload_menu()
     host.tray = _install_tray(host)

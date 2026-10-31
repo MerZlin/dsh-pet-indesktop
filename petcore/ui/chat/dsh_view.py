@@ -1,10 +1,23 @@
-"""同窗 DSH 视图：输入发到 DSH，实时显示思考/工具/回复与审批。"""
+"""同窗 DSH 视图：输入发到 DSH，实时显示思考/工具/回复与审批。
+
+三条与布局有关的硬约束（2026-11-01 实测后重写）：
+
+- **行宽只由 viewport 决定**：``QLabel(minimumSizeHint=0)`` + ``QSizePolicy.Ignored``。
+  之前一条含 64 位哈希/长路径的 tool-call 会把 ``timeline.minimumSizeHint()`` 抬到
+  1186px，而横向滚动条是关掉的，于是每行右侧被永久裁掉 450px（用户报的「文本显示
+  不全」）。
+- **工具过程默认折叠**：一行标题（``▸ pwsh · 完成``），点开才看参数与结果；失败
+  自动展开。DSH 桌面端就是这个形态。
+- **思考是一行**：``▸ 已思考 129 字``，点开看正文；reasoning 由桥接的
+  ``assistant/message`` 帧带来（``channel.js`` 的 ``reasoningOf``）。
+"""
 
 from __future__ import annotations
 
 import logging
+import threading
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -12,12 +25,14 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from ...net.dsh import DshClient
 from .dsh_controller import DshController, DshHub
+from .markdown_view import markdown_to_html
 
 logger = logging.getLogger("petcore.ui.chat.dsh.view")
 
@@ -31,10 +46,109 @@ _REASON_TEXT = {
     "bad_request": "内容为空",
     "closed": "DSH 连接已断开",
 }
+#: 时间线左右边距（与 ``timeline_layout.setContentsMargins`` 同一对数）。
+_TIMELINE_MARGIN = 30
+#: 折叠标记。
+_COLLAPSED = "▸"
+_EXPANDED = "▾"
+
+
+class _WrapLabel(QLabel):
+    """折行标签：最小宽度恒为 0，长 token 不许把整条时间线撑宽。
+
+    ``QLabel`` 的 ``minimumSizeHint()`` 返回「最长不可断词」的宽度；放进
+    ``QScrollArea(widgetResizable=True)`` 后这个值会变成内容控件的最小宽度，
+    于是内容比视口宽、而横向滚动条又被关掉 = 右边永久看不见。
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(0)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        hint = super().minimumSizeHint()
+        return QSize(0, hint.height())
+
+
+class _ToggleLabel(QLabel):
+    """整行可点的标题（QLabel 而不是按钮：QSS 的 ``#dsh-tool-title`` 继续生效）。"""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
+class _Collapsible(QFrame):
+    """一行标题 + 可折叠正文（工具卡与思考行共用）。"""
+
+    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._base = str(title or "")
+        self._expanded = False
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        self.header = _ToggleLabel(f"{_COLLAPSED} {self._base}", self)
+        self.header.setObjectName("dsh-tool-title")
+        self.header.setWordWrap(True)
+        self.header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header.clicked.connect(self.toggle)
+        layout.addWidget(self.header)
+        self.body = QWidget(self)
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(0, 0, 0, 0)
+        self.body_layout.setSpacing(3)
+        self.body.setVisible(False)
+        layout.addWidget(self.body)
+
+    def title_text(self) -> str:
+        return self._base
+
+    def set_title(self, title: str) -> None:
+        self._base = str(title or "")
+        marker = _EXPANDED if self._expanded else _COLLAPSED
+        self.header.setText(f"{marker} {self._base}")
+
+    def is_expanded(self) -> bool:
+        return self._expanded
+
+    def toggle(self) -> None:
+        self.set_expanded(not self._expanded)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._expanded = bool(expanded)
+        marker = _EXPANDED if self._expanded else _COLLAPSED
+        self.header.setText(f"{marker} {self._base}")
+        self.body.setVisible(self._expanded)
+
+    def add_body(self, text: str, *, mono: bool = True) -> _WrapLabel:
+        label = _WrapLabel(str(text or ""), self.body)
+        label.setObjectName("dsh-tool-detail")
+        if mono:
+            label.setStyleSheet(
+                "font-family:'Consolas','Courier New',monospace; "
+                "font-size:11px; color:#4a5260;"
+            )
+        # 展开就是"我要看全部"：不再限高（`_BODY_MAX_HEIGHT` 会把长输出裁掉，
+        # 用户报的「文本显示不全」刚修完，别在折叠区里再造一个）。
+        self.body_layout.addWidget(label)
+        return label
 
 
 class DshView(QWidget):
     context_ready = Signal(str)
+    session_started = Signal(str)
+    session_failed = Signal(str)
+    session_finished = Signal()
+    send_requested = Signal(str)
 
     def __init__(
         self,
@@ -48,10 +162,17 @@ class DshView(QWidget):
         self._client = client
         self._started = False
         self._transcript: list[tuple[str, str]] = []
-        self._tool_cards: dict[str, QLabel] = {}
+        #: callId → 工具卡（``tool-call`` 建卡，``tool-result`` 收尾）。
+        self._tool_cards: dict[str, _Collapsible] = {}
+        #: requestId → (card, allow, deny)；审批卡是交互控件，结构与既有测试一致。
         self._approvals: dict[str, tuple[QWidget, QWidget, QWidget]] = {}
         self._hub = hub if hub is not None and hub.available else None
         self._controller: DshController | None = None
+        self._context_provider = None
+        self._reflow_timer = QTimer(self)
+        self._reflow_timer.setSingleShot(True)
+        self._reflow_timer.setInterval(0)
+        self._reflow_timer.timeout.connect(self._reflow)
         if self._hub is not None:
             self._hub.connected.connect(self._on_connected)
             self._hub.history_loaded.connect(self._on_history)
@@ -64,8 +185,12 @@ class DshView(QWidget):
             self._controller.frame.connect(self._on_frame)
             self._controller.failed.connect(self._on_failed)
         self._build()
+        self.session_failed.connect(self._on_new_failed)
+        self.session_finished.connect(self._on_new_finished)
         if client is None:
             self.set_status("未安装 DSH 通道；在设置 → 常规 → DSH 连接里安装", False)
+        else:
+            self._replay_approvals()
 
     # ---------------------------------------------------------------- 构建
     def _build(self) -> None:
@@ -78,10 +203,13 @@ class DshView(QWidget):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(20, 8, 16, 8)
         header_layout.setSpacing(8)
-        self.status = QLabel("DSH 未连接", header)
+        self.status = _WrapLabel("DSH 未连接", header)
         self.status.setObjectName("dsh-status")
-        self.status.setWordWrap(True)
         header_layout.addWidget(self.status, 1)
+        self.new_button = QPushButton("新会话", header)
+        self.new_button.setObjectName("dsh-new")
+        self.new_button.clicked.connect(self._new_session)
+        header_layout.addWidget(self.new_button)
         self.context_button = QPushButton("带入 AI 对话", header)
         self.context_button.setObjectName("dsh-context")
         self.context_button.clicked.connect(self._emit_context)
@@ -99,11 +227,19 @@ class DshView(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.timeline = QWidget(self.scroll)
         self.timeline.setObjectName("dsh-timeline")
+        self.timeline.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         self.timeline_layout = QVBoxLayout(self.timeline)
-        self.timeline_layout.setContentsMargins(30, 16, 30, 16)
+        self.timeline_layout.setContentsMargins(
+            _TIMELINE_MARGIN, 16, _TIMELINE_MARGIN, 16
+        )
         self.timeline_layout.setSpacing(10)
         self.timeline_layout.addStretch(1)
         self.scroll.setWidget(self.timeline)
+        # 视口尺寸一变就重排：折行标签的高度只在这里重算，否则窗口拉宽后
+        # 行高仍是旧值（文本被裁）。
+        self.scroll.viewport().installEventFilter(self)
         root.addWidget(self.scroll, 1)
 
         composer = QFrame(self)
@@ -132,9 +268,54 @@ class DshView(QWidget):
             self.input.setEnabled(False)
             self.send_button.setEnabled(False)
             self.stop_button.setEnabled(False)
+            self.new_button.setEnabled(False)
             self.context_button.setEnabled(False)
 
+    # ---------------------------------------------------------------- 尺寸
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
+        if obj is self.scroll.viewport() and event.type() == QEvent.Type.Resize:
+            self._reflow_timer.start()
+        if (
+            obj is self.input
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        ):
+            self._send()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _row_width(self) -> int:
+        viewport = self.scroll.viewport().width()
+        return max(120, viewport - 2 * _TIMELINE_MARGIN)
+
+    def _reflow(self) -> None:
+        """视口变化后重算时间线高度（折行标签按新宽度重新排版）。"""
+        try:
+            self.timeline.setFixedWidth(max(1, self.scroll.viewport().width()))
+            self.timeline_layout.activate()
+            self.timeline.adjustSize()
+            self.timeline.updateGeometry()
+        except RuntimeError:
+            return
+        self._scroll_bottom()
+
     # ---------------------------------------------------------------- 生命周期
+    def set_context_provider(self, provider) -> None:
+        """设置 ``provider(text) -> dict|None``：返回记忆/人设上下文。"""
+        self._context_provider = provider
+
+    def load_local(self, messages) -> None:
+        items = []
+        for item in messages or ():
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "")
+            text = str(item.get("content") or item.get("text") or "").strip()
+            if role in ("user", "assistant") and text:
+                items.append({"role": role, "text": text})
+        self._on_history(items)
+
     def activate(self) -> None:
         if self._client is None or self._started:
             return
@@ -144,6 +325,11 @@ class DshView(QWidget):
             cached = self._hub.history_cache()
             if cached is not None:
                 self._on_history(cached)
+            else:
+                local = self._hub.local_history()
+                if local:
+                    self._on_history(local)
+            self._replay_approvals()
             return
         if self._controller is not None:
             self._controller.start()
@@ -173,6 +359,33 @@ class DshView(QWidget):
         self.activate()
 
     # ---------------------------------------------------------------- 输入
+    def _new_session(self) -> None:
+        client = self._client
+        if client is None:
+            return
+        self.new_button.setEnabled(False)
+        self.set_status("正在新建 DSH 会话…")
+
+        def run() -> None:
+            try:
+                session_id = str(client.new_session() or "")
+            except Exception:
+                logger.debug("dsh new session failed", exc_info=True)
+                session_id = ""
+            self.session_finished.emit()
+            if session_id:
+                self.session_started.emit(session_id)
+            else:
+                self.session_failed.emit("新建 DSH 会话失败")
+
+        threading.Thread(target=run, name="petcore-dsh-new", daemon=True).start()
+
+    def _on_new_finished(self) -> None:
+        self.new_button.setEnabled(True)
+
+    def _on_new_failed(self, reason: str) -> None:
+        self.set_status(str(reason or "新建 DSH 会话失败"))
+
     def _send(self) -> None:
         text = self.input.toPlainText().strip()
         if not text:
@@ -180,20 +393,9 @@ class DshView(QWidget):
         self.input.clear()
         self._add_text("user", text)
         self.set_status("已发送，等待 DSH…")
-        target = self._hub or self._controller
-        if target is not None:
-            target.send(text)
-
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
-        if (
-            obj is self.input
-            and event.type() == QEvent.Type.KeyPress
-            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-            and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-        ):
-            self._send()
-            return True
-        return super().eventFilter(obj, event)
+        # 统一经 ChatWindow/Controller 落会话 + 注入记忆；DshView 不直接调 hub，
+        # 否则用户 prompt 只活在界面里，重开就丢。
+        self.send_requested.emit(text)
 
     def _stop(self) -> None:
         self.set_status("正在取消…")
@@ -229,6 +431,7 @@ class DshView(QWidget):
         self._clear_rows()
         self._transcript.clear()
         if not isinstance(items, list):
+            self._replay_approvals()
             return
         for item in items:
             if not isinstance(item, dict):
@@ -237,6 +440,9 @@ class DshView(QWidget):
             text = str(item.get("text") or "").strip()
             if role in ("user", "assistant") and text:
                 self._add_text(role, text)
+        # 历史回放会重建整条时间线，但**待审批是 Hub 级状态**：回放完必须把
+        # 仍然挂着的卡补回来（桥不会在 /pet/history 里重放 approval 帧）。
+        self._replay_approvals()
 
     def _on_frame(self, frame) -> None:
         if not isinstance(frame, dict):
@@ -252,6 +458,10 @@ class DshView(QWidget):
                 )
             return
         if kind == "hello":
+            if frame.get("reset") and self._hub is not None:
+                self._hub.clear_history()
+                self._hub.clear_pending()
+                self._hub.restart()
             return
         if kind == "user":
             text = str(frame.get("text") or "").strip()
@@ -260,7 +470,7 @@ class DshView(QWidget):
             ):
                 self._add_text("user", text)
         elif kind == "assistant":
-            self._add_text("assistant", str(frame.get("text") or ""))
+            self._add_assistant(frame)
         elif kind == "tool-call":
             self._add_tool_call(frame)
         elif kind == "tool-result":
@@ -279,7 +489,7 @@ class DshView(QWidget):
             reason = str(frame.get("reason") or "")
             self.set_status("就绪" if reason in ("", "normal", "done") else f"本轮结束：{reason}")
         elif kind == "error":
-            self._add_text("error", str(frame.get("message") or "DSH 报错"))
+            self._add_error(str(frame.get("message") or "DSH 报错"))
         elif kind == "idle":
             self.set_status("就绪")
 
@@ -310,10 +520,14 @@ class DshView(QWidget):
         value = str(text or "").strip()
         if not value:
             return
-        label = QLabel(value, self.timeline)
-        label.setObjectName("dsh-user" if role == "user" else "dsh-assistant")
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        label = _WrapLabel("", self.timeline)
+        if role == "assistant":
+            label.setObjectName("dsh-assistant")
+            label.setTextFormat(Qt.TextFormat.RichText)
+            label.setText(markdown_to_html(value))
+        else:
+            label.setObjectName("dsh-user")
+            label.setText(value)
         label.setAlignment(
             Qt.AlignmentFlag.AlignRight if role == "user" else Qt.AlignmentFlag.AlignLeft
         )
@@ -322,36 +536,56 @@ class DshView(QWidget):
             self._transcript.append((role, value))
         self._scroll_bottom()
 
+    def _add_assistant(self, frame: dict) -> None:
+        """一条 assistant 帧 → 「已思考 N 字」一行 + 正文。"""
+        reasoning = str(frame.get("reasoning") or "").strip()
+        if reasoning:
+            self._add_thinking(reasoning)
+        self._add_text("assistant", str(frame.get("text") or ""))
+
+    def _add_thinking(self, text: str) -> _Collapsible:
+        row = _Collapsible(f"已思考 {len(text)} 字", self.timeline)
+        row.setObjectName("dsh-thinking")
+        row.add_body(text, mono=False)
+        self._append(row)
+        return row
+
+    def _add_error(self, text: str) -> None:
+        label = _WrapLabel("", self.timeline)
+        label.setObjectName("dsh-error")
+        label.setText(str(text or "DSH 报错"))
+        self._append(label)
+        self._scroll_bottom()
+
     def _add_tool_call(self, frame: dict) -> None:
-        card = QFrame(self.timeline)
-        card.setObjectName("dsh-tool")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(10, 7, 10, 7)
-        layout.setSpacing(3)
         name = str(frame.get("tool") or "tool")
-        header = QLabel(f"工具 · {name}", card)
-        header.setObjectName("dsh-tool-title")
-        layout.addWidget(header)
-        detail = QLabel(str(frame.get("args") or ""), card)
-        detail.setObjectName("dsh-tool-detail")
-        detail.setWordWrap(True)
-        detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(detail)
+        card = _Collapsible(f"{name} · 运行中…", self.timeline)
+        card.setObjectName("dsh-tool")
+        card.add_body(str(frame.get("args") or ""))
         self._append(card)
         call_id = str(frame.get("callId") or "")
         if call_id:
-            self._tool_cards[call_id] = detail
+            self._tool_cards[call_id] = card
         self._scroll_bottom()
 
     def _finish_tool(self, frame: dict) -> None:
         call_id = str(frame.get("callId") or "")
-        label = self._tool_cards.get(call_id)
+        card = self._tool_cards.get(call_id)
         text = str(frame.get("text") or "").strip()
         ok = bool(frame.get("ok", True))
-        if label is not None:
-            prefix = "完成" if ok else f"失败（{frame.get('error') or 'error'}）"
+        name = card.title_text().split(" · ", 1)[0] if card is not None else "工具"
+        if card is not None:
             try:
-                label.setText(f"{prefix}\n{text}" if text else prefix)
+                card.set_title(f"{name} · {'完成' if ok else '失败'}")
+                if text:
+                    card.add_body(text)
+                if not ok:
+                    # 失败必须可见：错误信息藏在折叠区里等于没有。
+                    card.set_expanded(True)
+                    card.header.setProperty("state", "error")
+                    style = card.header.style()
+                    style.unpolish(card.header)
+                    style.polish(card.header)
             except RuntimeError:
                 pass
         else:
@@ -367,24 +601,23 @@ class DshView(QWidget):
         layout = QVBoxLayout(card)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(6)
-        title = QLabel(
+        title = _WrapLabel(
             f"需要你确认：{frame.get('title') or frame.get('tool') or '工具调用'}",
             card,
         )
         title.setObjectName("dsh-tool-title")
-        title.setWordWrap(True)
         layout.addWidget(title)
-        detail = QLabel(str(frame.get("args") or ""), card)
+        detail = _WrapLabel(str(frame.get("args") or ""), card)
         detail.setObjectName("dsh-tool-detail")
-        detail.setWordWrap(True)
-        detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(detail)
         buttons = QHBoxLayout()
         allow = QPushButton("允许", card)
+        allow.setObjectName("dsh-allow")
         allow.clicked.connect(
             lambda _checked=False, rid=request_id: self._answer(rid, True)
         )
         deny = QPushButton("拒绝", card)
+        deny.setObjectName("dsh-deny")
         deny.clicked.connect(
             lambda _checked=False, rid=request_id: self._answer(rid, False)
         )
@@ -405,6 +638,17 @@ class DshView(QWidget):
             old_card, _allow, _deny = self._approvals.pop(oldest)
             old_card.deleteLater()
         self.set_status("等待审批…")
+
+    def _replay_approvals(self) -> None:
+        """把 Hub 里仍挂着的审批卡补进时间线（视图晚于事件创建时也不丢）。"""
+        if self._hub is None:
+            return
+        try:
+            pending = self._hub.pending_approvals()
+        except Exception:  # noqa: BLE001 - 视图不该因为 Hub 状态异常而空白
+            return
+        for frame in pending:
+            self._add_approval(frame)
 
     def _answer(self, request_id: str, allow: bool) -> None:
         if not request_id:

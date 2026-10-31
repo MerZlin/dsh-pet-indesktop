@@ -38,6 +38,9 @@ class InstallOutcome:
     applied: bool = False
     attempts: tuple[str, ...] = ()
     backup: str = ""
+    #: 下载阶段沿用的已有字节（续传）与实际并行连接数。
+    resumed_from: int = 0
+    connections: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +213,8 @@ def install_package(
     cancel=None,
     local_file_root: Path | None = None,
     index_origin: str = "",
+    connections: int = 1,
+    mirror_policy: str = "auto",
 ) -> InstallOutcome:
     root = Path(root)
     platform = platform or model.normalize_platform(sys.platform)
@@ -270,6 +275,8 @@ def install_package(
             cancel=cancel,
             local_file_root=local_file_root,
             allow_local_file=allow_local_file,
+            connections=connections,
+            mirror_policy=mirror_policy,
         )
     except MarketError as exc:
         return InstallOutcome(False, str(exc), mod_id=package.id, previous_version=previous)
@@ -280,6 +287,8 @@ def install_package(
             mod_id=package.id,
             previous_version=previous,
             attempts=downloaded.attempts,
+            resumed_from=downloaded.resumed_from,
+            connections=downloaded.connections,
         )
 
     staging_root = market_root(root) / "staging"
@@ -393,6 +402,8 @@ def install_package(
         applied=applied,
         attempts=downloaded.attempts,
         backup=_relative(root, backup),
+        resumed_from=downloaded.resumed_from,
+        connections=downloaded.connections,
     )
 
 

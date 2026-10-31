@@ -722,7 +722,10 @@ class InteractionPage(SettingsPage):
             self._notify("没有可播放的音效：请检查音源设置。")
             return
         if self._sound is None:
-            self._sound = SoundPlayer(float(self.config().get("volume") or 0.8))
+            route_provider = getattr(getattr(self.host, "audio_output", None), "route", None)
+            self._sound = SoundPlayer(
+                float(self.config().get("volume") or 0.8), route_provider=route_provider
+            )
         self._sound.play(chosen)
 
     def dispose(self) -> None:

@@ -40,7 +40,7 @@ try {
     "冒烟临时目录的祖先链上存在 node_modules（TEMP/TMPDIR 被污染），hermetic 前提不成立",
   );
 
-  for (const name of ["index.js", "package.json", "cordis.patch.yml"]) {
+  for (const name of ["index.js", "channel.js", "package.json", "cordis.patch.yml"]) {
     const src = path.join(here, name);
     if (existsSync(src)) cpSync(src, path.join(tmp, name));
   }
@@ -81,8 +81,8 @@ try {
   const bridge = await import(pathToFileURL(path.join(tmp, "index.js")).href);
 
   assert.equal(typeof bridge.apply, "function", "插件应导出 apply(ctx)");
-  // 减法后不消费任何注入服务（看门狗 LLM 诊断已删）
-  assert.deepEqual(bridge.inject, []);
+  // v2 合并聊天通道后需要这三个服务；状态事件写入本身不依赖它们。
+  assert.deepEqual(bridge.inject, ["agents", "sessionQuery", "tools"]);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

@@ -4,7 +4,7 @@
   "id": "fun.self-talk",
   "name": "Self talk bubbles",
   "name_zh": "自言自语",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "api_version": "1",
   "core_requires": ">=0.1.0,<1.0.0",
   "author": "dsh-pet",

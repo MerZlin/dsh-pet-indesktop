@@ -15,9 +15,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QProgressBar,
+    QVBoxLayout,
     QWidget,
 )
 
+from ...market import download as market_download
 from ...market import install as market_install
 from ...market import model
 from ...market.source import MarketSource, SourceResult
@@ -28,8 +31,51 @@ from .base import SettingsPage, make_button
 
 FILTER_ALL = ""
 
+#: 进度信号的节流窗口（秒）：10 Hz 足够让进度条看起来连续，又不会把 GUI 线程刷满。
+PROGRESS_INTERVAL_S = 0.1
+
 #: 旧测试/第三方探针的兼容符号；真实任务由应用级 MarketJobRegistry 持有。
 _ORPHAN_JOBS: set[QThread] = set()
+
+
+def _format_bytes(value: float) -> str:
+    size = float(max(0.0, value))
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if size < 1024 or unit == "GiB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TiB"
+
+
+class _SpeedMeter:
+    """把 ``(done, total)`` 采样换算成速度与 ETA（只按最近几秒算）。"""
+
+    def __init__(self, *, window: float = 2.0) -> None:
+        self._window = max(0.2, float(window))
+        self._samples: list[tuple[float, int]] = []
+
+    def reset(self) -> None:
+        self._samples.clear()
+
+    @property
+    def samples(self) -> int:
+        return len(self._samples)
+
+    def update(self, done: int, total: int) -> tuple[float, float | None]:
+        now = time.monotonic()
+        self._samples.append((now, int(done)))
+        cutoff = now - self._window
+        while len(self._samples) > 2 and self._samples[0][0] < cutoff:
+            self._samples.pop(0)
+        if len(self._samples) < 2:
+            return 0.0, None
+        first_time, first_done = self._samples[0]
+        elapsed = now - first_time
+        speed = (int(done) - first_done) / elapsed if elapsed > 0.05 else 0.0
+        speed = max(0.0, speed)
+        remaining = max(0, int(total) - int(done))
+        eta = remaining / speed if speed > 0 else None
+        return speed, eta
 
 
 class _CancellableJob(QThread):
@@ -72,6 +118,8 @@ class _IndexJob(_CancellableJob):
 
 class _InstallJob(_CancellableJob):
     done = Signal(object)
+    #: 下载进度（已完成字节, 索引声明的大小）；节流后从工作线程排队到 GUI 线程。
+    progress = Signal(int, int)
 
     def __init__(
         self,
@@ -83,6 +131,8 @@ class _InstallJob(_CancellableJob):
         *,
         index_origin: str = "",
         local_file_root: Path | None = None,
+        connections: int = 1,
+        mirror_policy: str = "auto",
     ):
         super().__init__()
         self._root = root
@@ -92,6 +142,18 @@ class _InstallJob(_CancellableJob):
         self._allow_feature = allow_feature
         self._index_origin = index_origin
         self._local_file_root = local_file_root
+        self._connections = connections
+        self._mirror_policy = mirror_policy
+        self._last_emit = 0.0
+
+    def _report_progress(self, done: int, total: int) -> None:
+        now = time.monotonic()
+        finished = total > 0 and done >= total
+        if not finished and now - self._last_emit < PROGRESS_INTERVAL_S:
+            return
+        self._last_emit = now
+        if not self.cancelled():
+            self.progress.emit(int(done), int(total))
 
     def run(self) -> None:
         try:
@@ -104,12 +166,16 @@ class _InstallJob(_CancellableJob):
                 index_origin=self._index_origin,
                 local_file_root=self._local_file_root,
                 cancel=self.cancelled,
+                progress=self._report_progress,
+                connections=self._connections,
+                mirror_policy=self._mirror_policy,
             )
         except Exception as exc:  # noqa: BLE001
             outcome = market_install.InstallOutcome(
                 False, f"{type(exc).__name__}: {exc}", mod_id=self._package.id
             )
-        if not self.cancelled():
+        if not self.cancelled() or outcome.ok:
+            # 取消只丢弃失败/迟到的结果；真的装上了就必须让页面刷新（磁盘是事实）。
             self.done.emit(outcome)
 
 
@@ -152,10 +218,15 @@ class MarketPage(SettingsPage):
         self._installed: dict[str, str] = {}
         self._reload_installed()
         self._initial_url = self._config_url()
+        self._busy_kind = ""
+        self._install_connections = 1
+        self._install_resumed = 0
+        self._meter = _SpeedMeter()
 
         self.add_note(
             "插件市场只从索引读取名称、版本、更新说明与 SHA-256；"
             "安装前会校验大小与哈希，失败不会破坏已安装版本。"
+            "下载按设置里的连接数并行分段，取消后已下载的部分会保留，下次续传。"
         )
 
         card = self.section("可用插件")
@@ -200,14 +271,39 @@ class MarketPage(SettingsPage):
 
         self.install_button = make_button("下载并安装", self)
         self.install_button.clicked.connect(lambda: self.install_selected())
+        self.cancel_button = make_button("取消", self)
+        self.cancel_button.setObjectName("marketCancel")
+        self.cancel_button.setToolTip("取消正在进行的下载；已下载的字节会保留，下次续传")
+        self.cancel_button.clicked.connect(lambda: self.cancel_install())
         self.rollback_button = make_button("回滚到上一版本", self)
         self.rollback_button.clicked.connect(lambda: self.rollback_selected())
-        card.add_buttons([self.install_button, self.rollback_button])
+        card.add_buttons([self.install_button, self.cancel_button, self.rollback_button])
 
-        self.status_label = QLabel("", self)
+        # 进度条与状态行装在同一个容器里：没有下载时它们只是隐藏，
+        # 卡片不会多出一段空白行。
+        self.progress_panel = QWidget(self)
+        panel_layout = QVBoxLayout(self.progress_panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(6)
+        self.progress_bar = QProgressBar(self.progress_panel)
+        self.progress_bar.setObjectName("marketProgress")
+        self.progress_bar.setAccessibleName("下载进度")
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.hide()
+        panel_layout.addWidget(self.progress_bar)
+        self.progress_label = QLabel("", self.progress_panel)
+        self.progress_label.setObjectName("settingHint")
+        self.progress_label.setWordWrap(True)
+        self.progress_label.hide()
+        panel_layout.addWidget(self.progress_label)
+
+        self.status_label = QLabel("", self.progress_panel)
         self.status_label.setObjectName("settingHint")
         self.status_label.setWordWrap(True)
-        card.add_widget(self.status_label)
+        panel_layout.addWidget(self.status_label)
+        card.add_widget(self.progress_panel)
 
         source_card = self.section("索引源")
         self.index_field = QLineEdit(self)
@@ -262,6 +358,15 @@ class MarketPage(SettingsPage):
                 job.deleteLater()
             except RuntimeError:
                 pass
+            if not self._jobs and self._busy and not self._disposed:
+                # 取消的安装/回滚不会再发 done：收尾必须在这里，否则页面永远 busy。
+                message = (
+                    "已取消安装；已下载的字节保留在下载目录，下次会接着下。"
+                    if self._busy_kind == "install"
+                    else "操作已取消。"
+                )
+                self._hide_progress()
+                self._set_busy(False, message)
 
         job.finished.connect(_finished)
 
@@ -479,6 +584,23 @@ class MarketPage(SettingsPage):
         origin = str(self._result.origin if self._result is not None else "")
         return local_file_root_for_index(origin)
 
+    def _download_options(self) -> tuple[int, str]:
+        """连接数与镜像策略（全局键）；读不到就按单流/自动处理。"""
+        config = self._config()
+        if config is None:
+            return 1, "auto"
+        try:
+            connections = int(config.get("market_download_connections") or 1)
+        except (TypeError, ValueError):
+            connections = 1
+        try:
+            sources = str(config.get("market_download_sources") or "auto").strip().lower()
+        except Exception:  # noqa: BLE001
+            sources = "auto"
+        if sources not in {"auto", "ordered", "race"}:
+            sources = "auto"
+        return max(1, min(8, connections)), sources
+
     def install_selected(self, *, blocking: bool = False) -> None:
         package = self.selected_package()
         version = model.latest_version(package) if package is not None else None
@@ -492,7 +614,17 @@ class MarketPage(SettingsPage):
         if package.kind == "feature" and not allow_feature:
             self._set_busy(False, "先在「扩展管理」里允许功能扩展，再安装这个包。")
             return
-        self._set_busy(True, f"正在安装 {package.id} {version.version}…")
+        connections, mirror_policy = self._download_options()
+        self._install_connections = connections
+        self._install_resumed = 0
+        try:
+            self._install_resumed = market_download.resumable_bytes(
+                self._root, package, version
+            )
+        except Exception:  # noqa: BLE001 - 只是显示用，读不到就不显示
+            self._install_resumed = 0
+        self._reset_progress(version.size)
+        self._set_busy(True, f"正在安装 {package.id} {version.version}…", kind="install")
         if blocking:
             outcome = market_install.install_package(
                 self._root,
@@ -502,6 +634,8 @@ class MarketPage(SettingsPage):
                 allow_feature=allow_feature,
                 index_origin=self._result.origin if self._result is not None else "",
                 local_file_root=self._local_file_root(),
+                connections=connections,
+                mirror_policy=mirror_policy,
             )
             self._apply_install(outcome)
             return
@@ -513,10 +647,87 @@ class MarketPage(SettingsPage):
             allow_feature,
             index_origin=self._result.origin if self._result is not None else "",
             local_file_root=self._local_file_root(),
+            connections=connections,
+            mirror_policy=mirror_policy,
         )
         self._track(job)
         job.done.connect(self._apply_install)
+        job.progress.connect(self._on_install_progress)
         job.start()
+
+    # ------------------------------------------------------------ 下载进度
+    def _reset_progress(self, total: int) -> None:
+        self._meter.reset()
+        self.progress_bar.setRange(0, max(1, int(total or 1)))
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("")
+        self.progress_bar.setVisible(bool(total))
+        self.progress_label.setVisible(bool(total))
+
+    def _hide_progress(self) -> None:
+        self.progress_bar.hide()
+        self.progress_label.hide()
+        self._meter.reset()
+
+    @staticmethod
+    def describe_progress(
+        *,
+        done: int,
+        total: int,
+        speed: float,
+        eta: float | None,
+        connections: int,
+        resumed: int = 0,
+    ) -> str:
+        """进度行文本：已下载/总量 · 速度 · 剩余 · 连接数（可选续传量）。"""
+        parts = [f"{_format_bytes(done)} / {_format_bytes(total)}"]
+        if speed > 0:
+            parts.append(f"{_format_bytes(speed)}/s")
+            if eta is not None:
+                parts.append(f"剩余 {max(0, int(round(eta)))} 秒")
+        else:
+            parts.append("正在连接…")
+        if resumed > 0:
+            parts.append(f"续传 {_format_bytes(resumed)}")
+        parts.append(f"{max(1, int(connections))} 连接")
+        return " · ".join(parts)
+
+    def _on_install_progress(self, done: int, total: int) -> None:
+        if self._disposed:
+            return
+        speed, eta = self._meter.update(done, total)
+        self.progress_bar.setRange(0, max(1, int(total or 1)))
+        self.progress_bar.setValue(max(0, min(int(done), int(total or 0))))
+        self.progress_label.setText(
+            self.describe_progress(
+                done=done,
+                total=total,
+                speed=speed,
+                eta=eta,
+                connections=self._install_connections,
+                resumed=self._install_resumed,
+            )
+        )
+
+    def cancel_install(self) -> None:
+        """取消正在跑的安装/回滚任务；已写字节保留供续传。"""
+        if not self._busy:
+            return
+        target = self._busy_kind if self._busy_kind in {"install", "rollback"} else ""
+        if not target:
+            return
+        cancelled = 0
+        for job in list(self._jobs):
+            cancel = getattr(job, "cancel", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                    cancelled += 1
+                except RuntimeError:
+                    pass
+        if cancelled:
+            self.status_label.setText("正在取消…已下载的字节保留，下次会续传。")
+            self.cancel_button.setEnabled(False)
 
     def _apply_install(self, outcome: market_install.InstallOutcome) -> None:
         if self._disposed:
@@ -532,6 +743,12 @@ class MarketPage(SettingsPage):
                     message += f"（重新加载失败：{type(exc).__name__}）"
         if outcome.attempts:
             message += f"；镜像尝试 {len(outcome.attempts)} 次"
+        if outcome.ok:
+            if outcome.connections > 1:
+                message += f"；{outcome.connections} 连接并行下载"
+            if outcome.resumed_from > 0:
+                message += f"；续传 {_format_bytes(outcome.resumed_from)}"
+        self._hide_progress()
         self._set_busy(False, message)
         self._reload_installed()
         self._refresh_list()
@@ -541,7 +758,8 @@ class MarketPage(SettingsPage):
         if package is None:
             self._set_busy(False, "请先选择一个插件")
             return
-        self._set_busy(True, f"正在回滚 {package.id}…")
+        self._hide_progress()
+        self._set_busy(True, f"正在回滚 {package.id}…", kind="rollback")
         if blocking:
             outcome = market_install.rollback(self._root, package.id)
             self._apply_install(outcome)
@@ -551,11 +769,13 @@ class MarketPage(SettingsPage):
         job.done.connect(self._apply_install)
         job.start()
 
-    def _set_busy(self, busy: bool, message: str = "") -> None:
+    def _set_busy(self, busy: bool, message: str = "", *, kind: str = "") -> None:
         self._busy = bool(busy)
+        self._busy_kind = str(kind) if busy else ""
         self.refresh_button.setEnabled(not busy)
         self.search_field.setEnabled(not busy)
         self.package_list.setEnabled(not busy)
+        self.cancel_button.setEnabled(bool(busy) and self._busy_kind in {"install", "rollback"})
         if message:
             self.status_label.setText(message)
         if not busy:
@@ -612,5 +832,8 @@ class MarketPage(SettingsPage):
             "镜像",
             "索引",
             "下载源",
+            "下载连接",
+            "多连接",
+            "分段下载",
             "扩展",
         ]

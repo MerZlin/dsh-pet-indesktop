@@ -53,6 +53,36 @@ class ChatPort(Protocol):
         self, owner: str, callback: Callable[[str, int], None]
     ) -> Callable[[], None]: ...
     def on_stop(self, owner: str, callback: Callable[[int], None]) -> Callable[[], None]: ...
+    def register_channel(
+        self,
+        channel: str,
+        on_submit: Callable[[str, int, str], None],
+        on_stop: Callable[[int, str], None] | None = None,
+    ) -> Callable[[], None]:
+        """注册外部通道（dsh/qq）的提交与停止处理；``ai`` 仍用 ``on_submit``。"""
+        ...
+
+    def open_channel(
+        self,
+        channel: str,
+        conversation_id: str,
+        title: str = "",
+        *,
+        owner: str,
+        pet_slot: int | None = None,
+    ) -> str:
+        """打开/新建外部通道会话，返回本地 session id。"""
+        ...
+
+    def ingest(
+        self, record: dict, *, owner: str, pet_slot: int | None = None
+    ) -> str:
+        """幂等写入一条外部消息（按 external_id 去重）；不主动创建窗口。"""
+        ...
+
+    def messages(
+        self, session_id: str, *, owner: str, pet_slot: int | None = None
+    ) -> list[dict]: ...
 
 
 class ChatCancelled(RuntimeError):

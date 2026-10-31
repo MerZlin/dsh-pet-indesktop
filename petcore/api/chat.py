@@ -429,11 +429,13 @@ def _run_tool(
         query = str(args.get("query", "")).strip()
         lines = [f"🔍 正在搜索：{query}"]
         try:
-            results = websearch.search(
+            results = websearch.search_many(
                 query,
-                engine=options.engine,
+                engines=options.engines,
+                fallback_engine=options.engine,
                 api_key=search_key,
-                limit=options.max_results,
+                limit=options.max_sources,
+                engine_limit=options.max_results,
                 timeout=timeout,
                 verify_ssl=verify_ssl,
                 opener=opener,
@@ -451,7 +453,11 @@ def _run_tool(
         lines = [f"📄 正在阅读：{url}"]
         try:
             text = websearch.fetch_page_text(
-                url, timeout=timeout, verify_ssl=verify_ssl, opener=opener
+                url,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+                max_chars=max(2000, min(40000, int(options.page_chars or 12000))),
+                opener=opener,
             )
         except Exception as exc:  # noqa: BLE001
             text = f"读取网页 {url} 失败：{exc}"

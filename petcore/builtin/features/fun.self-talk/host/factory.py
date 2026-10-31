@@ -1,39 +1,50 @@
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 import random
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QPlainTextEdit,
     QSpinBox,
+    QVBoxLayout,
     QWidget,
 )
 
+from petcore import paths
 from petcore.config import DEFAULTS
 from petcore.contracts.contributions import Contribution
 from petcore.contracts.feature import FeatureDefinition
 from petcore.contracts.speech import SpeechRequest
 from petcore.media import talk_images
 from petcore.ui.settings.base import SettingsPage, make_button, make_checkbox
+from petcore.ui.settings.folds import CollapsibleSection
 from petcore.ui.settings.text_lines import format_lines, parse_lines
 
 try:  # 正常包加载（tests/安装后的 mod loader）
-    from . import daily
+    from . import daily, daily_pool
 except ImportError:  # 单文件加载器（内置特性按文件加载）没有 package 上下文
     import importlib.util
     import sys
 
-    _spec = importlib.util.spec_from_file_location(
-        f"{__name__}.daily", Path(__file__).with_name("daily.py")
-    )
-    assert _spec is not None and _spec.loader is not None
-    daily = importlib.util.module_from_spec(_spec)
-    sys.modules[_spec.name] = daily
-    _spec.loader.exec_module(daily)
+    def _load_sibling(module_name: str):
+        spec = importlib.util.spec_from_file_location(
+            f"{__name__}.{module_name}", Path(__file__).with_name(f"{module_name}.py")
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    daily = _load_sibling("daily")
+    daily_pool = _load_sibling("daily_pool")
 
 logger = logging.getLogger("petcore.features.self-talk")
 
@@ -49,6 +60,9 @@ CHAMPION_LINES: tuple[tuple[str, str, int], ...] = (
     ("you will be a champion.", "你会成为冠军。", 2600),
 )
 CHAMPION_OWNER = "fun.self-talk"
+
+#: 「试听连说」最多连说几句：试听不该把整天的台词播一遍。
+PREVIEW_SEQUENCE_LIMIT = 5
 
 
 def _log_speech_failure(tag: str):
@@ -200,31 +214,53 @@ class SelfTalkRuntime:
         except Exception:  # noqa: BLE001 - 存储不可用就跳过每日句
             return None
 
-    def _speak_daily(self, config, presentation, slot: int | None) -> bool:
-        """每天第一次自言自语用每日句；返回 True 表示这次已由每日句占据。"""
+    def _daily_pool(self, config) -> tuple[str, ...]:
+        """自定义台词优先；留空用随包内置池。"""
+        texts = tuple(
+            str(item).strip()
+            for item in (config.get("self_talk_daily_texts") or [])
+            if str(item).strip()
+        )
+        return texts or daily_pool.load_pool()
+
+    @staticmethod
+    def _daily_count(config) -> int:
+        return daily_pool.clamp_count(config.get("self_talk_daily_count"))
+
+    def _speak_daily(
+        self,
+        config,
+        presentation,
+        slot: int | None,
+        *,
+        day: _dt.date | None = None,
+    ) -> bool:
+        """说当天的这一句；返回 True 表示这次自语由每日台词占据。
+
+        当天的一组台词由「日期 + slot」确定，一次自语说一句，游标写进
+        ``daily.json``；一组说完（或自定义台词为空）就回落到普通自言自语。
+        只有气泡真的显示出来才推进游标——文案没冒出来就不算说过。
+        """
         if not bool(config.get("self_talk_daily_enabled", True)):
             return False
         path = self._daily_path()
         if path is None:
             return False
-        state = daily.load_state(path)
+        current = day or _dt.date.today()
         slot_value = int(slot or 0)
-        if daily.said_today(state, slot_value):
+        lines = daily_pool.daily_set(
+            self._daily_pool(config),
+            current,
+            count=self._daily_count(config),
+            salt=slot_value,
+        )
+        if not lines:
             return False
-        texts = [
-            str(item)
-            for item in (config.get("self_talk_daily_texts") or [])
-            if str(item).strip()
-        ]
-        if not texts:
-            texts = [
-                str(item)
-                for item in (config.get("self_talk_texts") or [])
-                if str(item).strip()
-            ]
-        line = daily.daily_line(texts, salt=slot_value)
-        if not line:
+        state = daily.load_state(path)
+        index = daily.daily_index(state, slot_value, current)
+        if index >= len(lines):
             return False
+        line = lines[index]
         sequence = (
             daily.split_sequence(line)
             if bool(config.get("self_talk_daily_sequence"))
@@ -236,9 +272,15 @@ class SelfTalkRuntime:
         if len(sequence) > 1:
             runner = getattr(presentation, "say_sequence", None)
             if callable(runner):
-                shown = runner(
-                    [(part, "", max(1800, duration_ms)) for part in sequence],
-                    on_show=lambda text: self._speak_text(config, slot, text),
+                shown = (
+                    runner(
+                        [
+                            (part, "", max(1800, duration_ms))
+                            for part in sequence
+                        ],
+                        on_show=lambda text: self._speak_text(config, slot, text),
+                    )
+                    is not False
                 )
             else:
                 shown = (
@@ -249,11 +291,11 @@ class SelfTalkRuntime:
                     is not False
                 )
         else:
-            shown = presentation.say(
-                sequence[0], duration_ms=duration_ms
-            ) is not False
+            shown = (
+                presentation.say(sequence[0], duration_ms=duration_ms) is not False
+            )
         if shown:
-            daily.mark_said(state, slot_value)
+            daily.mark_said(state, slot_value, current, index + 1)
             try:
                 daily.save_state(path, state)
             except OSError:
@@ -261,12 +303,14 @@ class SelfTalkRuntime:
             if len(sequence) == 1:
                 self._speak_text(config, slot, sequence[0])
         logger.info(
-            "self-talk daily slot=%s parts=%d shown=%s",
+            "self-talk daily slot=%s index=%d/%d parts=%d shown=%s",
             slot_value,
+            index,
+            len(lines),
             len(sequence),
             shown,
         )
-        return True
+        return shown
 
     def _champion_roll(self, config) -> bool:
         if not bool(config.get("self_talk_champion_enabled")):
@@ -427,16 +471,100 @@ class SelfTalkPage(SettingsPage):
         self.daily_enabled.setChecked(
             bool(self.config().get("self_talk_daily_enabled", True))
         )
-        self.daily_enabled.toggled.connect(self._on_changed)
+        self.daily_enabled.toggled.connect(self._on_daily_enabled_toggled)
         daily_card.add_row(
-            "每天第一句用每日台词",
+            "启用每日一句",
             self.daily_enabled,
-            "每天第一次自言自语从下面的池子里按日期抽一句；"
-            "同一只宠同一天固定，换天才换。",
+            "每天按日期给每只宠挑一组台词，一次自言自语说一句；说完再回到普通台词。",
             search_keys=("每日一句", "今日台词", "每日随机"),
         )
-        self.daily_texts = QPlainTextEdit(self)
-        self.daily_texts.setPlaceholderText("每行一条每日台词")
+        self.daily_count = QSpinBox(self)
+        self.daily_count.setRange(daily_pool.MIN_COUNT, daily_pool.MAX_COUNT)
+        self.daily_count.setSuffix(" 句")
+        self.daily_count.setValue(
+            daily_pool.clamp_count(self.config().get("self_talk_daily_count"))
+        )
+        self.daily_count.valueChanged.connect(self._on_daily_count_changed)
+        daily_card.add_row(
+            "每天说几句",
+            self.daily_count,
+            f"{daily_pool.MIN_COUNT}–{daily_pool.MAX_COUNT} 句；"
+            "同一天同一只宠拿到的这一组固定不变，换天才换。",
+            search_keys=("句数", "每天几句", "每日句数"),
+        )
+        preview = QWidget(self)
+        preview_layout = QVBoxLayout(preview)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(6)
+        self.daily_preview_title = QLabel("", preview)
+        self.daily_preview_title.setObjectName("settingHint")
+        self.daily_preview_title.setWordWrap(True)
+        preview_layout.addWidget(self.daily_preview_title)
+        self.daily_preview_list = QListWidget(preview)
+        self.daily_preview_list.setObjectName("creditList")
+        self.daily_preview_list.setAccessibleName("今日台词预览")
+        self.daily_preview_list.setMinimumHeight(132)
+        self.daily_preview_list.setMaximumHeight(240)
+        self.daily_preview_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.NoSelection
+        )
+        self.daily_preview_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.daily_preview_list.setUniformItemSizes(True)
+        preview_layout.addWidget(self.daily_preview_list)
+        daily_card.add_row(
+            "今日台词",
+            preview,
+            "",
+            expand=True,
+            search_keys=("每日一句", "今日台词", "今天的一句", "预览"),
+        )
+        daily_buttons = QWidget(self)
+        daily_buttons_layout = QHBoxLayout(daily_buttons)
+        daily_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        daily_buttons_layout.setSpacing(8)
+        self.tomorrow_button = make_button("明天再看", daily_buttons)
+        self.tomorrow_button.clicked.connect(self._toggle_preview_day)
+        self.preview_button = make_button("试听连说", daily_buttons)
+        self.preview_button.clicked.connect(self._preview_daily_sequence)
+        self.restore_daily_button = make_button("恢复内置台词", daily_buttons)
+        self.restore_daily_button.clicked.connect(self._restore_default_texts)
+        daily_buttons_layout.addWidget(self.tomorrow_button)
+        daily_buttons_layout.addWidget(self.preview_button)
+        daily_buttons_layout.addWidget(self.restore_daily_button)
+        daily_buttons_layout.addStretch(1)
+        daily_card.add_row(
+            "快捷操作",
+            daily_buttons,
+            "「明天再看」切到明天的这一组（只看不改）；「试听连说」连说预览的前几句；"
+            "「恢复内置台词」同时恢复候选台词与每日池。",
+            expand=True,
+            search_keys=(
+                "明天再看",
+                "试听连说",
+                "恢复默认",
+                "恢复内置台词",
+                "试听",
+                "连说",
+            ),
+        )
+        self.daily_sequence = make_checkbox(self)
+        self.daily_sequence.setChecked(
+            bool(self.config().get("self_talk_daily_sequence"))
+        )
+        self.daily_sequence.toggled.connect(self._on_changed)
+        daily_card.add_row(
+            "每日一句连说",
+            self.daily_sequence,
+            "把一句台词按「|」、换行或句号拆成多条气泡，复用多气泡连说通道。",
+            search_keys=("连说", "多气泡"),
+        )
+
+        # 自定义台词默认折叠：绝大多数人用内置池，展开才占版面。
+        self.custom_section = CollapsibleSection(
+            "自定义台词（留空使用内置池）", expanded=False, parent=self
+        )
+        self.daily_texts = QPlainTextEdit(self.custom_section)
+        self.daily_texts.setPlaceholderText("每行一条自定义台词；留空 = 随包内置池")
         self.daily_texts.setMinimumHeight(110)
         self.daily_texts.setPlainText(
             format_lines(self.config().get("self_talk_daily_texts") or [])
@@ -447,51 +575,16 @@ class SelfTalkPage(SettingsPage):
         self._daily_timer.timeout.connect(self._on_changed)
         self.daily_texts.textChanged.connect(lambda: self._daily_timer.start())
         self.daily_texts.textChanged.connect(self._refresh_daily_preview)
-        daily_card.add_row(
-            "每日台词池",
+        self.custom_section.card().add_row(
+            "自定义台词",
             self.daily_texts,
-            "每行一条；留空时回退到「候选台词」。",
+            "每行一条（也可用「|」分隔）；留空时使用随包的内置池，"
+            "填了就用你自己的句子替换整个池子。",
             expand=True,
-            search_keys=("每日一句", "每日台词池"),
+            search_keys=("自定义台词", "覆盖内置池", "每日台词池"),
         )
-        self.daily_sequence = make_checkbox(self)
-        self.daily_sequence.setChecked(
-            bool(self.config().get("self_talk_daily_sequence"))
-        )
-        self.daily_sequence.toggled.connect(self._on_changed)
-        daily_card.add_row(
-            "每日一句连说",
-            self.daily_sequence,
-            "把每日句按「|」、换行或句号拆成多条气泡，复用 champion 彩蛋的连说通道。",
-            search_keys=("连说", "多气泡"),
-        )
-        self.daily_preview = QLabel("", self)
-        self.daily_preview.setObjectName("settingHint")
-        self.daily_preview.setWordWrap(True)
-        daily_card.add_row(
-            "今天的一句",
-            self.daily_preview,
-            "",
-            search_keys=("今天的一句", "预览"),
-        )
-        daily_buttons = QWidget(self)
-        daily_buttons_layout = QHBoxLayout(daily_buttons)
-        daily_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        daily_buttons_layout.setSpacing(8)
-        restore = make_button("恢复内置台词", daily_buttons)
-        restore.clicked.connect(self._restore_default_texts)
-        test_sequence = make_button("试听连说", daily_buttons)
-        test_sequence.clicked.connect(self._preview_champion)
-        daily_buttons_layout.addWidget(restore)
-        daily_buttons_layout.addWidget(test_sequence)
-        daily_buttons_layout.addStretch(1)
-        daily_card.add_row(
-            "快捷操作",
-            daily_buttons,
-            "「恢复内置台词」同时恢复候选台词与每日池；「试听连说」播放 Niko 彩蛋五句。",
-            expand=True,
-            search_keys=("恢复默认", "试听", "Niko", "champion"),
-        )
+        self._append_section_widget(self.custom_section)
+        self._preview_offset = 0
         self._refresh_daily_preview()
 
         extra = self.section("语音与彩蛋")
@@ -543,6 +636,9 @@ class SelfTalkPage(SettingsPage):
             "texts": list(config.get("self_talk_texts") or []),
             "daily_enabled": bool(config.get("self_talk_daily_enabled", True)),
             "daily_texts": list(config.get("self_talk_daily_texts") or []),
+            "daily_count": daily_pool.clamp_count(
+                config.get("self_talk_daily_count")
+            ),
             "daily_sequence": bool(config.get("self_talk_daily_sequence")),
             "voice": bool(config.get("self_talk_voice_enabled")),
             "champion": bool(config.get("self_talk_champion_enabled")),
@@ -558,6 +654,7 @@ class SelfTalkPage(SettingsPage):
             "texts": parse_lines(self.texts.toPlainText()),
             "daily_enabled": self.daily_enabled.isChecked(),
             "daily_texts": parse_lines(self.daily_texts.toPlainText()),
+            "daily_count": int(self.daily_count.value()),
             "daily_sequence": self.daily_sequence.isChecked(),
             "voice": self.voice_enabled.isChecked(),
             "champion": self.champion_enabled.isChecked(),
@@ -568,29 +665,134 @@ class SelfTalkPage(SettingsPage):
         self.champion_chance.setEnabled(bool(checked))
         self._on_changed()
 
-    def _refresh_daily_preview(self, *_args) -> None:
+    def _on_daily_enabled_toggled(self, _checked: bool) -> None:
+        self._refresh_daily_preview()
+        self._on_changed()
+
+    def _on_daily_count_changed(self, _value: int) -> None:
+        self._refresh_daily_preview()
+        self._on_changed()
+
+    # ------------------------------------------------------------ 每日一句预览
+
+    def _slot(self) -> int:
+        """预览用哪只宠的 slot：设置窗的目标宠，否则当作主宠 0。"""
+        try:
+            return int(getattr(self.host, "window", None).slot or 0)
+        except (AttributeError, TypeError, ValueError):
+            return 0
+
+    def _daily_state_path(self) -> Path | None:
+        try:
+            root = Path(self.config().root)
+        except Exception:  # noqa: BLE001 - 预览没有数据根时按「还没说过」显示
+            return None
+        return paths.feature_data_dir(root, CHAMPION_OWNER) / "daily.json"
+
+    def _daily_pool_lines(self) -> tuple[str, ...]:
         texts = parse_lines(self.daily_texts.toPlainText())
-        if not texts:
-            texts = parse_lines(self.texts.toPlainText())
-        line = daily.daily_line(texts)
-        self.daily_preview.setText(
-            f"今天：{line}" if line else "每日池为空，会回退到候选台词。"
+        return tuple(texts) if texts else daily_pool.load_pool()
+
+    def _preview_date(self) -> _dt.date:
+        return _dt.date.today() + _dt.timedelta(days=int(self._preview_offset))
+
+    def _preview_lines(self) -> tuple[str, ...]:
+        return daily_pool.daily_set(
+            self._daily_pool_lines(),
+            self._preview_date(),
+            count=int(self.daily_count.value()),
+            salt=self._slot(),
         )
+
+    def _spoken_today(self) -> int:
+        path = self._daily_state_path()
+        if path is None:
+            return 0
+        state = daily.load_state(path)
+        return daily.daily_index(state, self._slot(), _dt.date.today())
+
+    def showEvent(self, event):  # noqa: N802 - Qt 事件名
+        super().showEvent(event)
+        self._refresh_daily_preview()
+
+    def _refresh_daily_preview(self, *_args) -> None:
+        """纯渲染：只读配置与状态文件，不改配置、不碰运行时的排期/语音。"""
+        day = self._preview_date()
+        lines = self._preview_lines()
+        offset = int(getattr(self, "_preview_offset", 0) or 0)
+        if not lines:
+            self.daily_preview_title.setText(
+                "没有可用的台词：内置池缺失，自定义台词也是空的。"
+            )
+        else:
+            spoken = self._spoken_today() if offset == 0 else 0
+            head = f"{'明天' if offset else '今天'} {day.month} 月 {day.day} 日 · 共 {len(lines)} 句"
+            if offset:
+                head += " · 明天的预览（明天再看这一组）"
+            elif spoken >= len(lines):
+                head += " · 都说过了，接下来是普通自言自语"
+            elif spoken > 0:
+                head += f" · 下一句第 {spoken + 1} 句"
+            self.daily_preview_title.setText(head)
+        self.daily_preview_list.clear()
+        for index, line in enumerate(lines):
+            self.daily_preview_list.addItem(f"{index + 1}. {line}")
+
+    def _toggle_preview_day(self) -> None:
+        self._preview_offset = 0 if self._preview_offset else 1
+        self.tomorrow_button.setText(
+            "回到今天" if self._preview_offset else "明天再看"
+        )
+        self._refresh_daily_preview()
 
     def _restore_default_texts(self) -> None:
         self.texts.setPlainText(format_lines(DEFAULTS["self_talk_texts"]))
         self.daily_texts.setPlainText(format_lines(DEFAULTS["self_talk_daily_texts"]))
+        self.daily_count.setValue(
+            daily_pool.clamp_count(DEFAULTS["self_talk_daily_count"])
+        )
         self._refresh_daily_preview()
         self._on_changed()
 
-    def _preview_champion(self) -> None:
-        runner = getattr(self.host, "say_sequence", None)
+    def _presentation_port(self):
+        """设置页借用宿主的展示端口做试听（``CoreHost.presentation_port()``）。"""
+        getter = getattr(self.host, "presentation_port", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:  # noqa: BLE001 - 试听失败不该影响设置页
+            logger.debug("self-talk preview presentation unavailable", exc_info=True)
+            return None
+
+    def _preview_daily_sequence(self) -> None:
+        """试听：把预览里的前几句走真正的多气泡通道，只显示、不写配置。"""
+        presentation = self._presentation_port()
+        runner = getattr(presentation, "say_sequence", None)
         if not callable(runner):
             return
-        runner(
-            [(text, subtitle, duration) for text, subtitle, duration in CHAMPION_LINES],
-            force=True,
+        lines = self._preview_lines()
+        if not lines:
+            return
+        parts: list[str] = []
+        for line in lines:
+            if len(parts) >= PREVIEW_SEQUENCE_LIMIT:
+                break
+            parts.extend(
+                daily.split_sequence(line)
+                if self.daily_sequence.isChecked()
+                else (line,)
+            )
+        parts = parts[:PREVIEW_SEQUENCE_LIMIT]
+        if not parts:
+            return
+        duration_ms = max(
+            1800, int(float(self.config().get("self_talk_duration") or 5) * 1000)
         )
+        try:
+            runner([(part, "", duration_ms) for part in parts], force=True)
+        except Exception:  # noqa: BLE001 - 试听失败不许冒到设置页
+            logger.debug("self-talk preview sequence failed", exc_info=True)
 
     def _on_changed(self, *_args) -> None:
         values = self._current()
@@ -602,6 +804,7 @@ class SelfTalkPage(SettingsPage):
         config.set("self_talk_texts", list(values["texts"]))
         config.set("self_talk_daily_enabled", values["daily_enabled"])
         config.set("self_talk_daily_texts", list(values["daily_texts"]))
+        config.set("self_talk_daily_count", values["daily_count"])
         config.set("self_talk_daily_sequence", values["daily_sequence"])
         config.set("self_talk_voice_enabled", values["voice"])
         config.set("self_talk_champion_enabled", values["champion"])
@@ -630,6 +833,7 @@ class SelfTalkPage(SettingsPage):
         config.set("self_talk_texts", list(self._initial["texts"]))
         config.set("self_talk_daily_enabled", self._initial["daily_enabled"])
         config.set("self_talk_daily_texts", list(self._initial["daily_texts"]))
+        config.set("self_talk_daily_count", self._initial["daily_count"])
         config.set("self_talk_daily_sequence", self._initial["daily_sequence"])
         config.set("self_talk_voice_enabled", self._initial["voice"])
         config.set("self_talk_champion_enabled", self._initial["champion"])
@@ -658,6 +862,9 @@ class SelfTalkPage(SettingsPage):
         self.champion_chance.setValue(self._initial["champion_chance"])
         self.champion_chance.setEnabled(self._initial["champion"])
         self.champion_chance.blockSignals(False)
+        self.daily_count.blockSignals(True)
+        self.daily_count.setValue(self._initial["daily_count"])
+        self.daily_count.blockSignals(False)
         self.texts.blockSignals(True)
         self.texts.setPlainText(format_lines(self._initial["texts"]))
         self.texts.blockSignals(False)
@@ -684,6 +891,11 @@ class SelfTalkPage(SettingsPage):
             "每日一句",
             "今日台词",
             "每日随机",
+            "每日句数",
+            "句数",
+            "内置池",
+            "自定义台词",
+            "明天再看",
             "连说",
             "恢复默认",
             "self talk",

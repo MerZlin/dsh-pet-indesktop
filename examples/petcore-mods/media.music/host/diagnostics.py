@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from . import now_playing, recognizer
+from . import now_playing, players, recognizer
 
 _MEDIA_TYPE_NAMES = {
     now_playing.MEDIA_TYPE_UNKNOWN: "UNKNOWN(0)",
@@ -44,6 +44,22 @@ def _safe_title(text) -> str:
 
 
 
+def _safe_app_id(value) -> str:
+    """app_id → 可安全贴进工单的展示名（只留可执行文件名）。
+
+    有些播放器把 app_id 报成完整安装路径
+    （``C:\\Users\\<用户名>\\AppData\\...\\cloudmusic.exe``）；这段文本的用途正是
+    让用户复制给别人看，所以与 ``recognizer.normalized_exe`` 同口径取 basename。
+    UWP 的 AUMID（``SpotifyAB.SpotifyMusic_...!Spotify``）本来就没有路径，原样保留。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "\\" not in text and "/" not in text:
+        return text
+    return text.replace("\\", "/").rsplit("/", 1)[-1].strip()
+
+
 def _media_type_name(value) -> str:
     try:
         return _MEDIA_TYPE_NAMES.get(int(value), f"UNKNOWN({value})")
@@ -69,7 +85,7 @@ def _smtc_lines(sample) -> list[str]:
             marks.append("系统应用否决")
         suffix = f"  [{'、'.join(marks)}]" if marks else ""
         lines.append(
-            f"  {getattr(session, 'app_id', '') or '未知应用'}  "
+            f"  {_safe_app_id(getattr(session, 'app_id', '')) or '未知应用'}  "
             f"{_media_type_name(getattr(session, 'media_type', 0))}  {state}{suffix}"
         )
     return lines
@@ -143,6 +159,51 @@ def _decision_lines(decision, lyric_state: str) -> list[str]:
     return lines
 
 
+def _timeout_lines(sample) -> list[str]:
+    """读取超时的源单独成行：整段诊断里的三节仍在，只是其中一节"没读到"。"""
+    errors = [
+        str(getattr(sample, "audio_error", "") or "").strip(),
+        str(getattr(sample, "window_error", "") or "").strip(),
+    ]
+    errors = [error for error in errors if error]
+    if not errors:
+        return []
+    return ["采样超时："] + [f"  · {error}" for error in errors]
+
+
+def _candidate_lines(sample) -> list[str]:
+    """候选清单：两个"证据源"这一拍各自看到了哪些播放器（定位"为什么没识别"）。
+
+    只列已登记的播放器窗口与音频表里的已知播放器——用户下次贴诊断时，一眼就能
+    看出是"窗口没找到"、"进程没出声"还是"根本没开播放器"。exe 一律取 basename，
+    标题走 :func:`_safe_title`（这段文本会被复制出去）。
+    """
+    windows = tuple(getattr(sample, "windows", ()) or ())
+    rows = tuple(getattr(sample, "audio", ()) or ())
+    known = {recognizer.normalized_exe(name) for name in players.KNOWN_MUSIC_EXES}
+    known_rows = [
+        row
+        for row in rows
+        if recognizer.normalized_exe(getattr(row, "exe", "")) in known
+    ]
+    windows_text = "、".join(
+        f"{_safe_app_id(getattr(row, 'exe', '')) or '?'}"
+        f"「{_safe_title(getattr(row, 'title', ''))}」"
+        for row in windows
+    )
+    audio_text = "、".join(
+        f"{_safe_app_id(getattr(row, 'exe', '')) or '?'}  "
+        f"state={str(getattr(row, 'state', '') or '?')}  "
+        f"peak={float(getattr(row, 'peak', 0.0) or 0.0):.2f}"
+        for row in known_rows
+    )
+    return [
+        "候选清单：",
+        f"  · 已登记的播放器窗口：{windows_text or '没有'}",
+        f"  · 音频会话里的已知播放器：{audio_text or '没有'}",
+    ]
+
+
 def render(
     sample,
     decision,
@@ -164,4 +225,7 @@ def render(
     if evidence:
         lines.append("证据：")
         lines.extend(f"  · {item}" for item in evidence)
+    # 新增内容只追加在末尾：既有逐句断言（用户贴的模板）保持原样。
+    lines.extend(_timeout_lines(sample))
+    lines.extend(_candidate_lines(sample))
     return "\n".join(lines)

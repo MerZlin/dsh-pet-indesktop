@@ -626,13 +626,27 @@ def parse_foobar_title(window_title: str, fmt: str = "") -> tuple[str, str] | No
 # 表里只登记**确认过默认标题形态**的播放器：exe 不认识就一律不剥（不猜）。
 # foobar2000 不在表里——它按用户配置的 titleformat 渲染，尾部没有固定字面量。
 #
-# 每条记两样东西：尾部字面量（剥掉什么）与程序名（没在播歌时标题**只剩**它）。
-# 后者和 ``_IDLE_RE`` 对 foobar2000 的口径是同一条：只剩程序名 = 没有曲目。
-# 少了它，AIMP 空闲时那条 ``AIMP`` 会作为"歌名"一路传下去，变成拿程序名去搜歌词
-# ——正是本模块最要避免的"搜到别人"。
+# 每条记两样东西：尾部字面量（剥掉什么；空串 = 该播放器没有固定尾巴）与程序名
+# （没在播歌时标题**只剩**它）。后者和 ``_IDLE_RE`` 对 foobar2000 的口径是同一条：
+# 只剩程序名 = 没有曲目。少了它，AIMP 空闲时那条 ``AIMP`` 会作为"歌名"一路传下去，
+# 变成拿程序名去搜歌词——正是本模块最要避免的"搜到别人"。
+#
+# 网易云（``cloudmusic.exe``）的窗口标题实测形态是 ``歌名 - 歌手 - 网易云音乐``：
+# 尾部的程序名必须剥掉，否则整条会被当成歌名；空闲时标题就是 ``网易云音乐``，
+# 同样要判"没有曲目"。QQ 音乐 / 酷狗 / 汽水只登记空闲名（尾巴形态未确认，不猜）。
 _PLAYER_TITLE_MARKS = {
     "aimp.exe": (" - AIMP", "AIMP"),
     "winamp.exe": (" - Winamp", "Winamp"),
+    "cloudmusic.exe": (" - 网易云音乐", "网易云音乐"),
+    "qqmusic.exe": ("", "QQ音乐"),
+    "kugou.exe": ("", "酷狗音乐"),
+    "sodamusic.exe": ("", "汽水音乐"),
+}
+
+#: 窗口标题布局**已知**的播放器（歌名在前、歌手在后）。只在用户没配格式串时使用；
+#: 表外的 exe（foobar2000 / 浏览器）仍然"不猜顺序"，整条同时作歌名与歌手。
+_PLAYER_TITLE_FORMATS = {
+    "cloudmusic.exe": "%title% - %artist%",
 }
 
 
@@ -647,7 +661,7 @@ def _strip_player_tail(text: str, exe: str) -> str:
     if not mark:
         return text
     tail = mark[0]
-    if text.lower().endswith(tail.lower()):
+    if tail and text.lower().endswith(tail.lower()):
         return text[: len(text) - len(tail)].strip()
     return text
 
@@ -670,7 +684,8 @@ def parse_window_title(window_title: str, exe: str, fmt: str = "") -> tuple[str,
     :func:`parse_foobar_title`——两者的 titleformat 语法是同一个。
 
     ``fmt`` 只有 foobar2000 一类"用户可配窗口标题"的播放器会用到；为空 = 自动
-    （不猜顺序，整条同时作歌名与歌手）。
+    （不猜顺序，整条同时作歌名与歌手）——**除非**该播放器的窗口标题布局已知
+    （见 :data:`_PLAYER_TITLE_FORMATS`，目前只有网易云）。
 
     **解析不出就返回 ``None``，不猜**：窗口标题为空、只剩播放器程序名、剥离后为空、
     或清洗后歌名不足 :data:`MIN_QUERY_CHARS` 字，都算"没有曲目信息"。
@@ -680,4 +695,5 @@ def parse_window_title(window_title: str, exe: str, fmt: str = "") -> tuple[str,
     text = _strip_player_tail(text, exe_key)
     if not text or _is_player_only(text, exe_key):
         return None
-    return parse_foobar_title(text, fmt)
+    effective_fmt = str(fmt or "").strip() or _PLAYER_TITLE_FORMATS.get(exe_key, "")
+    return parse_foobar_title(text, effective_fmt)

@@ -77,7 +77,8 @@ def test_migrates_iso_timestamp_and_roundtrips(tmp_path):
 
     target = root / "sessions" / "cat" / "s1.json"
     raw = json.loads(target.read_text(encoding="utf-8"))
-    assert raw["schema"] == 1
+    assert raw["schema"] == 2
+    assert raw["channel"] == "ai"
     assert raw["session_id"] == "s1"
     assert isinstance(raw["updated_at"], float)
     assert raw["updated_at"] == pytest.approx(
