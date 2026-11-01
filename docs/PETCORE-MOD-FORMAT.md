@@ -111,6 +111,59 @@ feature 包通过 `Contribution(kind="menu")` 注册菜单项，`data` 支持：
 - 卸载后该项从菜单消失但布局节点保留为未知；重装即可恢复，编辑器也提供清理入口。
 - `command` 必须存在于该包 runtime 的 `commands` 字典；缺失时点击只记诊断，不影响菜单构建。
 
+### 5.2 对话窗视图：`chat_view`（API 1，2026-11-01 起）
+
+`Contribution(kind="chat_view")` + `FeatureDefinition.view_factories` 可以让扩展在
+**AI 对话窗**里拥有一整页（网页 AI 就是这么做的）。窗口、标题栏按钮、圆角、
+airspace、深色协调与生命周期都由 core 负责，扩展只交一个 `QWidget`。
+
+```python
+Contribution(kind="chat_view", id="web", data={
+    "label": "网页 AI",   # 必填：标题栏按钮文字
+    "icon": "globe",      # 可填 core 图标名（globe/moon/sun/more/sidebar/pin/...）
+    "order": 100,         # 同一窗口内的排序，默认 500
+})
+
+FeatureDefinition(
+    owner="tool.demo",
+    contributions=(...),
+    view_factories={"web": lambda: MyView()},   # 键 = contribution id
+)
+```
+
+**core 的保证**（写代码前请按这几条设计）：
+
+- 工厂**只在 GUI 线程**、**第一次切到该页**时调用，同一个窗口最多一次。
+- 工厂抛异常、或返回的不是 `QWidget`：该页显示错误占位并记日志，
+  **对话窗其余功能不受影响**——扩展崩了不带走窗口。
+- 视图可以（也应当）实现下面四个方法，全部**可选**，core 用 `getattr` 探测：
+
+  | 方法 | 调用时机 | 该做什么 |
+  |---|---|---|
+  | `activate()` | 每次切到该页 / 窗口重新显示 | 恢复轮询、继续加载 |
+  | `deactivate()` | 切走 / 窗口隐藏 | **停加载、停定时器**（别在后台烧 CPU） |
+  | `set_dark(bool)` | 对话窗深色开关变化 | 调整自己的外框/工具条配色 |
+  | `shutdown()` | 对话窗关闭 | 停加载并释放页面（如 `setUrl("about:blank")`） |
+
+- 视图被放进 `QFrame#chat-view-host`，**左/右/下统一内缩 12px**：原生子窗口
+  （`QWebView` / `QWindowContainer`）不会被圆角 mask 裁掉，这 12px 是给
+  14px 圆角让位。别自己再贴边画。
+- 视图只知道自己被显示/隐藏，**拿不到 core 的窗口对象**；不要把视图 reparent 出去。
+- 视图**不做默认页**：每次打开对话窗都停在 AI 对话（站点/滚动位置这类状态请扩展自己记）。
+- **core 不替视图上色**：视图里的控件用系统 palette，对话窗的 QSS 不会套进来；要跟深色/浅色
+  一致就在 `set_dark(bool)` 里自己设（它一定会在工厂之后先被调用一次）。
+- 站点/视图清单在**建窗时**收集：新装扩展要重开对话窗才出现在标题栏。
+
+**不要**用 `chat_view` 做这些：
+
+- 不要把它当独立窗口用（需要独立窗口就自己建 `QDialog`，见 §7「能力与边界」）；
+- 不要在里面再建标题栏/关闭按钮（窗口 chrome 属于 core）；
+- 不要在工厂里做耗时 IO（GUI 线程会被卡住，第一印象就是「点开就卡」）。
+
+参考实现：`examples/petcore-mods/tool.ai-browser/host/web_pane.py`（QtWebView +
+Edge WebView2 + 懒加载 + 缺口页），工厂接线见同目录 `factory.py`。
+
+
 ## 6. 安装
 
 ```
@@ -160,8 +213,16 @@ python -m petcore mods doctor
   既不产生端口，也没有运行期强制；扩展用 `subprocess` 拉外部程序不受任何检查。
 - **窗口**：没有窗口端口，但扩展在 GUI 线程的命令里可以自己 `QMainWindow`/`QDialog`
   （官方样板 `fun.divination` 已如此）。置顶、跟随桌宠、多宠归属、关闭清理都得自己实现。
-- **宿主能力差异**：某个 Qt 模块是否可用取决于宿主打包（安装包 `_internal/PySide6` 里没有
-  `QtWebEngine*`），扩展必须自检并降级；`importlib.util.find_spec` 是约定写法。
+- **宿主能力差异**：某个 Qt 模块是否可用取决于宿主打包。安装包 `_internal/PySide6`
+  里 **有** `QtWebView`（`Qt6WebView.dll` + `plugins/webview/qtwebview_webview2.dll`，
+  见 `scripts/slim_bundle.py` 的 `REQUIRED_GLOBS`），**没有** `QtWebEngine*`。
+  扩展必须自检并降级；`importlib.util.find_spec` 是约定写法。
+- **端口并非都可用**（2026-11-01 核对 `petcore/ui/ports.py` 的 `build_ports`）：
+  `presentation / scheduler / audio / credentials / storage / resources / config /
+  pets / interaction / quiet / api / worker / chat / quick_chat / screen / screen_ask /
+  system / http / speech / memory / webhook` 有实现；
+  **`windows / menu / commands / input / capabilities` 运行时恒为 `None`**——
+  `HostPorts` 里声明了它们，但没有人注入。别照着 dataclass 写代码。
 - **ZIP 安装**：CLI 与 GUI 共用 `install()` 的同一套校验；CLI 的 `mods install` 直接接受 `.zip`
   （见 §6），导入时会剥掉包里自带的 `.trusted`。
 

@@ -140,12 +140,27 @@ $pyiArgs = @(
     # 构建前必须过 verify_presentmon.py 的文件名/SHA256/x86-64 三道门。
     "--add-data", "$root/resources/presentmon;resources/presentmon",
     "--collect-submodules", "rapidocr",
+    # 内置网页 AI（tool.ai-browser 的 chat_view）：PyInstaller 6.22 没有
+    # hook-PySide6.QtWebView，只 hidden-import 的话包里只有 QtWebView.pyd，
+    # Qt6WebView.dll 与 WebView2 后端插件都不在——运行期 find_spec 为真、
+    # 一创建视图就失败。DLL 与插件在下面按 $pysideDir 显式追加。
+    "--hidden-import", "PySide6.QtWebView",
     "--hidden-import", "onnxruntime",
     "--hidden-import", "cv2",
     "--hidden-import", "numpy",
     "--hidden-import", "omegaconf",
     "packaging/petcore_entry.py"
 )
+# QtWebView 的二进制与后端插件（PyInstaller 没有对应 hook，必须显式带）。
+$pysideDir = (& $python -c "import PySide6, os; print(os.path.dirname(PySide6.__file__))").Trim()
+$webviewDll = Join-Path $pysideDir "Qt6WebView.dll"
+$webviewPlugin = Join-Path $pysideDir "plugins\webview\qtwebview_webview2.dll"
+if (-not (Test-Path $webviewDll)) { throw "[webview] Qt6WebView.dll missing: $webviewDll (PySide6 too old?)" }
+if (-not (Test-Path $webviewPlugin)) { throw "[webview] qtwebview_webview2.dll missing: $webviewPlugin" }
+$pyiArgs = @($pyiArgs[0], $pyiArgs[1], "--add-binary", "$webviewDll;PySide6") + $pyiArgs[2..($pyiArgs.Count - 1)]
+$pyiArgs = @($pyiArgs[0], $pyiArgs[1], "--add-data", "$webviewPlugin;PySide6\plugins\webview") + $pyiArgs[2..($pyiArgs.Count - 1)]
+Write-Host "[webview] bundling QtWebView + WebView2 backend"
+
 $rapidocrDir = (& $python -c "import os, rapidocr; print(os.path.dirname(rapidocr.__file__))").Trim()
 if ($rapidocrDir) {
     foreach ($cfgName in @("config.yaml", "default_models.yaml")) {

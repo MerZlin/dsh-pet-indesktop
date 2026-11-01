@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 <#
 .SYNOPSIS
     dsh-pet-standalone onedir build + portable zip packaging.
@@ -374,6 +374,23 @@ if (-not $SkipBuild) {
     # 漏掉这一行不会有任何报错（只有源文件不存在时 PyInstaller 才会挡下），因此由
     # tests/test_application_icon.py 的打包契约测试守着。见 docs\ONEDIR_PACKAGING.md
     # 「运行期应用图标」。
+    # ---------- QtWebView（Edge WebView2 后端）----------
+    # PyInstaller 6.22 没有 hook-PySide6.QtWebView：只写 hidden-import 的话包里
+    # 只有 QtWebView.pyd，Qt6WebView.dll 与后端插件都不在——运行期
+    # `find_spec("PySide6.QtWebView")` 为真，一创建视图就失败（界面以为可用）。
+    # 这两个文件必须显式进包；slim_bundle.py 的 REQUIRED_GLOBS 会在产物侧复核。
+    $webviewRoot = (& python -c "import PySide6, os; print(os.path.dirname(PySide6.__file__))").Trim()
+    $webviewDll = Join-Path $webviewRoot 'Qt6WebView.dll'
+    $webviewPlugin = Join-Path $webviewRoot 'plugins\webview\qtwebview_webview2.dll'
+    if (-not (Test-Path $webviewDll)) { throw "[webview] Qt6WebView.dll missing: $webviewDll (PySide6 too old?)" }
+    if (-not (Test-Path $webviewPlugin)) { throw "[webview] qtwebview_webview2.dll missing: $webviewPlugin" }
+    $webviewArgs = @(
+        '--hidden-import', 'PySide6.QtWebView',
+        '--add-binary', "$webviewDll;PySide6",
+        '--add-data', "$webviewPlugin;PySide6\plugins\webview"
+    )
+    Write-Host "[webview] bundling QtWebView + WebView2 backend" -ForegroundColor Cyan
+
     python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx `
         --name $name `
         --distpath dist-onedir `
@@ -401,6 +418,7 @@ if (-not $SkipBuild) {
         --add-data "resources\presentmon;resources\presentmon" `
         @rapidocrData `
         @rapidocrHidden `
+        @webviewArgs `
         @excludes `
         $entry
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed: $LASTEXITCODE" }

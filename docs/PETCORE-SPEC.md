@@ -256,8 +256,12 @@ petcore/
   mods 目录下加载；默认只加载内置 demo。没有热卸载与沙箱，文档必须如实说明。
 - Windows 安装向导把随附官方扩展做成可勾选项（默认不勾）：不勾选就不写盘；勾选时装到
   安装目录 `{app}\mods\<id>` 并带 `.trusted`。卸载随 `{app}` 一起删除。
-- 贡献类型：菜单动作、设置页、角色/音效/台词/主题内容、事件订阅；跨域不互相
-  import。
+- 贡献类型：菜单动作、设置页、**对话窗视图（`chat_view`）**、角色/音效/台词/主题内容、
+  事件订阅；跨域不互相 import。
+- `chat_view`：扩展交一个 QWidget（+ 可选的 `activate/deactivate/set_dark/shutdown`），
+  core 给槽位、标题栏按钮、GUI 线程与生命周期；工厂异常只影响那一页。对话窗的
+  chrome 永远归 core，扩展不许再造聊天窗。首个客户是 `tool.ai-browser` v2（QtWebView +
+  Edge WebView2，随包 +0.31 MB，不走 203 MB 的 QtWebEngine）。
 - 详见 [`PETCORE-MOD-FORMAT.md`](PETCORE-MOD-FORMAT.md)。
 
 ## 6. 交付门

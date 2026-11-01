@@ -430,6 +430,16 @@
   `chat-main` / `chat-main-header` / `floating-composer`）是唯一实现，不许再另写
   一套极简窗口。窗口按 `(owner, pet_slot)` 隔离；`ChatPort.record()` 只写会话和
   已存在的窗口，**不得因后台结果主动唤出窗口**。
+- **对话窗的扩展页走 `chat_view`**：`Contribution(kind="chat_view")` +
+  `FeatureDefinition.view_factories`，core 只管槽位/标题栏按钮/生命周期/故障隔离，
+  扩展交一个 QWidget（契约见 `docs/PETCORE-MOD-FORMAT.md` §5.2，手把手版本
+  `docs/PETCORE-MOD-DEVELOPMENT.md` §4.2，喂给 AI 的版本
+  `docs/PETCORE-MOD-AI-GUIDE.md`）。工厂只在 GUI 线程、首次切到该页时调用一次；
+  视图实现 `activate/deactivate/set_dark/shutdown`（后两个可选）。`ChatPort.show_view`
+  复用**用户正在用的那扇**对话窗，不许另开一扇。视图不做默认页，每次开窗回到 AI。
+- **深色模式只作用于对话窗**：`chat_dark_mode`（全局）+ `styles.DARK_OVERRIDES`
+  追加在浅色表之后（浅色路径字节不变）；图标要按 `tool_icon(..., dark=True)` 换墨色；
+  原生子窗口（WebView）不吃圆角裁剪，靠 `CHAT_VIEW_INSET=12` 让位。
 - **流式传输只在 core**：SSE/代理兜底/取消/错误分类都在 `petcore/api/chat.py`；
   扩展与 `petcore/chat/` 不得 import `petcore.net`/`petcore.api`（架构守卫）。
 - **截图动作条**：core 只提供框选、四动作条（提取文字/翻译/问问肥鱼/复制图像）、
@@ -848,6 +858,7 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest \
 | 最终要做成什么样 | [`../docs/PETCORE-SPEC.md`](../docs/PETCORE-SPEC.md) |
 | 分层、启动路径、数据目录 | [`../docs/PETCORE-ARCHITECTURE.md`](../docs/PETCORE-ARCHITECTURE.md) |
 | mod 格式与加载 | [`../docs/PETCORE-MOD-FORMAT.md`](../docs/PETCORE-MOD-FORMAT.md) |
+| **让用户的 AI 代写 mod**（自包含提示词） | [`../docs/PETCORE-MOD-AI-GUIDE.md`](../docs/PETCORE-MOD-AI-GUIDE.md) |
 | 角色包与素材 | [`../docs/PETCORE-CHARACTER-PACKS.md`](../docs/PETCORE-CHARACTER-PACKS.md) |
 | 批次与下一步 | [`../docs/PETCORE-ROADMAP.md`](../docs/PETCORE-ROADMAP.md) |
 | 还差主分支什么 | [`../docs/PETCORE-MAIN-PARITY-BACKLOG.md`](../docs/PETCORE-MAIN-PARITY-BACKLOG.md) |

@@ -106,6 +106,11 @@ REQUIRED_GLOBS = (
     f"{PYSIDE}/avcodec-*.dll",
     f"{PYSIDE}/plugins/platforms/qwindows.dll",
     f"{PYSIDE}/plugins/multimedia/ffmpegmediaplugin.dll",
+    # 内置网页 AI（tool.ai-browser 的 chat_view）：PyInstaller 没有
+    # hook-PySide6.QtWebView，这两个文件靠 build_onedir.ps1 显式带进包；
+    # 缺任何一个，冻结包里的「网页 AI」按钮就是一个点了必报错的死入口。
+    f"{PYSIDE}/Qt6WebView.dll",
+    f"{PYSIDE}/plugins/webview/qtwebview_webview2.dll",
     "_internal/shiboken6/*.dll",
 )
 

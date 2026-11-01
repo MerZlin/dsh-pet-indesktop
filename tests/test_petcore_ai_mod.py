@@ -1323,3 +1323,28 @@ def test_web_search_failure_never_reaches_the_mod_error_path(tmp_path: Path, mon
     ), chat.calls
     done = [call for call in chat.calls if call[0] == "done"]
     assert done and "纯 API 回答" in done[-1][1]
+
+
+def test_settings_page_dark_toggle_saves_and_previews(qt_app, tmp_path: Path) -> None:
+    from petcore.ui.settings.base import page_search_texts
+
+    context = _context(tmp_path)
+    definition = _create_host(context)
+    previews: list[dict] = []
+    host = SimpleNamespace(
+        config=Config(tmp_path),
+        features=SimpleNamespace(ports=SimpleNamespace(api=FakeApi())),
+        chat=SimpleNamespace(apply_appearance=lambda **kwargs: previews.append(kwargs)),
+    )
+    page = definition.settings_factory(host)
+    try:
+        assert host.config.get("chat_dark_mode") is False
+        page.dark_check.setChecked(True)
+        assert host.config.get("chat_dark_mode") is True
+        page.apply_preview()
+        assert previews and previews[-1]["dark"] is True
+        # 设置搜索：行文本进索引，用户搜「深色」能找到
+        haystack = " ".join(page_search_texts(page))
+        assert "深色模式" in haystack
+    finally:
+        page.close()

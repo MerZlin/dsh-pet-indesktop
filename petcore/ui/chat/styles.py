@@ -83,21 +83,40 @@ QFrame#chat-main-header { min-height: 55px; background: #ffffff; border: none; b
 QLabel#title-label { color: #252a32; font-size: @F_14@; font-weight: 600; }
 QLabel#subtitle-label { color: #7189c7; font-size: @F_10@; }
 QToolButton#sidebar-toggle-button, QToolButton#window-minimize-button, QToolButton#window-close-button,
-QToolButton#window-maximize-button, QToolButton#window-pin-button {
+QToolButton#window-maximize-button, QToolButton#window-pin-button, QToolButton#window-dark-button {
     width: 29px; height: 29px; border: none; border-radius: 8px; background: transparent;
     color: #252a32; /* 深色系统下无 QSS color 会落到 palette 白字，白底上看不清 */
 }
 QToolButton#sidebar-toggle-button:hover { background: #f0f2f5; }
+QToolButton#window-dark-button:hover { background: #f0f2f5; }
+QToolButton#window-dark-button:checked { color: #ffffff; background: @ACCENT@; }
 QToolButton#view-toggle-button {
     min-height: 29px; padding: 0 9px; border: none; border-radius: 8px;
     background: transparent; color: #626a76; font-size: @F_11@; font-weight: 600;
 }
 QToolButton#view-toggle-button:hover { background: #f0f2f5; }
 QToolButton#view-toggle-button:checked { color: #ffffff; background: @ACCENT@; }
+/* 扩展视图（`chat_view`）的标题栏按钮：与 DSH 按钮同一语言，多一个图标。 */
+QToolButton#chat-view-button {
+    min-height: 29px; padding: 0 9px; border: none; border-radius: 8px;
+    background: transparent; color: #626a76; font-size: @F_11@; font-weight: 600;
+}
+QToolButton#chat-view-button:hover { background: #f0f2f5; }
+QToolButton#chat-view-button:checked { color: #ffffff; background: @ACCENT@; }
+QToolButton#chat-view-more-button {
+    width: 29px; height: 29px; border: none; border-radius: 8px; background: transparent;
+    color: #626a76;
+}
+QToolButton#chat-view-more-button:hover { background: #f0f2f5; }
+QToolButton#chat-view-more-button::menu-indicator { image: none; width: 0; }
 /* 圆角只由 phone-shell 画：QSS 从不裁剪子控件，方形白底会盖掉右下角
    （实测圆角外有 30 个不透明纯白像素的楔形）。栈页与 DSH 表面一律透明。 */
 QStackedWidget#chat-view-stack { background: transparent; }
 QWidget#chat-ai-view, QWidget#dsh-view { background: transparent; }
+/* 扩展视图槽位：内缩由布局给（见 window.CHAT_VIEW_INSET），表面保持透明，
+   mod 自己决定里面画什么。 */
+QFrame#chat-view-host { background: transparent; border: none; }
+QLabel#chat-view-error { color: #8b93a1; font-size: @F_12@; padding: 24px; }
 QFrame#dsh-header { background: transparent; border: none; border-bottom: 1px solid #f0f1f4; }
 QLabel#dsh-status { color: #53606d; font-size: @F_11@; }
 QLabel#dsh-status[state="error"] { color: #cf3f38; }
@@ -214,6 +233,103 @@ QScrollBar::handle:vertical:hover { background: #adb3bd; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
 
+#: 深色覆盖表：**追加**在 `MODERN_QSS` 之后（同选择器后者胜），所以浅色那条
+#: 路径一个字节都没动。只覆盖对话窗自己的表面，设置窗/桌宠/快捷气泡不受影响。
+DARK_OVERRIDES = """
+QDialog#chat-window { color: #e6e8ec; }
+QFrame#phone-shell { background: #16181d; border: 1px solid #2a2f39; }
+QFrame#deepseek-sidebar { background: #12141a; border-right: 1px solid #262b36; }
+QFrame#deepseek-sidebar[overlayDrawer="true"] { border: 1px solid #2a2f39; border-left: none; }
+QFrame#sidebar-scrim { background: rgba(0, 0, 0, 150); }
+QLabel#brand-label { color: @ACCENT@; }
+QPushButton#new-conversation-button {
+    background: #1e222b; border: 1px solid #333947; color: #e6e8ec;
+}
+QPushButton#new-conversation-button:hover { background: #252b36; border-color: #3f4757; color: @ACCENT@; }
+QLabel#session-section-title { color: #7b8494; }
+QListWidget#session-list { color: #c9d0da; }
+QListWidget#session-list::item:hover { background: #232833; }
+QListWidget#session-list::item:selected { background: #26314a; color: #9dc0ff; }
+QLabel#session-row-title { color: #c9d0da; }
+QLabel#session-row-title[archived="true"] { color: #6b7382; }
+QToolButton#session-more-button { color: #9aa3b0; }
+QToolButton#session-more-button:hover { background: #262b36; }
+QToolButton#archive-toggle-button { color: #9aa3b0; }
+QToolButton#archive-toggle-button:hover { background: #262b36; }
+QToolButton#follow-pet-button, QToolButton#delete-session-button, QToolButton#clear-session-button { color: #9aa3b0; }
+QToolButton#follow-pet-button:hover, QToolButton#delete-session-button:hover,
+QToolButton#clear-session-button:hover { background: #262b36; }
+QLabel#status-label { color: #aab2c0; }
+QLabel#status-label[state="error"] { color: #ff7a72; }
+QLabel#status-dot { color: #4cc98a; }
+QLabel#status-dot[state="busy"] { color: #e0a14a; }
+QLabel#provider-label { color: #7b8494; }
+QLabel#subtitle-label { color: #93abe0; }
+QFrame#chat-main { background: #16181d; }
+QFrame#chat-main-header { background: #16181d; border-bottom: 1px solid #262b36; }
+QLabel#title-label { color: #e6e8ec; }
+QToolButton#sidebar-toggle-button, QToolButton#window-minimize-button,
+QToolButton#window-close-button, QToolButton#window-maximize-button,
+QToolButton#window-pin-button, QToolButton#window-dark-button { color: #d7dce6; }
+QToolButton#sidebar-toggle-button:hover, QToolButton#window-minimize-button:hover,
+QToolButton#window-maximize-button:hover, QToolButton#window-pin-button:hover,
+QToolButton#window-dark-button:hover { background: #262b36; }
+QToolButton#window-close-button:hover { background: #5a2727; }
+QToolButton#view-toggle-button, QToolButton#chat-view-button, QToolButton#chat-view-more-button { color: #aab2c0; }
+QToolButton#view-toggle-button:hover, QToolButton#chat-view-button:hover,
+QToolButton#chat-view-more-button:hover { background: #262b36; }
+QToolButton#view-toggle-button:checked, QToolButton#chat-view-button:checked { color: #ffffff; background: @ACCENT@; }
+QLabel#chat-view-error { color: #8b93a1; }
+QFrame#dsh-header { border-bottom: 1px solid #262b36; }
+QLabel#dsh-status { color: #aab2c0; }
+QLabel#dsh-status[state="error"] { color: #ff7a72; }
+QLabel#dsh-user { background: #232833; color: #e6e8ec; }
+QLabel#dsh-assistant { color: #e6e8ec; }
+QFrame#dsh-tool, QFrame#dsh-approval { background: #1c2029; border: 1px solid #2c323d; }
+QLabel#dsh-tool-title { color: #e6e8ec; }
+QLabel#dsh-tool-title[state="error"] { color: #ff7a72; }
+QLabel#dsh-tool-detail { color: #a3abb8; }
+QLabel#dsh-thinking { color: #a3abb8; }
+QLabel#dsh-error { color: #ff7a72; }
+QFrame#dsh-composer { background: #16181d; border-top: 1px solid #262b36; }
+QPlainTextEdit#dsh-input {
+    color: #e6e8ec; background: #1b1f27; border: 1px solid #333947;
+}
+QPushButton#dsh-retry, QPushButton#dsh-stop, QPushButton#dsh-context, QPushButton#dsh-new,
+QPushButton#dsh-deny { background: #262b36; color: #e6e8ec; }
+QPushButton#dsh-retry:hover, QPushButton#dsh-stop:hover, QPushButton#dsh-context:hover,
+QPushButton#dsh-new:hover, QPushButton#dsh-deny:hover { background: #2f3644; }
+QPushButton#dsh-allow:disabled, QPushButton#dsh-deny:disabled { background: #262b36; color: #6b7382; }
+QScrollArea#message-scroll, QScrollArea#message-scroll QWidget#qt_scrollarea_viewport,
+QWidget#message-view, QWidget#message-timeline { background: #16181d; }
+QLabel#empty-state { color: #6f7887; }
+QFrame#message-surface[role="user"] { background: #232833; }
+QFrame#message-bubble[state="stopped"] { background: #1c2029; }
+QFrame#message-surface[state="error"] {
+    border: 1px solid #5a2a2a; background: #2a1c1c;
+}
+QFrame#message-surface[state="error"] QLabel#bubble-body { color: #ff9b93; }
+QLabel#bubble-body { color: #e6e8ec; }
+QLabel#bubble-status { color: #e0a14a; }
+QFrame#message-tools QToolButton { color: #c9d0da; }
+QFrame#message-tools QToolButton:hover { background: #262b36; }
+QFrame#floating-composer { background: #16181d; }
+QFrame#chat-composer { background: #1b1f27; border: 1px solid #333947; }
+QFrame#attachment-chip { background: #1e222b; border: 1px solid #333947; }
+QFrame#attachment-chip:hover { background: #252b36; border-color: #3f4757; }
+QLabel#attachment-preview { background: #11131a; border: 1px solid #333947; }
+QLabel#attachment-name { color: #d7dce6; }
+QLabel#attachment-meta { color: #8b93a1; }
+QPlainTextEdit#chat-input { color: #e6e8ec; }
+QLabel#composer-hint { color: #7b8494; }
+QLabel#composer-partial { color: #9aa3b4; }
+QToolButton#composer-attach-button, QToolButton#composer-record-button { color: #c9d0da; }
+QToolButton#composer-attach-button:hover, QToolButton#composer-record-button:hover { background: #262b36; }
+QToolButton#send-button:disabled { background: #33405c; }
+QScrollBar::handle:vertical { background: #3a414f; }
+QScrollBar::handle:vertical:hover { background: #4b5364; }
+"""
+
 
 def safe_accent(value: object, default: str = DEFAULT_ACCENT) -> str:
     """Theme accents come from config/manifests: only ``#RRGGBB`` is accepted."""
@@ -250,8 +366,13 @@ def modern_stylesheet(
     font_size: int = DEFAULT_FONT_SIZE,
     overlay: str = "",
     font_family: str = "",
+    dark: bool = False,
 ) -> str:
-    """Accent/font-substituted modern QSS plus an optional translucent overlay."""
+    """Accent/font-substituted modern QSS plus an optional translucent overlay.
+
+    ``dark=True`` 只是在浅色表后面追加 :data:`DARK_OVERRIDES`：浅色路径的行为与
+    字节都不变，深色出错时删掉那一段就回到原样。
+    """
     color = safe_accent(accent)
     size = clamp_font_size(font_size)
     sheet = MODERN_QSS.replace("@ACCENT@", color).replace("@FONT_SIZE@", str(size))
@@ -259,4 +380,6 @@ def modern_stylesheet(
         lambda match: str(_scaled_font_size(size, int(match.group(1)))), sheet
     )
     sheet = sheet.replace("@FONT_FAMILY@", safe_font_family(font_family))
+    if dark:
+        sheet += DARK_OVERRIDES.replace("@ACCENT@", color)
     return sheet + (overlay or "")

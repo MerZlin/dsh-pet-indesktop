@@ -71,7 +71,7 @@ Name: "mod_weather"; Description: "天气（tool.weather，需联网）"; GroupD
 Name: "mod_filereader"; Description: "文件解读（tool.file-reader，需 API）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 Name: "mod_agent"; Description: "Agent 联动（ai.agent，需 DSH 桥接或自写事件）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 Name: "mod_qq"; Description: "QQ 互通（im.qq，Beta：需自备 OneBot 网关 NapCat/Lagrange）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
-Name: "mod_aibrowser"; Description: "AI 浏览器（tool.ai-browser，只开国模 AI 站点；本安装包无内嵌内核时用 Edge 应用窗口）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
+Name: "mod_aibrowser"; Description: "AI 网页（tool.ai-browser：在 AI 对话窗里内嵌网页版 AI，需 Edge WebView2 运行时）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 
 [Files]
 Source: "{#MySourceDist}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -134,4 +134,59 @@ begin
     Result := Previous
   else
     Result := ExpandConstant('{localappdata}\Programs\dsh-pet-core');
+end;
+
+{ 「AI 网页」扩展（tool.ai-browser）的网页由系统的 Edge WebView2 渲染。
+  Win11 一般自带；缺失时**不阻塞安装**，只在「准备安装」页提示一句，
+  应用内的扩展设置页有「打开微软下载页」+「重试」。 }
+function WebView2Present(): Boolean;
+begin
+  Result :=
+    RegKeyExists(HKEY_LOCAL_MACHINE,
+      'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') or
+    RegKeyExists(HKEY_LOCAL_MACHINE,
+      'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') or
+    RegKeyExists(HKEY_CURRENT_USER,
+      'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}');
+end;
+
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
+  MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+var
+  Parts: String;
+begin
+  { 逐段拼回默认内容，只在末尾追加一条 WebView2 提示：自己覆盖这个函数时
+    漏掉任何一段，用户的「准备安装」页就会少一块信息。 }
+  Parts := '';
+  if MemoUserInfoInfo <> '' then
+    Parts := MemoUserInfoInfo;
+  if MemoDirInfo <> '' then
+  begin
+    if Parts <> '' then Parts := Parts + NewLine + NewLine;
+    Parts := Parts + MemoDirInfo;
+  end;
+  if MemoGroupInfo <> '' then
+  begin
+    if Parts <> '' then Parts := Parts + NewLine + NewLine;
+    Parts := Parts + MemoGroupInfo;
+  end;
+  if MemoComponentsInfo <> '' then
+  begin
+    if Parts <> '' then Parts := Parts + NewLine + NewLine;
+    Parts := Parts + MemoComponentsInfo;
+  end;
+  if MemoTasksInfo <> '' then
+  begin
+    if Parts <> '' then Parts := Parts + NewLine + NewLine;
+    Parts := Parts + MemoTasksInfo;
+  end;
+  if not WebView2Present() then
+  begin
+    if Parts <> '' then Parts := Parts + NewLine + NewLine;
+    Parts := Parts +
+      '提示：未检测到 Microsoft Edge WebView2 运行时。' + NewLine +
+      '「AI 网页」扩展需要它才能显示网页（不影响安装与其它功能）；' + NewLine +
+      '缺省时可在「设置 → 扩展管理 → AI 网页」里点「打开微软下载页」安装。';
+  end;
+  Result := Parts;
 end;

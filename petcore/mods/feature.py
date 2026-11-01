@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__, paths
-from ..contracts.contributions import Contribution, SettingsPageSpec
+from ..contracts.contributions import ChatViewSpec, Contribution, SettingsPageSpec
 from ..contracts.feature import FeatureDefinition, Runtime
 from ..contracts.host import HostPorts
 from .manifest import MOD_FILE, load_manifest, path_within
@@ -218,6 +218,52 @@ class FeatureManager:
                 if contribution.kind == "menu":
                     items.append((feature, contribution))
         return items
+
+    def chat_views(self) -> list[ChatViewSpec]:
+        """收集 `chat_view` 贡献（按 order 排序，`owner:id` 去重）。
+
+        缺 `label` 或缺 widget 工厂的贡献跳过并记一条日志——契约要求两者成对，
+        但一个扩展写错不该让其它扩展的视图一起消失。
+        """
+        specs: list[ChatViewSpec] = []
+        seen: set[str] = set()
+        for owner in sorted(self.features):
+            feature = self.features[owner]
+            definition = feature.definition
+            factories = dict(definition.view_factories or {})
+            for contribution in definition.contributions:
+                if contribution.kind != "chat_view":
+                    continue
+                label = str(contribution.data.get("label") or "").strip()
+                factory = factories.get(contribution.id)
+                view_id = f"{owner}:{contribution.id}"
+                if not label or not callable(factory):
+                    logger.warning(
+                        "chat view %s skipped: %s",
+                        view_id,
+                        "missing label" if not label else "missing view factory",
+                    )
+                    continue
+                if view_id in seen:
+                    continue
+                try:
+                    order = int(contribution.data.get("order") or 500)
+                except (TypeError, ValueError):
+                    order = 500
+                seen.add(view_id)
+                specs.append(
+                    ChatViewSpec(
+                        id=view_id,
+                        owner=owner,
+                        view_id=contribution.id,
+                        label=label,
+                        factory=factory,
+                        icon=str(contribution.data.get("icon") or ""),
+                        order=order,
+                    )
+                )
+        specs.sort(key=lambda spec: (spec.order, spec.owner, spec.view_id))
+        return specs
 
     def settings_pages(self) -> list[SettingsPageSpec]:
         pages: list[SettingsPageSpec] = []

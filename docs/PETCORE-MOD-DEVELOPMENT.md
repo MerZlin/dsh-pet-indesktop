@@ -1,6 +1,6 @@
 # petcore 扩展制作指南（从零到一个能装进设置页的 mod）
 
-**基线**：petcore `0.2.0`、`api_version = "1"`、`schema = 1`（2026-10-27）。
+**基线**：petcore `0.4.0`、`api_version = "1"`、`schema = 1`（2026-11-01）。
 本文是**动手向**指南：怎么建目录、每个文件写什么、装到哪、怎么验证。
 读者有两类，命令不同：库里开发者用 `.venv/Scripts/python -m petcore …`；**只装了安装包的人走 GUI**（见 §7.1，窗口化 exe 的 `mods` 子命令看不到输出）。
 字段/端口的完整参考不在这里重复：
@@ -10,7 +10,8 @@
 | `mod.json` 每个字段与报错原文、能力模型、安装器细节 | [`PETCORE-MOD-FORMAT.md`](PETCORE-MOD-FORMAT.md) |
 | 角色包目录、动画分类、manifest、帧序列采纳规则 | [`PETCORE-CHARACTER-PACKS.md`](PETCORE-CHARACTER-PACKS.md) |
 | 动画素材怎么画/怎么抠像成 640×360 透明 WebM | [`ASSET-PIPELINE.md`](ASSET-PIPELINE.md) |
-| 10 个可抄的官方样板（待办/报时/抽签/AI 对话…） | [`../examples/petcore-mods/README.md`](../examples/petcore-mods/README.md) |
+| 10 个可抄的官方样板（待办/报时/抽签/AI 对话/网页 AI…） | [`../examples/petcore-mods/README.md`](../examples/petcore-mods/README.md) |
+| **把这本手册丢给你的 AI** 让它代写扩展（自包含提示词） | [`PETCORE-MOD-AI-GUIDE.md`](PETCORE-MOD-AI-GUIDE.md) |
 | core 内部分层与启动路径 | [`PETCORE-ARCHITECTURE.md`](PETCORE-ARCHITECTURE.md) |
 
 ---
@@ -322,11 +323,13 @@ class TimerPage(SettingsPage):
 | 设置里多一页 | `Contribution(kind="settings_page", id=..., data={...})` + `settings_factory` | `title`、`order` |
 | 让菜单项能被执行 | runtime 的 `self.commands = {"<command>": callable}` | **不是** `Contribution(kind="command")`，那个没人读 |
 | 命令要知道是哪只桌宠 | 命令声明 `slot` 形参即可（`def greet(self, slot=None)`） | core 会按发起菜单的桌宠传 `slot` |
+| **对话窗里占一页** | `Contribution(kind="chat_view", id=..., data={...})` + `view_factories` | `label`（必填）、`icon`、`order`；见 §4.2 |
 | 内嵌进 Core 页面 | `data={"host_page": "interaction"}` 且 `owner` 在 `CORE_FEATURE_IDS` | 仅 core 内置 feature 用得上 |
 
-当前**真正被消费的 contribution 只有 `menu` 与 `settings_page`**。
-`command / hotkey / card / phrases / sound / theme / seasonal / install_hook` 虽在
-`CONTRIBUTION_KINDS` 白名单里，但没有任何消费点——写了不会生效。
+当前**真正被消费的 contribution 是 `menu`、`settings_page` 与 `chat_view`**。
+`command / hotkey / card / install_hook` 虽在 `CONTRIBUTION_KINDS` 白名单里，但没有任何
+消费点——写了不会生效；`phrases / sound / theme / seasonal` 由 loader 的内容块处理，
+更推荐直接写在 `mod.json` 里。
 
 菜单项注册后的 id 是 `<owner>:<contribution>`。默认只出现在右键菜单的
 「扩展 → <manifest 里的 name_zh / name / id> → 你的菜单项」这一层里（分组标题取 manifest 的名字）。
@@ -354,17 +357,20 @@ class TimerPage(SettingsPage):
 写扩展前必须知道的三条实测结论（不是推断，证据见
 [`PR-REPORT-AI-BROWSER-MOD-2026-10-27.md`](PR-REPORT-AI-BROWSER-MOD-2026-10-27.md)）：
 
-1. **窗口不是端口，但事实上能造。** 官方样板 `fun.divination/host/runtime.py` 就在命令里
-   `from .panel import DivinationCard` 再 `show()`；新样板 `tool.ai-browser` 同样在命令里
-   惰性导入 `QMainWindow`。`给AI的说明.md` §7 的「自定义 Qt 窗口做不到」应理解为
-   **core 不提供窗口端口/生命周期治理**（置顶、跟随桌宠、多宠归属都得自己做），不是技术上不能。
-   第三方要自造窗口时：把 Qt 代码单独放一个模块、只在 GUI 线程命令里惰性导入，
-   窗口对象自己持引用（`_WINDOW`），关闭时自己存几何。
+1. **窗口不是端口，但事实上能造；对话窗里的「一页」则有正式接口。**
+   要独立窗口：官方样板 `fun.divination/host/runtime.py` 就在命令里惰性导入 `QDialog` 再 `show()`。
+   core 不提供窗口端口/生命周期治理（置顶、跟随桌宠、多宠归属都得自己做），所以**别自己再造聊天窗**；
+   要占对话窗的一页，用 §4.2 的 `chat_view`——窗口 chrome、圆角、airspace、深色与生命周期
+   都由 core 负责，扩展只交一个 QWidget。
+   自造窗口时：Qt 代码单独成模块、只在 GUI 线程命令里惰性导入，窗口对象自己持引用
+   （`_WINDOW`），关闭时自己存几何。
 2. **宿主有没有某个 Qt 模块，取决于它怎么打包，不取决于你的 `mod.json`。** PyInstaller
-   产物只收被静态分析到/显式声明的模块：本机安装包 `_internal/PySide6/` 里**没有**
-   `QtWebEngine*`，而 `.venv` 里装了。同一个扩展因此在源码环境能内嵌 Chromium、
-   在安装包里只能降级。写法：`importlib.util.find_spec("PySide6.QtWebEngineWidgets")`
-   探测 → 不可用就走外部通道，并在设置页显示当前档位（`tool.ai-browser/host/engine.py`）。
+   产物只收被静态分析到/显式声明的模块。0.4.0 起安装包**有** `PySide6.QtWebView`
+   （`Qt6WebView.dll` + `plugins/webview/qtwebview_webview2.dll`，见
+   `scripts/slim_bundle.py` 的 `REQUIRED_GLOBS`），**没有** `QtWebEngine*`（200MB 的
+   Chromium 整套没打）。写法：`importlib.util.find_spec("PySide6.QtWebView")` 探测 →
+   不可用就别声明依赖它的功能，并在设置页显示当前档位
+   （`tool.ai-browser/host/engine.py`）。
 3. **`capabilities` 只是声明。** `network.request` / `process.spawn` 不产生端口、不产生闸门，
    也没有沙箱：`tool.ai-browser` 用标准库 `subprocess` 直接拉 Edge `--app` 也在运行。
    声明照写（便于阅读与将来审计），但不要指望它替你兜底。
@@ -372,6 +378,53 @@ class TimerPage(SettingsPage):
 设置页容器还有一条几何事实：页面内容在 `QScrollArea` 里、默认阅读宽度 860
 （`content_max_width=None` 可放开）。**把 webview 塞进设置页不可用**——浏览器类 UI
 必须自造窗口。
+
+---
+
+### 4.2 对话窗里加一页：`chat_view`（0.4.0 起）
+
+网页 AI 就是这条缝的第一个客户：`Contribution(kind="chat_view")` 声明按钮，
+`FeatureDefinition.view_factories` 交一个 QWidget。
+
+```python
+# factory.py
+def build_view():
+    from .my_view import MyView      # Qt 只在真正切过去时导入
+    return MyView()
+
+Contribution(kind="chat_view", id="mine",
+             data={"label": "我的面板", "icon": "globe", "order": 100})
+FeatureDefinition(..., view_factories={"mine": build_view})
+```
+
+```python
+# my_view.py（四个生命周期方法全部可选）
+from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout
+
+class MyView(QWidget):
+    def __init__(self):
+        super().__init__()
+        box = QVBoxLayout(self)
+        box.addWidget(QLabel("我的一页"))
+
+    def activate(self):        # 切到这一页：恢复轮询/继续加载
+        ...
+    def deactivate(self):      # 切走：停加载、停定时器（别在后台烧 CPU）
+        ...
+    def set_dark(self, dark):  # 对话窗深色开关变化
+        ...
+    def shutdown(self):        # 对话窗关闭：释放页面
+        ...
+```
+
+菜单一键切过去：`self.ports.chat.show_view(OWNER, "mine", pet_slot=slot)`——
+它会复用用户**正在用的那扇**对话窗，不会另开一个。
+
+铁律：工厂只在 GUI 线程、第一次切到该页时调用一次；工厂抛异常或返回非 QWidget 会显示
+错误占位（对话窗不会挂）；视图被放进内缩 12px 的槽位（原生子窗口不吃圆角裁剪）；
+每开一次对话窗都回到 AI 对话，**别指望你的页是默认页**。完整契约见
+[`PETCORE-MOD-FORMAT.md`](PETCORE-MOD-FORMAT.md) §5.2，参考实现
+`examples/petcore-mods/tool.ai-browser/host/web_pane.py`。
 
 ---
 
@@ -596,6 +649,9 @@ B. 你自己做的角色（推荐）
    `test_petcore_example_mods.py`（如果你改的是内置/示例包）。
 10. 若自造窗口：Qt 代码单独成模块、只在 GUI 线程的命令里惰性导入；窗口自己持引用、
     关闭时存几何/停定时器；**先探测宿主有无所需 Qt 模块**再决定是否降级（见 §4.1）。
+10.1 若用 `chat_view`：`label` 非空、`view_factories` 有同名工厂；视图实现 `deactivate()`
+    （至少停加载）；别在工厂里做耗时 IO；需要宿主 Qt 模块时先 `find_spec` 自检，
+    不可用就**不要**声明这个贡献（宁可没按钮，也别给用户一个点了必报错的入口）。
 11. 若新增 example 包：`packaging/petcore.iss` 要加默认不勾选的安装项，
    否则 `tests/test_petcore_installer_mods_opt_in.py` 会红。
 

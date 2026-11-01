@@ -142,9 +142,35 @@ def resolve_background_pixmap(config_value: str) -> QPixmap | None:
     return pixmap if not pixmap.isNull() else None
 
 
-def build_modern_custom_overlay_qss(accent: str, card_opacity: int = 84) -> str:
+def build_modern_custom_overlay_qss(
+    accent: str, card_opacity: int = 84, *, dark: bool = False
+) -> str:
     """Make the modern workspace surfaces translucent over a custom image."""
     alpha = round(255 * max(10, min(100, int(card_opacity))) / 100)
+    if dark:
+        return f"""
+QFrame#phone-shell, QFrame#chat-main {{ background: transparent; }}
+QFrame#deepseek-sidebar {{ background: rgba(18, 20, 26, 218); }}
+QFrame#chat-main-header {{ background: rgba(22, 24, 29, 218); }}
+QScrollArea#message-scroll,
+QScrollArea#message-scroll QWidget#qt_scrollarea_viewport,
+QWidget#message-view,
+QWidget#message-timeline {{ background: transparent; }}
+QFrame#floating-composer {{ background: transparent; }}
+QFrame#message-bubble {{ background: transparent; }}
+QFrame#message-surface {{
+    padding: 12px 16px;
+    border: 1px solid rgba(70, 78, 92, 150);
+    border-radius: 12px;
+    background: rgba(30, 34, 43, {alpha});
+}}
+QFrame#message-surface[role="user"] {{ background: rgba(38, 44, 57, {alpha}); }}
+QFrame#message-surface[state="error"] {{
+    border-color: rgba(190, 90, 82, 185);
+    background: rgba(48, 28, 28, {alpha});
+}}
+QFrame#chat-composer {{ background: rgba(27, 31, 39, 232); border-color: {accent}; }}
+"""
     return f"""
 QFrame#phone-shell, QFrame#chat-main {{ background: transparent; }}
 QFrame#deepseek-sidebar {{ background: rgba(248, 250, 253, 218); }}

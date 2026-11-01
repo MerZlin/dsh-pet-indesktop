@@ -68,6 +68,33 @@ def _draw(name: str, painter: QPainter, color: QColor) -> None:
         painter.drawLine(QPointF(6.1, 2.8), QPointF(6.1, 13.2))
         painter.drawLine(QPointF(3.8, 5.5), QPointF(4.7, 5.5))
         painter.drawLine(QPointF(3.8, 8.0), QPointF(4.7, 8.0))
+    elif name == "globe":
+        painter.drawEllipse(QPointF(8.0, 8.0), 5.8, 5.8)
+        painter.drawLine(QPointF(2.2, 8.0), QPointF(13.8, 8.0))
+        path.addEllipse(QRectF(5.4, 2.2, 5.2, 11.6))
+        painter.drawPath(path)
+    elif name == "moon":
+        outer = QPainterPath()
+        outer.addEllipse(QRectF(3.0, 2.0, 10.0, 12.0))
+        inner = QPainterPath()
+        inner.addEllipse(QRectF(6.6, 0.4, 10.0, 12.0))
+        painter.drawPath(outer.subtracted(inner))
+    elif name == "sun":
+        painter.drawEllipse(QPointF(8.0, 8.0), 3.2, 3.2)
+        for dx, dy in (
+            (0.0, -1.0),
+            (0.0, 1.0),
+            (-1.0, 0.0),
+            (1.0, 0.0),
+            (0.7, -0.7),
+            (0.7, 0.7),
+            (-0.7, -0.7),
+            (-0.7, 0.7),
+        ):
+            painter.drawLine(
+                QPointF(8.0 + dx * 4.7, 8.0 + dy * 4.7),
+                QPointF(8.0 + dx * 6.4, 8.0 + dy * 6.4),
+            )
     elif name == "send":
         painter.drawPolygon(
             QPolygonF(

@@ -11,7 +11,7 @@
 - `tool.ocr`：截图 OCR（本地引擎 / 已配置 AI 兜底）
 - `tool.weather`：天气实况（中国天气网直连 + open-meteo 代理兜底）
 - `tool.file-reader`：拖文件解读（读文本类文件 → AI 摘要，只读不删）
-- `tool.ai-browser`：1.0.0：只开国模 AI 对话站的轻量浏览器（DeepSeek/豆包/千问/Kimi/文心/智谱/元宝/星火；地址栏、站点按钮与主框架跳转共用白名单；宿主无内嵌 Chromium 时自动降级 Edge 应用窗口/系统浏览器）
+- `tool.ai-browser`：2.0.0：**对话窗里的网页 AI**（`chat_view` 样板）。在 AI 对话窗标题栏加一页「网页 AI」，`QStackedWidget` 换站点保住登录态；站点表 DeepSeek/豆包/千问/Kimi/文心/智谱/元宝/星火 + 用户自定义（`名称 | URL`）；QtWebView + Edge WebView2（宿主没打包 QtWebView 时**不贡献**按钮，不留死入口）。菜单「AI 网页」= `chat.show_view` 切到正在用的那扇对话窗
 - `ai.agent`：Agent 联动（读 DSH 桥目录 / `agent-events/*.jsonl`，六态动画 + 进度气泡 + 完成通知）
 
 > 实现、自动化和实机验收分别记账，见

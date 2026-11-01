@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -50,6 +53,8 @@ from .widgets import (
     _initial,
 )
 
+logger = logging.getLogger("petcore.ui.chat.window")
+
 FLUSH_INTERVAL_MS = 50
 COMPACT_WIDTH = 880
 SIDEBAR_WIDTH = 238
@@ -57,6 +62,11 @@ SHELL_MARGIN = 7
 #: 必须与 QSS ``QFrame#phone-shell`` 的 ``border-radius: 14px`` 一致：
 #: 两处不一致时壁纸裁剪会露出一角白边。
 SHELL_RADIUS = 14.0
+#: 扩展视图的统一内缩：原生子窗口（QWebView/QWindowContainer）不会被圆角 mask
+#: 裁掉，12px 内缩在几何上已落在 14px 圆弧内侧。
+CHAT_VIEW_INSET = 12
+#: 标题栏内联的扩展视图按钮上限，多出来的进 ``»`` 菜单。
+MAX_INLINE_VIEW_BUTTONS = 2
 #: 跟随桌宠时与身体框的间距；40ms 的单次合并定时器避免 60Hz 移动时反复重排。
 FOLLOW_GAP = 14
 FOLLOW_COALESCE_MS = 40
@@ -81,6 +91,11 @@ class ChatWindow(QDialog):
     #: 用户切了 AI/DSH 视图：controller 据此把「当前会话」切到同通道的会话，
     #: 否则关掉 DSH 后输入框仍往 DSH 会话里写（实测过的错位）。
     view_changed = Signal(str)
+    #: 任意视图切换（含扩展的 ``chat_view``）。``view_changed`` 只发 ai/dsh，
+    #: 因为那条信号会切换会话通道；扩展视图不改通道。
+    view_activated = Signal(str)
+    #: 用户点了标题栏的深色按钮：controller 负责落盘 ``chat_dark_mode``。
+    dark_toggled = Signal(bool)
 
     def __init__(
         self,
@@ -99,6 +114,8 @@ class ChatWindow(QDialog):
         parent: QWidget | None = None,
         pet_window: QWidget | None = None,
         follow_pet: bool = False,
+        views=(),
+        dark: bool = False,
     ) -> None:
         super().__init__(parent)
         self.character_id = str(character_id or "default")
@@ -177,7 +194,15 @@ class ChatWindow(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
         self._provider = str(provider or "")
+        self._dark = bool(dark)
+        self._view_specs = list(views or ())
+        self._view_spec_map = {str(spec.id): spec for spec in self._view_specs}
+        self._view_pages: dict[str, QWidget] = {}
+        self._view_widgets: dict[str, QWidget] = {}
+        self._view_buttons: dict[str, QToolButton] = {}
+        self._current_view = "ai"
         self._build()
+        self._apply_icon_theme()
         self._connect()
         self._resolve_background()
         self._style()
@@ -367,6 +392,60 @@ class ChatWindow(QDialog):
         self._resolve_background()
         self._style()
 
+    # ---------------------------------------------------------------- 深色模式
+    def is_dark(self) -> bool:
+        return bool(self._dark)
+
+    def set_dark(self, dark: bool) -> None:
+        """切换对话窗深色模式；不落盘，由 controller 的 ``dark_toggled`` 负责。"""
+        dark = bool(dark)
+        if dark == self._dark:
+            self.dark_button.blockSignals(True)
+            self.dark_button.setChecked(dark)
+            self.dark_button.blockSignals(False)
+            return
+        self._dark = dark
+        self.dark_button.blockSignals(True)
+        self.dark_button.setChecked(dark)
+        self.dark_button.blockSignals(False)
+        self._style()
+        self._apply_icon_theme()
+        for widget in self._view_widgets.values():
+            self._apply_view_dark(widget)
+        self.update()
+
+    def _apply_icon_theme(self) -> None:
+        """自绘图标按底色换墨色：深色面板上默认墨色看不见。"""
+        dark = self._dark
+        self.sidebar_toggle_button.setIcon(
+            tool_icon(self.sidebar_toggle_button, "sidebar", 17, dark=dark)
+        )
+        self.dark_button.setIcon(
+            tool_icon(self.dark_button, "sun" if dark else "moon", 16, dark=dark)
+        )
+        self.dark_button.setToolTip(
+            "切回浅色（只影响对话窗）" if dark else "深色模式（只影响对话窗）"
+        )
+        self.pin_button.setIcon(tool_icon(self.pin_button, "pin", 16, dark=dark))
+        maximized = bool(self.isMaximized())
+        self.maximize_button.setIcon(
+            tool_icon(
+                self.maximize_button, "restore" if maximized else "maximize", 16, dark=dark
+            )
+        )
+        self.minimize_button.setIcon(
+            tool_icon(self.minimize_button, "minimize", 16, dark=dark)
+        )
+        self.close_button.setIcon(tool_icon(self.close_button, "exit", 16, dark=dark))
+        for view_id, button in self._view_buttons.items():
+            spec = self._view_spec_map.get(view_id)
+            icon = str(getattr(spec, "icon", "") or "") if spec is not None else ""
+            if icon:
+                button.setIcon(tool_icon(button, icon, 16, dark=dark))
+        more = getattr(self, "view_more_button", None)
+        if more is not None:
+            more.setIcon(tool_icon(more, "more", 16, dark=dark))
+
     def toggle_always_on_top(self) -> None:
         on = self.pin_button.isChecked()
         self.set_always_on_top(on)
@@ -421,9 +500,7 @@ class ChatWindow(QDialog):
         style = self.phone_shell.style()
         style.unpolish(self.phone_shell)
         style.polish(self.phone_shell)
-        self.maximize_button.setIcon(
-            tool_icon(self.maximize_button, "restore" if maximized else "maximize", 16)
-        )
+        self._apply_icon_theme()
         self.maximize_button.setToolTip("还原" if maximized else "最大化")
         self.maximize_button.setAccessibleName(
             "还原聊天窗口" if maximized else "最大化聊天窗口"
@@ -463,10 +540,16 @@ class ChatWindow(QDialog):
     def _style(self) -> None:
         overlay = ""
         if self._bg_pixmap is not None:
-            overlay = themes.build_modern_custom_overlay_qss(self.accent_color)
+            overlay = themes.build_modern_custom_overlay_qss(
+                self.accent_color, dark=self._dark
+            )
         self.setStyleSheet(
             modern_stylesheet(
-                self.accent_color, self._font_size, overlay, self._font_family
+                self.accent_color,
+                self._font_size,
+                overlay,
+                self._font_family,
+                dark=self._dark,
             )
         )
         self._set_background_surface_transparency(self._bg_pixmap is not None)
@@ -500,7 +583,7 @@ class ChatWindow(QDialog):
         clip = QPainterPath()
         clip.addRoundedRect(QRectF(target), SHELL_RADIUS, SHELL_RADIUS)
         painter.setClipPath(clip)
-        painter.fillPath(clip, QColor("#ffffff"))
+        painter.fillPath(clip, QColor("#15171c" if self._dark else "#ffffff"))
         dpr = float(self.devicePixelRatioF() or 1.0)
         if (
             self._bg_scaled is None
@@ -670,7 +753,15 @@ class ChatWindow(QDialog):
         self.view_button.setAccessibleName("切换 AI / DSH 对话")
         self.view_button.clicked.connect(self._on_view_toggled)
         title_layout.addWidget(self.view_button)
+        self._build_view_buttons(title_layout)
         title_layout.addWidget(self.sidebar_toggle_button)
+        self.dark_button = QToolButton(self.title_bar)
+        self.dark_button.setObjectName("window-dark-button")
+        self.dark_button.setCheckable(True)
+        self.dark_button.setChecked(self._dark)
+        self.dark_button.setToolTip("深色模式（只影响对话窗）")
+        self.dark_button.setAccessibleName("切换对话窗深色模式")
+        title_layout.addWidget(self.dark_button)
         self.pin_button = QToolButton(self.title_bar)
         self.pin_button.setObjectName("window-pin-button")
         self.pin_button.setIcon(tool_icon(self.pin_button, "pin", 16))
@@ -820,12 +911,167 @@ class ChatWindow(QDialog):
         self.set_view("dsh" if checked else "ai")
         self.view_changed.emit(self.current_view())
 
+    # ---------------------------------------------------------------- 扩展视图
+    def view_ids(self) -> list[str]:
+        """本窗口可用的扩展视图 id（``<owner>:<contribution id>``）。"""
+        return [str(spec.id) for spec in self._view_specs]
+
+    def show_view(self, view_id: str) -> bool:
+        """切到扩展视图；未知 id 返回 False 且不改当前页。"""
+        target = str(view_id or "")
+        if target not in self._view_spec_map:
+            return False
+        self.set_view(target)
+        return True
+
+    def _build_view_buttons(self, layout: QHBoxLayout) -> None:
+        if not self._view_specs:
+            return
+        inline = self._view_specs[:MAX_INLINE_VIEW_BUTTONS]
+        extra = self._view_specs[MAX_INLINE_VIEW_BUTTONS:]
+        for spec in inline:
+            button = self._make_view_button(spec, self.title_bar)
+            layout.addWidget(button)
+            self._view_buttons[str(spec.id)] = button
+        if not extra:
+            return
+        # 标题栏宽度有限（最小窗宽 560），多出来的视图进「»」菜单。
+        self.view_more_button = QToolButton(self.title_bar)
+        self.view_more_button.setObjectName("chat-view-more-button")
+        self.view_more_button.setIcon(tool_icon(self.view_more_button, "more", 16))
+        self.view_more_button.setToolTip("更多视图")
+        self.view_more_button.setAccessibleName("更多对话视图")
+        menu = QMenu(self.view_more_button)
+        self.view_more_menu = menu
+        for spec in extra:
+            action = menu.addAction(str(spec.label))
+            action.triggered.connect(
+                lambda _checked=False, view_id=str(spec.id): self.set_view(view_id)
+            )
+        self.view_more_button.setMenu(menu)
+        self.view_more_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        layout.addWidget(self.view_more_button)
+
+    def _make_view_button(self, spec, parent) -> QToolButton:
+        button = QToolButton(parent)
+        button.setObjectName("chat-view-button")
+        button.setProperty("viewId", str(spec.id))
+        button.setCheckable(True)
+        button.setText(str(spec.label))
+        button.setToolTip(f"切换到{spec.label}")
+        button.setAccessibleName(f"切换到{spec.label}")
+        icon = str(getattr(spec, "icon", "") or "")
+        if icon:
+            button.setIcon(tool_icon(button, icon, 16, dark=self._dark))
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.clicked.connect(
+            lambda _checked=False, view_id=str(spec.id): self.set_view(view_id)
+        )
+        return button
+
+    def _ensure_view_page(self, view_id: str) -> QWidget | None:
+        """懒建扩展视图页；工厂抛异常时退化成错误占位，绝不带走对话窗。"""
+        page = self._view_pages.get(view_id)
+        if page is not None:
+            return page
+        spec = self._view_spec_map.get(view_id)
+        if spec is None:
+            return None
+        host = QFrame(self.view_stack)
+        host.setObjectName("chat-view-host")
+        box = QVBoxLayout(host)
+        # 内缩：原生子窗口（QWebView / QWindowContainer）不会被圆角 mask 裁掉。
+        box.setContentsMargins(CHAT_VIEW_INSET, 0, CHAT_VIEW_INSET, CHAT_VIEW_INSET)
+        box.setSpacing(0)
+        widget = None
+        try:
+            widget = spec.factory()
+        except Exception:  # noqa: BLE001 - 扩展崩溃隔离在这一个槽位里
+            logger.warning("chat view %s factory failed", view_id, exc_info=True)
+        if not isinstance(widget, QWidget):
+            if widget is not None:
+                logger.warning(
+                    "chat view %s factory returned %s, expected QWidget",
+                    view_id,
+                    type(widget).__name__,
+                )
+            widget = self._view_error_widget(spec)
+        box.addWidget(widget)
+        self.view_stack.addWidget(host)
+        self._view_pages[view_id] = host
+        self._view_widgets[view_id] = widget
+        self._apply_view_dark(widget)
+        return host
+
+    def _view_error_widget(self, spec) -> QWidget:
+        label = QLabel(
+            f"「{getattr(spec, 'label', '')}」视图加载失败\n可以让扩展作者查看日志。",
+            self.view_stack,
+        )
+        label.setObjectName("chat-view-error")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setWordWrap(True)
+        return label
+
+    def _call_view(self, view_id: str, hook: str) -> None:
+        widget = self._view_widgets.get(view_id)
+        if widget is None:
+            return
+        callback = getattr(widget, hook, None)
+        if not callable(callback):
+            return
+        try:
+            callback()
+        except Exception:  # noqa: BLE001 - 扩展的生命周期钩子失败只记日志
+            logger.warning("chat view %s %s failed", view_id, hook, exc_info=True)
+
+    def _apply_view_dark(self, widget) -> None:
+        callback = getattr(widget, "set_dark", None)
+        if not callable(callback):
+            return
+        try:
+            callback(bool(self._dark))
+        except Exception:  # noqa: BLE001
+            logger.warning("chat view set_dark failed", exc_info=True)
+
+    def _deactivate_view(self, view_id: str) -> None:
+        if not view_id:
+            return
+        if view_id == "dsh":
+            self.dsh_view.deactivate()
+            return
+        self._call_view(view_id, "deactivate")
+
+    def _shutdown_view(self, view_id: str) -> None:
+        """关窗：让扩展视图停加载并释放页面（网页不该在后台继续跑脚本）。"""
+        if not view_id or view_id in ("ai", "dsh"):
+            return
+        self._call_view(view_id, "shutdown")
+
     def set_view(self, view: str) -> None:
-        dsh = str(view or "").lower() == "dsh"
-        if dsh and not self._dsh_enabled:
-            # 第一次点 DSH 就等于打开模式：侧栏 DSH 分组随之出现。
-            self.set_dsh_enabled(True)
-        self.view_stack.setCurrentWidget(self.dsh_view if dsh else self.ai_view)
+        requested = str(view or "").strip()
+        lowered = requested.lower()
+        key = lowered if lowered in ("ai", "dsh") else requested
+        page: QWidget | None = None
+        if key == "dsh":
+            if not self._dsh_enabled:
+                # 第一次点 DSH 就等于打开模式：侧栏 DSH 分组随之出现。
+                self.set_dsh_enabled(True)
+            page = self.dsh_view
+        elif key in self._view_spec_map:
+            page = self._ensure_view_page(key)
+            if page is None:
+                key = "ai"
+        if page is None:
+            key, page = "ai", self.ai_view
+        previous = str(self._current_view)
+        if previous != key:
+            self._deactivate_view(previous)
+        self._current_view = key
+        self.view_stack.setCurrentWidget(page)
+        dsh = key == "dsh"
         self.view_button.blockSignals(True)
         self.view_button.setChecked(dsh)
         self.view_button.blockSignals(False)
@@ -833,8 +1079,29 @@ class ChatWindow(QDialog):
         self.view_button.setToolTip("切回 AI 对话" if dsh else "切换到 DSH 对话")
         if dsh:
             self.dsh_view.activate()
-        else:
+        elif key == "ai":
             self.dsh_view.deactivate()
+        if key in self._view_widgets:
+            self._call_view(key, "activate")
+        self._sync_view_buttons()
+        self._sync_view_vs_drawer()
+        if previous != key:
+            self.view_activated.emit(key)
+
+    def _sync_view_buttons(self) -> None:
+        for view_id, button in self._view_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(view_id == self._current_view)
+            button.blockSignals(False)
+
+    def _sync_view_vs_drawer(self) -> None:
+        """紧凑宽度下侧栏是覆盖层：原生子窗口盖在抽屉上面（airspace），临时隐藏。"""
+        if not self._view_pages:
+            return
+        current = self.view_stack.currentWidget()
+        hidden = bool(self._compact_layout and self.sidebar.isVisible())
+        for page in self._view_pages.values():
+            page.setVisible(bool(page is current) and not hidden)
 
     def dsh_enabled(self) -> bool:
         return bool(self._dsh_enabled)
@@ -856,7 +1123,7 @@ class ChatWindow(QDialog):
         self._restore_active_row()
 
     def current_view(self) -> str:
-        return "dsh" if self.view_stack.currentWidget() is self.dsh_view else "ai"
+        return str(self._current_view)
 
     def _use_dsh_context(self, text: str) -> None:
         self.set_view("ai")
@@ -867,6 +1134,7 @@ class ChatWindow(QDialog):
         self.minimize_button.clicked.connect(self.showMinimized)
         self.close_button.clicked.connect(self.close)
         self.pin_button.clicked.connect(self.toggle_always_on_top)
+        self.dark_button.toggled.connect(self._on_dark_toggled)
         self.new_session_button.clicked.connect(self._on_new)
         self.archive_button.toggled.connect(self._on_archived_toggled)
         self.clear_button.clicked.connect(self._on_clear)
@@ -882,6 +1150,10 @@ class ChatWindow(QDialog):
     def is_showing_archived(self) -> bool:
         return bool(self._show_archived)
 
+    def _on_dark_toggled(self, checked: bool) -> None:
+        self.set_dark(bool(checked))
+        self.dark_toggled.emit(bool(checked))
+
     def _style_group_header(self, item: QListWidgetItem, *, channel: bool) -> None:
         """组头字体分层：渠道组头比会话标题小一号，日期组头再小一号且不加粗。
 
@@ -893,7 +1165,10 @@ class ChatWindow(QDialog):
         font.setPixelSize(max(9, base - 2 if channel else base - 3))
         font.setWeight(QFont.Weight.DemiBold if channel else QFont.Weight.Normal)
         item.setFont(font)
-        item.setForeground(QColor("#5a6472" if channel else "#98a1ad"))
+        if self._dark:
+            item.setForeground(QColor("#c8cfda" if channel else "#8b93a1"))
+        else:
+            item.setForeground(QColor("#5a6472" if channel else "#98a1ad"))
 
     def set_history(self, sessions, current_id: str = "") -> None:
         sessions = list(sessions or [])
@@ -1055,12 +1330,14 @@ class ChatWindow(QDialog):
             return
         self._sidebar_open = not self.sidebar.isVisible()
         self.sidebar.setVisible(self._sidebar_open)
+        self._sync_view_vs_drawer()
 
     def close_sidebar(self) -> None:
         if not self._compact_layout:
             return
         self.sidebar.hide()
         self.sidebar_scrim.hide()
+        self._sync_view_vs_drawer()
 
     def _show_overlay_sidebar(self) -> None:
         if not self._compact_layout:
@@ -1070,6 +1347,7 @@ class ChatWindow(QDialog):
         self.sidebar_scrim.raise_()
         self.sidebar.show()
         self.sidebar.raise_()
+        self._sync_view_vs_drawer()
 
     def _position_overlay_sidebar(self) -> None:
         rect = self.phone_shell.rect()
@@ -1103,6 +1381,25 @@ class ChatWindow(QDialog):
             self.sidebar.style().polish(self.sidebar)
         if compact and self.sidebar.isVisible():
             self._position_overlay_sidebar()
+        self._apply_view_button_layout()
+        self._sync_view_vs_drawer()
+
+    def _apply_view_button_layout(self) -> None:
+        """紧凑宽度只留图标：标题栏按钮 + 标题在 560px 里放不下文字版。"""
+        for view_id, button in self._view_buttons.items():
+            spec = self._view_spec_map.get(view_id)
+            has_icon = bool(str(getattr(spec, "icon", "") or ""))
+            if self._compact_layout and has_icon:
+                button.setText("")
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            elif has_icon:
+                button.setText(str(getattr(spec, "label", "")))
+                button.setToolButtonStyle(
+                    Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+                )
+            else:
+                button.setText(str(getattr(spec, "label", "")))
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
 
     def _on_new(self) -> None:
         self.session_selected.emit("")
@@ -1584,6 +1881,8 @@ class ChatWindow(QDialog):
             self._sync_maximized()
             if self.current_view() == "dsh":
                 self.dsh_view.activate()
+            elif self.current_view() in self._view_widgets:
+                self._call_view(self.current_view(), "activate")
 
     def changeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().changeEvent(event)
@@ -1597,6 +1896,10 @@ class ChatWindow(QDialog):
         self._flush_timer.stop()
         self._follow_timer.stop()
         self.dsh_view.deactivate()
+        # 扩展视图也要停：网页不再加载/渲染，隐藏的窗口不该有后台开销。
+        current = self.current_view()
+        self._deactivate_view(current)
+        self._shutdown_view(current)
         self.closed.emit()
         self.hide()
         event.ignore()

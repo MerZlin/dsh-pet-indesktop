@@ -1,22 +1,21 @@
-"""运行时：无 Qt、无网络库，只做闸门与能力选择。
+"""运行时：无 Qt、无网络，只把菜单命令翻译成一次 ``ChatPort.show_view``。
 
-打开顺序：内嵌 Chromium（宿主有）→ Edge 应用窗口 → 系统默认浏览器。
-每一次降级都给气泡说明，不静默。
+视图本体在 ``web_pane.py``（由 core 托管），站点表在 ``sites.py``。这里保持
+无 Qt，才能在没有 GUI 的环境里被单测覆盖。
 """
 
 from __future__ import annotations
 
 import logging
-import tempfile
-from pathlib import Path
 
-from . import engine, external, sites
+from . import engine, sites
 
 OWNER = sites.OWNER
-log = logging.getLogger(OWNER)
-SETTING_ENABLED = "ai_browser_enabled"
+VIEW_ID = "web"
 SETTING_DEFAULT_SITE = "ai_browser_default_site"
-SETTING_EXTRA_DOMAINS = "ai_browser_extra_domains"
+SETTING_CUSTOM_SITES = "ai_browser_custom_sites"
+
+log = logging.getLogger(OWNER)
 
 
 class BrowserRuntime:
@@ -31,60 +30,25 @@ class BrowserRuntime:
     def stop(self) -> None:
         return None
 
-    # ---- 命令：菜单/热键触发，声明 slot 形参以便 core 传入发起菜单的那只桌宠
     def open(self, slot=None) -> None:
-        if not self._enabled():
-            self._say("AI 浏览器已在设置里关闭（设置 → 扩展管理 → AI 浏览器）")
+        """菜单「AI 网页」：打开对话窗并切到网页视图。"""
+        reason = engine.missing_reason()
+        if reason:
+            self._say(engine.missing_hint(reason), force=True)
             return
-        site = self._default_site()
-        extra = self._extra_domains()
-        if engine.engine_available():
-            try:
-                from .browser_window import open_browser
+        chat = getattr(self.ports, "chat", None)
+        show = getattr(chat, "show_view", None)
+        if not callable(show):
+            self._say("当前程序还没有对话窗视图接口，更新后再用网页 AI", force=True)
+            return
+        try:
+            opened = bool(show(OWNER, VIEW_ID, pet_slot=slot))
+        except Exception:  # noqa: BLE001 - 端口异常只提示，不冒泡
+            log.exception("chat.show_view failed")
+            opened = False
+        if not opened:
+            self._say("网页 AI 没能打开：扩展可能被停用，或宿主没有网页视图", force=True)
 
-                open_browser(
-                    self.storage_dir(),
-                    extra_domains=extra,
-                    default_site_id=site.id,
-                )
-                return
-            except Exception:
-                log.exception("embedded browser unavailable, falling back")
-        channel = external.open_external(site.url)
-        if channel == "edge":
-            self._say(f"当前程序未内置 Chromium 内核，已用 Edge 应用窗口打开 {site.name}")
-        elif channel == "system":
-            self._say(f"当前程序未内置 Chromium 内核，已交给系统浏览器打开 {site.name}")
-        else:
-            self._say("打不开浏览器：宿主没有内嵌内核，也没找到 Edge 或默认浏览器", force=True)
-
-    # ---- 配置
-    def _enabled(self) -> bool:
-        config = getattr(self.ports, "config", None)
-        if config is None:
-            return True
-        return bool(config.get(SETTING_ENABLED, True))
-
-    def _default_site(self) -> sites.Site:
-        config = getattr(self.ports, "config", None)
-        value = config.get(SETTING_DEFAULT_SITE, sites.DEFAULT_SITE_ID) if config else None
-        return sites.default_site(value)
-
-    def _extra_domains(self) -> tuple[str, ...]:
-        config = getattr(self.ports, "config", None)
-        value = config.get(SETTING_EXTRA_DOMAINS, "") if config else ""
-        return sites.normalize_extra(value)
-
-    def storage_dir(self) -> Path:
-        storage = getattr(self.ports, "storage", None)
-        if storage is not None:
-            try:
-                return Path(storage.data_dir(OWNER))
-            except Exception:
-                log.warning("storage port failed, using temp dir")
-        return Path(tempfile.gettempdir()) / "petcore-ai-browser"
-
-    # ---- 呈现
     def _say(self, text: str, *, force: bool = False) -> None:
         presentation = getattr(self.ports, "presentation", None)
         if presentation is None:
@@ -92,5 +56,5 @@ class BrowserRuntime:
             return
         try:
             presentation.say(text, force=force)
-        except Exception:
+        except Exception:  # noqa: BLE001
             log.warning("presentation.say failed", exc_info=True)

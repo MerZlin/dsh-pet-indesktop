@@ -160,6 +160,7 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "chat_always_on_top",
         "chat_follow_pet",
         "chat_dsh_mode",
+        "chat_dark_mode",
         "chat_background",
         "chat_accent",
         "chat_font_size",
@@ -365,6 +366,7 @@ DEFAULTS: dict[str, Any] = {
     "chat_always_on_top": False,
     "chat_follow_pet": False,
     "chat_dsh_mode": False,
+    "chat_dark_mode": False,
     "chat_background": "",
     "chat_accent": "",
     # 0 = 跟随 ui_font_size；字体族空 = 系统默认。两者只作用于对话窗。
@@ -1894,6 +1896,7 @@ class Config:
         )
         normalized["chat_follow_pet"] = _bool(normalized.get("chat_follow_pet"), False)
         normalized["chat_dsh_mode"] = _bool(normalized.get("chat_dsh_mode"), False)
+        normalized["chat_dark_mode"] = _bool(normalized.get("chat_dark_mode"), False)
         normalized["chat_background"] = str(
             normalized.get("chat_background") or ""
         ).strip()[:500]

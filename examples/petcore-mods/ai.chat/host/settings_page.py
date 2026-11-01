@@ -692,6 +692,15 @@ class AiChatPage(SettingsPage):
         )
         self._sync_font_rows()
 
+        self.dark_check = make_checkbox(self)
+        self.dark_check.setChecked(bool(self._initial.get("chat_dark_mode", False)))
+        self.dark_check.toggled.connect(self._on_changed)
+        card3.add_row(
+            "深色模式",
+            self.dark_check,
+            "只影响对话窗；与标题栏的月亮按钮是同一个开关，改动会立即预览。",
+        )
+
         self.follow_check = make_checkbox(self)
         self.follow_check.setChecked(bool(self._initial.get("chat_follow_pet", False)))
         self.follow_check.toggled.connect(self._on_changed)
@@ -927,6 +936,7 @@ class AiChatPage(SettingsPage):
             accent=self._accent_value(),
             always_on_top=bool(self.on_top_check.isChecked()),
             follow=bool(self.follow_check.isChecked()),
+            dark=bool(self.dark_check.isChecked()),
         )
 
     def _on_changed(self, *_args) -> None:
@@ -976,6 +986,7 @@ class AiChatPage(SettingsPage):
             else self.font_combo.currentFont().family(),
         )
         config.set("chat_font_size", int(self.chat_font_size.value()))
+        config.set("chat_dark_mode", bool(self.dark_check.isChecked()))
         config.set("chat_follow_pet", bool(self.follow_check.isChecked()))
         config.set("chat_always_on_top", bool(self.on_top_check.isChecked()))
         config.set(

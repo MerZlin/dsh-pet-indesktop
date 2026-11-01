@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""`tool.ai-browser` 扩展：纯逻辑、清单、加载与降级路径（不启动 Qt、不联网）。"""
+"""`tool.ai-browser` v2：站点表、清单、视图贡献与运行时闸门（不启动 Qt、不联网）。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PACK = ROOT / "examples" / "petcore-mods" / "tool.ai-browser"
 MOD_ID = "tool.ai-browser"
 PACKAGE = "petcore_feature_tool_ai_browser"
-NO_QT_MODULES = ("sites", "engine", "external", "runtime")
+NO_QT_MODULES = ("sites", "engine", "runtime")
+VIEW_READY = ("", "runtime")
 
 
 @pytest.fixture(scope="module")
@@ -27,9 +28,9 @@ def mod():
     factory = feature_mod.import_entrypoint(PACK, "host/__init__.py:create_host", MOD_ID)
     assert callable(factory)
     return types.SimpleNamespace(
+        factory=factory,
         sites=importlib.import_module(f"{PACKAGE}.sites"),
         engine=importlib.import_module(f"{PACKAGE}.engine"),
-        external=importlib.import_module(f"{PACKAGE}.external"),
         runtime=importlib.import_module(f"{PACKAGE}.runtime"),
     )
 
@@ -51,14 +52,42 @@ class _Presentation:
         return True
 
 
-def _runtime(mod, config=None):
+class _Chat:
+    def __init__(self, result=True, *, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def show_view(self, owner, view_id, *, pet_slot=None):
+        self.calls.append((owner, view_id, pet_slot))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class _Context:
+    def __init__(self, ports):
+        self.ports = ports
+        self.owner = MOD_ID
+        self.core_version = "0.4.0"
+        self.api_version = "1"
+        self.config = {}
+        self.events = None
+        self.host = None
+
+    def log(self, *args, **kwargs):
+        return None
+
+
+def _runtime(mod, config=None, chat=None):
     ports = types.SimpleNamespace(
         config=_Config(config),
         presentation=_Presentation(),
         storage=None,
         scheduler=None,
+        chat=chat,
     )
-    instance = mod.runtime.BrowserRuntime(types.SimpleNamespace(ports=ports))
+    instance = mod.runtime.BrowserRuntime(_Context(ports))
     return instance, ports
 
 
@@ -126,7 +155,42 @@ def test_is_allowed_rejects_non_http_schemes(mod):
     assert not mod.sites.is_allowed("ftp://www.kimi.com")
 
 
-# ---- 清单与加载
+# ---- 自定义站点
+
+
+def test_parse_custom_sites_accepts_pipes_and_bare_urls(mod):
+    parsed = mod.sites.parse_custom_sites(
+        "\n".join(
+            [
+                "自建 | http://127.0.0.1:3000",
+                "全角｜https://a.example.com",
+                "https://b.example.com/chat",
+                "坏行 | javascript:alert(1)",
+                "ftp | ftp://c.example.com",
+                "",
+            ]
+        )
+    )
+    assert [item.name for item in parsed] == ["自建", "全角", "b.example.com"]
+    assert [item.id for item in parsed] == ["custom1", "custom2", "custom3"]
+    assert parsed[0].url == "http://127.0.0.1:3000"
+    assert parsed[2].url == "https://b.example.com/chat"
+
+
+def test_bare_host_gets_https_and_keeps_host_allowlist(mod):
+    parsed = mod.sites.parse_custom_sites("我的 | my-ai.cn")
+    assert parsed and parsed[0].url == "https://my-ai.cn"
+    assert mod.sites.host_allowed("my-ai.cn", parsed[0].hosts)
+    assert mod.sites.host_allowed("sub.my-ai.cn", parsed[0].hosts)
+
+
+def test_all_sites_puts_builtins_first(mod):
+    combined = mod.sites.all_sites("x | https://x.example.com")
+    assert combined[0].id == "deepseek"
+    assert combined[-1].id == "custom1"
+
+
+# ---- 清单与视图贡献
 
 
 def test_manifest_is_valid_and_contributions_pair_up(mod):
@@ -137,6 +201,7 @@ def test_manifest_is_valid_and_contributions_pair_up(mod):
     assert manifest.kind == "feature"
     assert manifest.api_version == "1"
     assert manifest.entrypoint == "host/__init__.py:create_host"
+    assert manifest.version == "2.0.0"
 
     manager = feature_mod.FeatureManager(HostPorts())
     diagnostics = manager.load(
@@ -148,12 +213,24 @@ def test_manifest_is_valid_and_contributions_pair_up(mod):
     assert diagnostics == []
     features = list(manager.features.values())
     assert len(features) == 1
-    kinds = {item.kind for item in features[0].definition.contributions}
+    definition = features[0].definition
+    kinds = {item.kind for item in definition.contributions}
     assert {"menu", "settings_page"} <= kinds
     assert manager.command(MOD_ID, "open") is not None
+    # 宿主具备网页内核 → 才贡献 chat_view（宁可没按钮，也不给死入口）
+    if mod.engine.missing_reason() in VIEW_READY:
+        assert "chat_view" in kinds
+        specs = manager.chat_views()
+        assert [spec.id for spec in specs] == [f"{MOD_ID}:web"]
+        assert specs[0].label == "网页 AI"
+        assert specs[0].icon == "globe"
+        assert callable(specs[0].factory)
+    else:
+        assert "chat_view" not in kinds
+        assert manager.chat_views() == []
 
 
-def test_runtime_and_pure_modules_stay_free_of_qt_and_core_private_packages(mod):
+def test_runtime_and_pure_modules_stay_free_of_qt(mod):
     banned = re.compile(
         r"^\s*(?:from|import)\s+(?:PySide6|petcore\.(?:net|api|account|platform))\b",
         re.MULTILINE,
@@ -163,44 +240,79 @@ def test_runtime_and_pure_modules_stay_free_of_qt_and_core_private_packages(mod)
         assert banned.search(text) is None, name
 
 
-# ---- 运行时闸门与降级
+def test_view_module_is_never_imported_at_load_time(mod):
+    assert f"{PACKAGE}.web_pane" not in sys.modules
 
 
-def test_disabled_switch_only_says_so_and_never_opens_a_window(mod):
-    instance, ports = _runtime(mod, {"ai_browser_enabled": False})
+# ---- 引擎探针
+
+
+def test_missing_reason_layers(mod, monkeypatch):
+    monkeypatch.setattr(mod.engine, "platform_supported", lambda: False)
+    assert mod.engine.missing_reason() == "platform"
+    assert mod.engine.missing_hint("platform")
+
+    monkeypatch.setattr(mod.engine, "platform_supported", lambda: True)
+    monkeypatch.setattr(mod.engine, "engine_available", lambda: False)
+    assert mod.engine.missing_reason() == "engine"
+
+    monkeypatch.setattr(mod.engine, "engine_available", lambda: True)
+    monkeypatch.setattr(mod.engine, "runtime_version", lambda: "")
+    assert mod.engine.missing_reason() == "runtime"
+
+    monkeypatch.setattr(mod.engine, "runtime_version", lambda: "156.0.0")
+    assert mod.engine.missing_reason() == ""
+
+
+def test_user_data_dir_is_absolute_and_stable(mod, tmp_path):
+    target = mod.engine.ensure_user_data(tmp_path)
+    assert target == tmp_path / "webview2"
+    assert target.is_dir()
+
+
+# ---- 运行时闸门
+
+
+def test_open_without_engine_says_why_and_never_touches_chat(mod, monkeypatch):
+    chat = _Chat()
+    instance, ports = _runtime(mod, chat=chat)
+    monkeypatch.setattr(mod.engine, "missing_reason", lambda: "engine")
     instance.open(slot=0)
-    assert ports.presentation.calls
-    assert "关闭" in ports.presentation.calls[0][0]
-    assert f"{PACKAGE}.browser_window" not in sys.modules
+    text, force = ports.presentation.calls[0]
+    assert "QtWebView" in text and force is True
+    assert chat.calls == []
 
 
-def test_missing_engine_falls_back_to_edge_and_says_why(mod, monkeypatch):
-    instance, ports = _runtime(
-        mod,
-        {
-            "ai_browser_enabled": True,
-            "ai_browser_default_site": "kimi",
-        },
-    )
-    monkeypatch.setattr(mod.engine, "engine_available", lambda: False)
-    opened = {}
-
-    def fake_open(url):
-        opened["url"] = url
-        return "edge"
-
-    monkeypatch.setattr(mod.external, "open_external", fake_open)
+def test_open_without_port_says_update(mod, monkeypatch):
+    instance, ports = _runtime(mod, chat=None)
+    monkeypatch.setattr(mod.engine, "missing_reason", lambda: "")
     instance.open(slot=None)
-    assert opened["url"] == "https://www.kimi.com"
-    text = ports.presentation.calls[0][0]
-    assert "Edge" in text and "Kimi" in text
+    text, _force = ports.presentation.calls[0]
+    assert "视图接口" in text
 
 
-def test_missing_engine_and_missing_edge_reports_failure(mod, monkeypatch):
-    instance, ports = _runtime(mod, {"ai_browser_enabled": True})
-    monkeypatch.setattr(mod.engine, "engine_available", lambda: False)
-    monkeypatch.setattr(mod.external, "open_external", lambda url: "")
+def test_open_switches_the_chat_window_to_the_web_view(mod, monkeypatch):
+    chat = _Chat(result=True)
+    instance, ports = _runtime(mod, chat=chat)
+    monkeypatch.setattr(mod.engine, "missing_reason", lambda: "")
+    instance.open(slot=2)
+    assert chat.calls == [(MOD_ID, "web", 2)]
+    assert ports.presentation.calls == []
+
+
+def test_open_reports_a_refused_view(mod, monkeypatch):
+    chat = _Chat(result=False)
+    instance, ports = _runtime(mod, chat=chat)
+    monkeypatch.setattr(mod.engine, "missing_reason", lambda: "")
     instance.open(slot=None)
     text, force = ports.presentation.calls[0]
-    assert "打不开浏览器" in text
-    assert force is True
+    assert "没能打开" in text and force is True
+
+
+def test_open_swallows_port_errors(mod, monkeypatch):
+    chat = _Chat(error=RuntimeError("boom"))
+    instance, ports = _runtime(mod, chat=chat)
+    monkeypatch.setattr(mod.engine, "missing_reason", lambda: "")
+    instance.open(slot=None)
+    text, _force = ports.presentation.calls[0]
+    assert "没能打开" in text

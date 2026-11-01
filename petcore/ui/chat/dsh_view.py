@@ -137,8 +137,7 @@ class _Collapsible(QFrame):
         label.setObjectName("dsh-tool-detail")
         if mono:
             label.setStyleSheet(
-                "font-family:'Consolas','Courier New',monospace; "
-                "font-size:11px; color:#4a5260;"
+                "font-family:'Consolas','Courier New',monospace; font-size:11px;"
             )
         # 展开就是"我要看全部"：不再限高（`_BODY_MAX_HEIGHT` 会把长输出裁掉，
         # 用户报的「文本显示不全」刚修完，别在折叠区里再造一个）。

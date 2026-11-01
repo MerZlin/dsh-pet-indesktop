@@ -1,11 +1,12 @@
 """国模 AI 对话站点白名单：纯数据 + 纯函数（无 Qt、无网络、无磁盘）。
 
-宿主端口表里没有"窗口"，所以这个包自己开窗；站点表与判定留在本模块，
-才能在不启动 Qt 的前提下被单测覆盖。
+视图本体在 ``web_pane.py``，由 core 的对话窗托管（``chat_view`` 契约）；
+站点表与解析留在这里，才能在不启动 Qt 的前提下被单测覆盖。
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -206,3 +207,67 @@ def resolve_target(text: object, extra: object = ()) -> tuple[Site | None, str]:
 
 def default_site(site_id: object = None) -> Site:
     return site(site_id) or SITE_BY_ID[DEFAULT_SITE_ID]
+
+
+def _custom_site(name: str, url: str, index: int) -> Site | None:
+    parts = urlsplit(url)
+    if parts.scheme.lower() not in ("http", "https"):
+        return None
+    host = (parts.hostname or "").strip().lower()
+    if not host:
+        return None
+    return Site(
+        id=f"custom{index}",
+        name=name or host,
+        url=url,
+        hosts=(host,),
+        aliases=(name,) if name else (),
+    )
+
+
+_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
+
+
+def parse_custom_sites(value: object) -> tuple[Site, ...]:
+    """用户自定义站点：每行 ``名称 | URL``（也接受全角竖线与纯 URL）。
+
+    非法行（非 http/https、没有主机名）整行丢弃——半个坏地址不该把好站点一起废掉。
+    注意 ``javascript:alert(1)`` 这种**没有 //** 的写法：先按 scheme 判掉，绝不
+    靠"补 https://"绕过去。
+    """
+    lines: list[str] = []
+    if isinstance(value, str):
+        lines = value.replace("｜", "|").splitlines()
+    else:
+        lines = [str(item) for item in (value or ())]  # type: ignore[arg-type]
+    custom: list[Site] = []
+    for line in lines:
+        text = str(line or "").strip()
+        if not text:
+            continue
+        if "|" in text:
+            name, _, url = text.partition("|")
+        else:
+            name, url = "", text
+        url = url.strip()
+        if not url:
+            continue
+        if "://" not in url:
+            if _SCHEME_RE.match(url):
+                continue
+            url = "https://" + url
+        item = _custom_site(name.strip(), url, len(custom) + 1)
+        if item is not None:
+            custom.append(item)
+    return tuple(custom)
+
+
+def all_sites(value: object = "") -> tuple[Site, ...]:
+    """内置站点 + 用户自定义（同 id 只保留先出现的，内置优先）。"""
+    sites: list[Site] = list(SITES)
+    known = {item.id for item in sites}
+    for item in parse_custom_sites(value):
+        if item.id in known:
+            continue
+        sites.append(item)
+    return tuple(sites)

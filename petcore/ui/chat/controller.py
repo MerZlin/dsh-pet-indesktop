@@ -70,6 +70,8 @@ class _ChatState:
     active: bool = False
     #: 当前流式回答所属会话 id；切会话后迟到的 token/done 不许写进新会话。
     stream_session_id: str = ""
+    #: 最近一次被用户看到/写入的时间戳：`show_view` 用它挑「用户正在用的那扇窗」。
+    last_used: float = 0.0
     extras: dict = field(default_factory=dict)
 
 
@@ -91,6 +93,8 @@ class ChatController(QObject):
     #: 线程做；这里用信号排队，绝不让后台线程碰控件。
     append_received = Signal(str, str, str, int)
     open_received = Signal(str, int, str)
+    #: `ChatPort.show_view` 也可能由 mod 的非 GUI 线程调用。
+    show_view_received = Signal(str, str, int)
 
     def __init__(self, host, root: Path) -> None:
         super().__init__(host if isinstance(host, QObject) else None)
@@ -119,6 +123,7 @@ class ChatController(QObject):
         self.record_received.connect(self._apply_record)
         self.append_received.connect(self._apply_append)
         self.open_received.connect(self._apply_open)
+        self.show_view_received.connect(self._apply_show_view)
         self.register_channel("dsh", self._submit_dsh, self._stop_dsh)
 
     # ---------------------------------------------------------------- 公共状态
@@ -153,7 +158,48 @@ class ChatController(QObject):
             window.dsh_view.activate()
         window.raise_()
         window.activateWindow()
+        state.last_used = time.monotonic()
         return True
+
+    def show_view(
+        self, owner: str, view_id: str, *, pet_slot: int | None = None
+    ) -> bool:
+        """打开/复用窗口并切到该扩展的对话窗视图（`chat_view`）。"""
+        slot = self._slot(pet_slot)
+        if not self._on_gui_thread():
+            self.show_view_received.emit(str(owner), str(view_id), int(slot))
+            return True
+        return self._apply_show_view(str(owner), str(view_id), int(slot))
+
+    def _apply_show_view(self, owner: str, view_id: str, slot: int) -> bool:
+        target = f"{owner}:{view_id}"
+        # 先确认这个视图真的存在，否则别把窗口拉起来又停在 AI 页（用户会以为坏了）。
+        known = {spec.id for spec in self._chat_views()}
+        if target not in known:
+            return False
+        # 视图是「对话窗的一页」，不是这个扩展的私有窗口：优先复用同一只桌宠
+        # 已经在用的对话窗，没有才按扩展自己的 owner 建一个。
+        state = self._recent_state(slot) or self._ensure(owner, slot)
+        window = state.window
+        if window is None:
+            return False
+        if not window.show_view(target):
+            return False
+        state.last_used = time.monotonic()
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        return True
+
+    def _recent_state(self, slot: int):
+        slot = int(slot)
+        found = None
+        for (_owner, state_slot), state in self._states.items():
+            if state_slot != slot or state.window is None:
+                continue
+            if found is None or state.last_used >= found.last_used:
+                found = state
+        return found
 
     def append(
         self, owner: str, role: str, text: str, *, pet_slot: int | None = None
@@ -171,6 +217,7 @@ class ChatController(QObject):
 
     def _apply_append(self, owner: str, role: str, text: str, slot: int) -> None:
         state = self._ensure(owner, slot)
+        state.last_used = time.monotonic()
         if state.window is not None:
             state.window.append_message(role, text)
         state.session.append(role, text)
@@ -609,6 +656,7 @@ class ChatController(QObject):
         accent=None,
         always_on_top=None,
         follow=None,
+        dark=None,
         owner=None,
     ) -> None:
         """把外观实时推到已存在的聊天窗；``None`` 表示读当前配置。
@@ -636,6 +684,11 @@ class ChatController(QObject):
         )
         target_font_size = self._font_size()
         target_font_family = self._font_family()
+        target_dark = (
+            bool(self._config_get("chat_dark_mode", False))
+            if dark is None
+            else bool(dark)
+        )
         wanted_owner = None if owner is None else str(owner)
         for (key_owner, _slot), state in self._states.items():
             if wanted_owner is not None and key_owner != wanted_owner:
@@ -660,6 +713,8 @@ class ChatController(QObject):
                     window.set_font_size(target_font_size)
                 if window.font_family() != target_font_family:
                     window.set_font_family(target_font_family)
+                if window.is_dark() != target_dark:
+                    window.set_dark(target_dark)
             except RuntimeError:
                 logger.debug("chat window is already gone", exc_info=True)
 
@@ -782,6 +837,8 @@ class ChatController(QObject):
             provider=str(self._config_get("ai_model", "") or ""),
             pet_window=self._pet_window(state.slot),
             follow_pet=bool(self._config_get("chat_follow_pet", False)),
+            views=self._chat_views(),
+            dark=bool(self._config_get("chat_dark_mode", False)),
         )
         window.submitted.connect(lambda text, s=key: self._on_submit(s, text))
         window.stop_requested.connect(lambda s=key: self._on_stop(s))
@@ -791,6 +848,7 @@ class ChatController(QObject):
         )
         window.closed.connect(lambda s=key: self._on_closed(s))
         window.pin_toggled.connect(self._on_pin_toggled)
+        window.dark_toggled.connect(self._on_dark_toggled)
         window.record_requested.connect(lambda key=key: self._start_recording(key))
         window.record_stopped.connect(lambda key=key: self._stop_recording(key))
         window.session_archive_requested.connect(
@@ -829,6 +887,18 @@ class ChatController(QObject):
         window.load_messages(state.session.messages)
         state.window = window
         return window
+
+    def _chat_views(self) -> list:
+        """本窗口可用的扩展视图（`chat_view` 贡献）；没有扩展时为空。"""
+        features = getattr(self.host, "features", None)
+        getter = getattr(features, "chat_views", None)
+        if not callable(getter):
+            return []
+        try:
+            return list(getter())
+        except Exception:  # noqa: BLE001 - 扩展收集失败不许影响对话窗
+            logger.warning("chat views collection failed", exc_info=True)
+            return []
 
     def _title(self, owner: str, slot: int) -> str:
         suffix = "主桌宠" if slot == 0 else f"桌宠 {slot}"
@@ -1029,12 +1099,15 @@ class ChatController(QObject):
         state = self._states.get(key)
         if state is None:
             return
+        state.last_used = time.monotonic()
         self._flush_dsh(state)
         self._cancel_stream_for_switch(state)
         if not session_id:
             state.session = state.store.new_session()
             if state.window is not None:
                 state.window.load_messages([])
+                # 从扩展视图（如网页 AI）点「新对话」要回到 AI 页，否则看起来"没反应"。
+                state.window.set_view("ai")
         else:
             loaded = state.store.load(session_id)
             if loaded is None:
@@ -1303,6 +1376,17 @@ class ChatController(QObject):
             config.save()
         except OSError:
             logger.warning("chat pin preference save failed", exc_info=True)
+
+    def _on_dark_toggled(self, dark: bool) -> None:
+        config = self._config()
+        if config is None:
+            return
+        try:
+            if bool(config.get("chat_dark_mode", False)) != bool(dark):
+                config.set("chat_dark_mode", bool(dark))
+                config.save()
+        except OSError:
+            logger.warning("chat dark mode save failed", exc_info=True)
 
     def _refresh_history(self, state: _ChatState) -> None:
         if state.window is None:

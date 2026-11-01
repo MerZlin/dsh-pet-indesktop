@@ -925,6 +925,7 @@ C 盘剩余空间显示选项（性能占用要低）」。
 | `ai_web_search_max_sources` | `4` | 全局 | advanced | 1–8；合并后交给模型的最多来源数 | 来源数 / 引用 |
 | `ai_web_search_page_chars` | `12000` | 全局 | advanced | 2000–40000；读页正文上限，越大越慢 | 正文上限 / 网页正文 |
 | `chat_dsh_mode` | `False` | 全局 | primary | 聊天窗的 DSH 模式：开=侧栏出现「DSH 对话」分组 + 共享 SSE 常驻（审批在 AI 视图也收得到）；关=分组隐藏、当前会话回落最近 AI 对话 | DSH 模式 / DSH 分组 / 侧栏 |
+| `chat_dark_mode` | `False` | 全局 | primary | 只影响对话窗（侧栏/标题/消息/输入区/DSH 视图）；标题栏月亮按钮与设置页是同一个开关；无持久化失败路径（保存失败只记日志，界面保持当前态） | 深色 / 夜间 / 暗色 / 主题 / 对话窗外观 |
 | `dsh_memory_inject` | `True` | 全局 | primary | 为真时 DSH prompt 带 `context.memory`（内部 system，不进历史） | DSH 记忆 / 互通 |
 | `dsh_persona_inject` | `True` | 全局 | advanced | 预留给人设注入；当前 DSH 只注入记忆，人设仍由 DSH preset 决定 | DSH 人设 |
 | `dsh_history_limit` | `200` | 全局 | advanced | 20–500；DSH 历史回放条数上限 | DSH 历史 |

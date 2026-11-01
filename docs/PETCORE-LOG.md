@@ -5702,3 +5702,71 @@ onedir exe 15,856,317 B；`check.json`：version 0.3.0 / menu_template=json /
 strict.problems=[] / shenshen 106 动画（frameseq 23 + webm 83）/ daily 1200 / 配图 24/24；
 Inno `Successful compile (117.859 sec)`；打包 onedir 真机 8 秒：窗口 `dsh-pet-core`、
 `IsHungAppWindow=False`。
+
+## L153 — 2026-11-01 — 对话窗深色模式 + `chat_view` 插件缝 + 网页 AI v2
+
+用户两条诉求（外加一条文档要求）：① AI 对话窗要一个深色模式按钮；② 重写浏览器插件，
+要 4.2.1 观众改版那种「网页版 AI 内嵌进对话窗 + 标题栏便携切换按钮」；③ 把 mod 制作
+文档补到「能直接交给用户的 AI 照着写」。
+
+**根因 / 设计**
+
+1. 4.2.1 的网页嵌入走 **QtWebView + Edge WebView2**（`Qt6WebView.dll` 60 KB +
+   `plugins/webview/qtwebview_webview2.dll` 130 KB，依赖面只有 Qt6Core/Qt6Gui）；
+   QtWebEngine 是 203 MB 且导入 Qt6Qml/Qt6Quick——正好撞 `scripts/slim_bundle.py`
+   的「删 Quick/QML + 保留二进制不得 import 已删文件」硬闸，构建必红。
+2. 旧 `tool.ai-browser` 只能**另开顶层窗口**：`CONTRIBUTION_KINDS` 没有视图类型，
+   `HostPorts.windows` 是声明了但 `build_ports()` 从未注入的死端口，`ChatPort` 也没有
+   视图 API。要在对话窗里占一页，必须由 core 开缝。
+3. 深色模式此前完全不存在：`styles.py` 只有一套浅色 QSS，`themes.py` 的 `dark`
+   字段是死元数据。
+
+**改动**
+
+- 契约：`CONTRIBUTION_KINDS` 加 `chat_view`；`ChatViewSpec`；`FeatureDefinition.view_factories`；
+  `ChatPort.show_view(owner, view_id, pet_slot=)`。
+- 收集：`FeatureManager.chat_views()`（label/工厂缺失跳过并告警，order 排序，owner:id 去重）。
+- 对话窗：第三类动态页（懒建、`QFrame#chat-view-host` 内缩 12px）、标题栏视图按钮
+  （内联 2 个 + `»` 溢出菜单）、深色按钮（月亮/太阳）、图标按底色换墨、紧凑宽度图标化、
+  抽屉打开时隐藏原生子窗口（airspace）、`deactivate/shutdown` 生命周期、工厂异常隔离。
+- 深色：`styles.DARK_OVERRIDES` 追加在 `MODERN_QSS` 之后（浅色路径字节不变）+
+  `themes.build_modern_custom_overlay_qss(dark=)` + 底漆/分组字色/DSH 等宽正文色。
+- 控制器：`show_view` 复用**用户正在用的那扇**对话窗（不另开一扇）；`chat_dark_mode`
+  落盘；`apply_appearance(dark=)`；切会话/新建对话强制回 AI 页。
+- 配置：`chat_dark_mode`（全局，默认 False）；core 版本 0.3.0 → **0.4.0**（新增公开 API）。
+- `tool.ai-browser` v2.0.0：QtWebView 面板（多站点 `QStackedWidget` 换页保登录态、
+  弹窗 shim、缺口页 + 微软下载页、`activate/deactivate/shutdown`）、站点表 + 自定义站点
+  （`名称 | URL`，非 http/https 丢弃）、可搜索设置页、菜单「AI 网页」→ `chat.show_view`；
+  宿主没有 QtWebView 时**不贡献 chat_view**（不留死入口）。
+- 打包：`build_petcore.ps1` 显式带 `PySide6.QtWebView` + `Qt6WebView.dll` +
+  `qtwebview_webview2.dll`（PyInstaller 6.22 无对应 hook）；`slim_bundle.py`
+  `REQUIRED_GLOBS` 复核；安装器 `UpdateReadyMemo` 在缺 WebView2 时提示一句（不阻塞安装）。
+- 文档：`PETCORE-MOD-FORMAT.md` §5.2 契约 + §7 端口白名单；`PETCORE-MOD-DEVELOPMENT.md`
+  §4.2 骨架 + §4.1 边界改写；新增 `PETCORE-MOD-AI-GUIDE.md`（自包含，给 AI 用）。
+
+**验证**
+
+- spike：`QWebView` 在 900×620 无边框 + `WA_TranslucentBackground` + 圆角 shell 里
+  加载 DeepSeek 登录页成功（`.scratch/webview-spike-remote.png`）。
+- 真机 E2E（真 ChatWindow + 真 mod + 真 WebView2）：`show_view` 切到网页页、侧栏保留、
+  整窗深色、关窗后进程 16.5s 干净退出（`.scratch/web-e2e*.png`）。
+- CPU 三态（25s/段，进程树含 msedgewebview2）：从未打开 **0.066%**（单核 1.05）→
+  打开 DeepSeek **1.283%**（单核 20.53，7 个 webview 进程）→ 关窗后 **0.093%**（单核 1.48）。
+- 全量 `tests/test_petcore_*.py`：**2811 passed / 1 skipped in 258.99s**；ruff 全绿。
+- 文档可用性：两轮新子代理**只读 `PETCORE-MOD-AI-GUIDE.md`** 各写一个 mod
+  （`.scratch/doc-test/my.sticky`、`.scratch/doc-test2/my.notes`）：`load_manifest` 零 problem、
+  `chat_views()` 收集到、真对话窗里能看到按钮与页面（`.scratch/doc-mod-check*.png`）。
+  第一轮暴露的 11 处语义空白已回写文档（ports 闭包、生命周期时序、设置页 API、
+  即时写语义、capabilities 清单、cancel_owner、图标名、order、.trusted、视图配色）。
+
+**未验证 / 风险**
+
+- macOS 的 WKWebView 后端未验证（只在 Windows 启用；非 Windows 不贡献视图）。
+- 网页页常驻时站点自身有 ~1.3% 总 CPU；关窗后 WebView2 进程仍空闲驻留，要退出程序才回收。
+- 用户机器上 `%APPDATA%\dsh-pet-core\mods\tool.ai-browser` 是用户目录副本，setup 不覆盖，
+  升级后需要手工替换成 v2（或删掉让安装器那份生效）。
+- 安装器只做 WebView2 提醒，不做自动安装。
+
+**产物**
+
+- setup：`rel-chat-view-2026-11-01/dsh-pet-core-setup.exe`，301,224,113 B，SHA-256 `d7dd74c13fae71a5cb12f29f31d1fc734debeb2ced8af8370328fcdb2ef03582`（未签名）；onedir exe 15,868,552 B；`check.json` version 0.4.0 / strict.problems=[] / shenshen 106 动画 / daily 1200；包内 `_internal/PySide6/Qt6WebView.dll`（60,216 B）与 `plugins/webview/qtwebview_webview2.dll`（132,408 B）已确认；打包 `--check --strict` exit=0；真机 10s 冒烟窗口 `dsh-pet-core`、`IsHungAppWindow=False`；在 onedir 里放入 v2 扩展后 `--check` 报 `tool.ai-browser 2.0.0 enabled`、diagnostics 空。
