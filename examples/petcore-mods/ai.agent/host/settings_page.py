@@ -14,12 +14,15 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QSlider,
     QWidget,
 )
 
 from petcore.ui.settings.base import SettingsPage, make_button, make_checkbox
+
+from . import claude_hooks
 
 #: 自定义 Agent 行的字段分隔符（``key | 显示名 | 事件文件路径``）。
 CUSTOM_SEPARATOR = "|"
@@ -109,9 +112,55 @@ class AgentLinkPage(SettingsPage):
             expand=True,
         )
         self.add_note(
-            "只读：桌宠不写任何 Agent 配置、不注入 hooks、不回传任何内容；"
-            "事件文件只记状态与工具名。"
+            "默认只读：只有你在下方点击「安装/更新 hooks」并确认时，才会写 "
+            "~/.claude/settings.json；Cursor / Codex / OpenCode 与统一事件文件都只读。"
         )
+
+        # ------------------------------------------------------- 内置 Agent
+        self.cursor = make_checkbox(self)
+        self.cursor.setChecked(bool(config.get("ai_agent_cursor_enabled", False)))
+        self.codex = make_checkbox(self)
+        self.codex.setChecked(bool(config.get("ai_agent_codex_enabled", False)))
+        self.opencode = make_checkbox(self)
+        self.opencode.setChecked(bool(config.get("ai_agent_opencode_enabled", False)))
+        self.claude_status = QLabel("", self)
+        self.claude_status.setObjectName("settingHint")
+        self.claude_status.setWordWrap(True)
+        self.claude_install = make_button("安装/更新 hooks", self)
+        self.claude_install.clicked.connect(self._install_claude_hooks)
+        self.claude_remove = make_button("移除 hooks", self)
+        self.claude_remove.clicked.connect(self._remove_claude_hooks)
+        claude_buttons = QWidget(self)
+        claude_layout = QHBoxLayout(claude_buttons)
+        claude_layout.setContentsMargins(0, 0, 0, 0)
+        claude_layout.setSpacing(8)
+        claude_layout.addWidget(self.claude_install)
+        claude_layout.addWidget(self.claude_remove)
+        claude_layout.addWidget(self.claude_status, 1)
+
+        builtin = self.section("内置 Agent", level=3)
+        builtin.add_row(
+            "Claude Code hooks",
+            claude_buttons,
+            "只有点击按钮并确认才会写 ~/.claude/settings.json；写入前备份，只清理带标记的条目。",
+            expand=True,
+        )
+        builtin.add_row(
+            "Cursor",
+            self.cursor,
+            "只读 ~/.cursor/projects/**/agent-transcripts/*.jsonl（最近 1 天，最多 50 个）。",
+        )
+        builtin.add_row(
+            "Codex",
+            self.codex,
+            "只读 ~/.codex/sessions/**/*.jsonl（最多 30 个）。",
+        )
+        builtin.add_row(
+            "OpenCode",
+            self.opencode,
+            "只读 ~/.local/share/opencode/opencode.db 的 event 表（rowid 增量）。",
+        )
+        self._refresh_claude_status()
 
         # ------------------------------------------------------ 动画与气泡
         self.animation = make_checkbox(self)
@@ -239,6 +288,54 @@ class AgentLinkPage(SettingsPage):
         self._timer.timeout.connect(self.refresh_diagnostics)
         self._timer.start()
 
+    # ------------------------------------------------------------ Claude hooks
+
+    def _refresh_claude_status(self) -> None:
+        try:
+            installed = claude_hooks.installed()
+        except Exception:  # noqa: BLE001 - 读不到就显示未安装
+            installed = False
+        self.claude_status.setText(
+            "已安装（只清理本程序条目）" if installed else "未安装（默认不写配置）"
+        )
+
+    def _install_claude_hooks(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "安装 Claude Code hooks",
+            "将向 ~/.claude/settings.json 写入带 x-dsh-pet 标记的 hooks，"
+            "并在写入前备份原文件。只有你点击确认后才会执行。继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        ok, message = claude_hooks.install(
+            self._data_root() / "agent-events" / "claude.jsonl"
+        )
+        self._refresh_claude_status()
+        if ok:
+            QMessageBox.information(self, "Claude Code hooks", message)
+        else:
+            QMessageBox.warning(self, "安装失败", message)
+
+    def _remove_claude_hooks(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "移除 Claude Code hooks",
+            "只会移除本程序注入的、带 x-dsh-pet 标记的条目；用户自有的 hooks 保留。继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        ok, message = claude_hooks.uninstall()
+        self._refresh_claude_status()
+        if ok:
+            QMessageBox.information(self, "Claude Code hooks", message)
+        else:
+            QMessageBox.warning(self, "移除失败", message)
+
     # ---------------------------------------------------------------- 配置
 
     def config(self):
@@ -258,6 +355,9 @@ class AgentLinkPage(SettingsPage):
             (self.enabled, "ai_agent_enabled"),
             (self.dsh, "ai_agent_dsh_enabled"),
             (self.events, "ai_agent_events_enabled"),
+            (self.cursor, "ai_agent_cursor_enabled"),
+            (self.codex, "ai_agent_codex_enabled"),
+            (self.opencode, "ai_agent_opencode_enabled"),
             (self.animation, "ai_agent_animation_enabled"),
             (self.commands, "ai_agent_command_enabled"),
             (self.activity, "ai_agent_activity_bubbles"),
@@ -334,6 +434,16 @@ class AgentLinkPage(SettingsPage):
         else:
             lines.append("")
             lines.append("还没有事件文件：开启来源后让对应 Agent 跑一轮，或点「发送测试事件」。")
+        for label, path in (
+            ("Cursor", Path.home() / ".cursor" / "projects"),
+            ("Codex", Path.home() / ".codex" / "sessions"),
+            ("OpenCode", Path.home() / ".local" / "share" / "opencode" / "opencode.db"),
+        ):
+            lines.append(f"{label}：{path} —— {'存在' if path.exists() else '缺失'}")
+        lines.append(
+            "Claude Code hooks："
+            + ("已安装" if self.claude_status.text().startswith("已安装") else "未安装")
+        )
         self.diagnostics.setPlainText("\n".join(lines))
 
     @staticmethod
@@ -386,6 +496,9 @@ class AgentLinkPage(SettingsPage):
             self.enabled.isChecked(),
             self.dsh.isChecked(),
             self.events.isChecked(),
+            self.cursor.isChecked(),
+            self.codex.isChecked(),
+            self.opencode.isChecked(),
             self.animation.isChecked(),
             self.commands.isChecked(),
             self.activity.isChecked(),
@@ -407,6 +520,9 @@ class AgentLinkPage(SettingsPage):
             "ai_agent_enabled": self.enabled.isChecked(),
             "ai_agent_dsh_enabled": self.dsh.isChecked(),
             "ai_agent_events_enabled": self.events.isChecked(),
+            "ai_agent_cursor_enabled": self.cursor.isChecked(),
+            "ai_agent_codex_enabled": self.codex.isChecked(),
+            "ai_agent_opencode_enabled": self.opencode.isChecked(),
             "ai_agent_animation_enabled": self.animation.isChecked(),
             "ai_agent_command_enabled": self.commands.isChecked(),
             "ai_agent_activity_bubbles": self.activity.isChecked(),
@@ -435,6 +551,9 @@ class AgentLinkPage(SettingsPage):
             self.enabled,
             self.dsh,
             self.events,
+            self.cursor,
+            self.codex,
+            self.opencode,
             self.animation,
             self.commands,
             self.activity,
@@ -452,6 +571,11 @@ class AgentLinkPage(SettingsPage):
             self.enabled.setChecked(bool(values.get("ai_agent_enabled", False)))
             self.dsh.setChecked(bool(values.get("ai_agent_dsh_enabled", True)))
             self.events.setChecked(bool(values.get("ai_agent_events_enabled", True)))
+            self.cursor.setChecked(bool(values.get("ai_agent_cursor_enabled", False)))
+            self.codex.setChecked(bool(values.get("ai_agent_codex_enabled", False)))
+            self.opencode.setChecked(
+                bool(values.get("ai_agent_opencode_enabled", False))
+            )
             self.animation.setChecked(
                 bool(values.get("ai_agent_animation_enabled", True))
             )

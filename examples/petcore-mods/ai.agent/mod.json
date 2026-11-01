@@ -4,7 +4,7 @@
   "id": "ai.agent",
   "name": "Agent link",
   "name_zh": "Agent 联动",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "api_version": "1",
   "core_requires": ">=0.1.0,<1.0.0",
   "author": "dsh-pet",

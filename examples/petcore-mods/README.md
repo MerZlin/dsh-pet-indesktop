@@ -17,7 +17,7 @@
 | `tool.weather` | 1.0.0 | 天气实况（中国天气网直连 + open-meteo 代理兜底） |
 | `tool.file-reader` | 1.0.0 | 拖文件解读（读文本类文件 → AI 摘要，只读不删） |
 | `tool.ai-browser` | 2.0.0 | **`chat_view` 样板**：在 AI 对话窗里加一页「网页 AI」（QtWebView + Edge WebView2） |
-| `ai.agent` | 1.0.0 | Agent 联动（读 DSH 桥目录 / `agent-events/*.jsonl`，六态动画 + 进度气泡 + 完成通知） |
+| `ai.agent` | 1.1.0 | Agent 联动（DSH 桥目录 / 统一 `agent-events/*.jsonl` / Claude Code hooks / Cursor / Codex / OpenCode；六态动画 + 进度气泡 + 完成通知；Claude hooks 只在设置页显式安装） |
 | `im.qq` | 0.1.0 | OneBot v11 / QQ 互通（入站 Webhook + 出站 `HttpPort`，Qt-free 运行时） |
 
 > 版本与能力以各包 `mod.json` 为准。这些包要求 Core `>=0.2.0,<1.0.0`（部分要求 `>=0.4.0`）、

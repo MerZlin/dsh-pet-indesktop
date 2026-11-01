@@ -181,6 +181,10 @@ printf '{"ts": %s, "state": "idle"}\n' "$(date +%s)" >> ~/.gemini/pet-events.jso
 
 > 后续演进方向（未实施）：把上述 5 处收敛为单一声明式注册表，内置与自定义 Agent 统一由注册表驱动。
 
+petcore 分支不按上表改 `pet/config.py`：等价实现全部在
+`examples/petcore-mods/ai.agent/host/`（`native.py` / `native_sources.py` /
+`claude_hooks.py`），Core 不出现任何 Agent 名；新增 Agent 只需在 mod 内注册解析器与只读源。
+
 ## 6. 隐私与安全红线（不可违反）
 
 1. **默认全关**：所有 Agent 联动开关默认关闭，用户显式勾选才启动。
@@ -200,8 +204,9 @@ printf '{"ts": %s, "state": "idle"}\n' "$(date +%s)" >> ~/.gemini/pet-events.jso
 | 六态映射 | `pet/agent_event_normalizer.py` + `dsh_state.py` | `ai.agent/host/protocol.py`（表外事件一律忽略） |
 | 动画/气泡/音效 | `AgentLinkManager` | `ai.agent/host/links.py`（`LinkEngine`） |
 | DSH 桥接插件安装 | 内置 `integrations/dsh-pet-bridge` + pnpm 安装 | 设置页「常规 → DSH 连接」显式安装 v2 单插件（状态 JSONL + HTTP+SSE 聊天通道同进程；旧 `dsh-pet-channel` 升级时从 profile 摘除），先备份 profile |
-| Claude hooks 注入 | 支持 | **未做**（走统一 `agent-events/claude.jsonl`） |
-| Cursor / OpenCode 直读 | 支持 | **未做**（走统一 JSONL） |
+| Claude hooks 注入 | 支持 | **已接入**：`ai.agent` 设置页显式安装/移除（弹窗确认、写入前备份、只清理带 `x-dsh-pet` 标记的条目） |
+| Cursor / OpenCode 直读 | 支持 | **已接入**：`ai.agent/host/native_sources.py` 只读 tail / SQLite 直读 |
+| 第四个 Agent（历史 PR 的 rollout 适配） | 支持 | **已接入**：只读 `~/.codex/sessions/**/*.jsonl`（实现见 `ai.agent/host/native.py`） |
 | 审批/提问常驻卡片、live 成本 | 支持 | DSH 页可答审批；live 成本 **未做** |
 
 行为口径（节流、完成确认、动作池、隐私红线）见

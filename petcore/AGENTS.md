@@ -595,7 +595,10 @@
 - **联动默认只读**：不自动装桥接插件、不跑 pnpm、不写 `~/.claude` 或任何 Agent 配置；
   只 tail 事件文件。**例外**：用户在「设置 → 常规 → DSH 连接」显式点击安装/更新时，
   可把随包 `integrations/dsh-pet-bridge` 与 `dsh-pet-channel` 写入 `~/.dsh`；写入前
-  必须备份 profile 的 `package.json`，失败可见，绝不自动执行。
+  必须备份 profile 的 `package.json`，失败可见，绝不自动执行。另一条例外：用户在
+  `ai.agent` 设置页显式点击「安装/更新 Claude hooks」并确认后，才可写
+  `~/.claude/settings.json`；写入前备份、只增删带 `x-dsh-pet` 标记的条目，绝不自动
+  安装或自动卸载；其余 Agent（Cursor/Codex/OpenCode）保持只读。
   首次见到已存在的文件跳到末尾（不回放历史），监视开始后出现的文件从头读；
   单次 ≤64KB，半行缓冲 ≤8KB，超限即丢弃。事件正文不落盘、不写日志。
 - **DSH 指令**：`pet/command` 记录只接受 `say|play_animation|notify`，正文 ≤200 字、

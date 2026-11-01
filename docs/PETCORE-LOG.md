@@ -5959,3 +5959,61 @@ Inno `Successful compile (117.859 sec)`；打包 onedir 真机 8 秒：窗口 `d
 - 行数包含 CRLF/LF 归一化差异，不代表实际内容删改量。
 - `chat_view` 的「必须重启」来自当前实现（`ChatWindow._view_specs` 建窗时固定、closeEvent 只 hide）；
   若后续改动重建窗口，需要同步本文。
+
+## L157 — 2026-11-02 — 致谢新增 4 位作者 + ai.agent 原生 Agent 联动
+
+**背景**：用户要求在特别鸣谢补 4 位作者，并把主分支 Agent 联动的其余 Agent
+（Claude Code / Cursor / OpenCode，以及历史 PR 里的第四个 rollout Agent）移植到
+petcore 的 `ai.agent` mod；完成后提交并本地构建 setup。
+
+**改动**
+
+- 致谢：`petcore/community/data/credits.json` 与 `DEFAULT_SPECIAL_THANKS` 同步新增
+  `@夜宵夜吃`、`@小透明到处逛`、`@苏辞SuTzu`、`@貓事液體這件事`；测试计数 11→15。
+- `examples/petcore-mods/ai.agent` 1.1.0：
+  - `native.py`：Cursor transcript、第四个 rollout、OpenCode event 的纯解析器；
+  - `native_sources.py`：递归 JSONL 增量源（首见文件跳到末尾、新文件从头读、有界）
+    与 OpenCode SQLite 只读源（rowid backfill、子代理会话过滤）；
+  - `claude_hooks.py`：显式安装/卸载 Claude hooks（备份、原子写、只清理
+    `x-dsh-pet` 标记条目；解析失败不覆盖）；
+  - `runtime.py`：新增 `ai_agent_cursor_enabled` / 第四个 Agent 的开关 /
+    `ai_agent_opencode_enabled`（默认 false），接入原生源，不改现有统一事件行为；
+  - `settings_page.py`：新增「内置 Agent」小节、hooks 状态与安装/移除按钮；
+  - `mod.json` 1.1.0。
+- `petcore/AGENTS.md`：只读红线增加「Claude hooks 仅限设置页显式点击安装/更新」
+  的例外（弹窗、备份、只清理标记条目）。
+- `docs/AGENT_LINK_PROTOCOL.md`、`docs/PETCORE-ROADMAP.md`、`examples/.../README.md`、
+  `packaging/petcore.iss`：更新接入状态与安装器描述。
+- 新增 `tests/test_petcore_ai_agent_native.py`；`test_petcore_agent_mod.py` 补设置页
+  原生开关与「内置 Agent」小节断言。
+- 行数（`git diff --numstat`，相对上一提交）：runtime +57/−1、settings_page +126/−2、
+  credits +24、model +4、AGENTS +4/−1、协议/索引/路线图/README/安装器 +13/−7、
+  agent/community/thanks 测试 +24/−2；新增 `native.py` 102 行、`native_sources.py` 204 行、
+  `claude_hooks.py` 207 行、`test_petcore_ai_agent_native.py` 239 行。
+
+**验证**
+
+- `QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest`：
+  `test_petcore_ai_agent_native.py` 9 passed；与 agent/community/thanks/docs 合并
+  `131 passed in 2.52s`。
+- `tests/test_desktop_pet_features.py::test_product_copy_has_no_external_brand_reference`
+  → 1 passed（文档里的历史适配路径已登记为开发者文档豁免）。
+- `ruff check` 改动的 Python 文件 → All checks passed。
+- 全量 petcore：`tests/test_petcore_*.py` → `2962 passed, 1 skipped in 245.95s`。
+- 本地 setup 构建（`rel-storage-2026-11-02a`）：Inno `Successful compile (145.031 sec)`；
+  `dsh-pet-core-setup.exe` 301,326,032 B，sha256
+  `f30d9f851c7b78c40895379068120f1a91d1215108063df4662bc3e9217bfc8b`，
+  Authenticode `Valid`（CN=DSH Pet Core Dev）；打包后 `--check --strict` 报告
+  `version 0.5.0`、`diagnostics []`、`menu_template json`、`characters 1`。
+  安装器压缩清单已包含 `ai.agent/host/{native,native_sources,claude_hooks}.py`。
+
+**未验证 / 边界**
+
+- Claude hooks 的真实 `~/.claude/settings.json` 安装/卸载未在本机执行；只用临时
+  settings 文件覆盖了安装、卸载、保留用户条目、坏 JSON 不覆盖、备份五条路径。
+- 设置页的「安装/更新 hooks」按钮未在 GUI 里实际点击（会弹确认框），只验证了
+  底层 `claude_hooks` 与页面构建。
+- Cursor / 第四个 rollout / OpenCode 的解析器按主分支已合入格式实现；未在本机
+  逐个启动真实 Agent 采样。OpenCode SQLite 路径按主分支口径
+  `~/.local/share/opencode/opencode.db`，Windows 实际安装位置若不同需后续调整。
+- 构建使用当前工作区（包含上一提交的存储/下载批次），setup 不是只含本次差异。

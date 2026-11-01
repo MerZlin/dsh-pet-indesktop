@@ -45,6 +45,8 @@ def test_bundled_special_thanks_name_the_upstream_project_and_artists() -> None:
     for artist in ("@这个刀子真甜", "@上善无形", "@ZipZipPipe"):
         assert artist in entries, f"特别鸣谢缺 {artist}"
         assert "形象" in entries[artist].note
+    for contributor in ("@夜宵夜吃", "@小透明到处逛", "@苏辞SuTzu", "@貓事液體這件事"):
+        assert contributor in entries, f"特别鸣谢缺 {contributor}"
 
 
 def test_bundled_fans_snapshot_is_a_real_list() -> None:

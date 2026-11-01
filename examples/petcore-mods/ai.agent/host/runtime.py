@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .links import LinkEngine, LinkPrefs
+from .native import parse_codex_line, parse_cursor_line
+from .native_sources import OpenCodeSource, RecursiveJsonlSource
 from .protocol import parse_command, parse_line
 from .tailer import ByteTailer, GlobTailer, agent_key_for
 
@@ -28,8 +30,11 @@ class _Source:
     key: str
     reader: object
     per_file_key: bool = False
+    multi_file: bool = False
 
     def read(self) -> list[tuple[Path, bytes]]:
+        if self.multi_file:
+            return list(self.reader.read_lines())
         if isinstance(self.reader, GlobTailer):
             return self.reader.read_lines()
         return [(self.reader.path, line) for line in self.reader.read_lines()]
@@ -291,6 +296,9 @@ class AgentLinkRuntime:
             str(self._data_root()),
             bool(self._config_value("ai_agent_dsh_enabled", True)),
             bool(self._config_value("ai_agent_events_enabled", True)),
+            bool(self._config_value("ai_agent_cursor_enabled", False)),
+            bool(self._config_value("ai_agent_codex_enabled", False)),
+            bool(self._config_value("ai_agent_opencode_enabled", False)),
             tuple(
                 (item.get("key"), item.get("path"))
                 for item in self._custom_agents()
@@ -300,12 +308,14 @@ class AgentLinkRuntime:
     def _build_sources(self) -> list[_Source]:
         sources: list[_Source] = []
         root = self._data_root()
+        home = Path.home()
         if bool(self._config_value("ai_agent_dsh_enabled", True)):
             sources.append(
                 _Source(
                     key="dsh",
                     reader=GlobTailer(root.parent / "dsh-pet-bridge", "dsh*.jsonl"),
                     per_file_key=True,
+                    multi_file=True,
                 )
             )
         if bool(self._config_value("ai_agent_events_enabled", True)):
@@ -314,6 +324,46 @@ class AgentLinkRuntime:
                     key="",
                     reader=GlobTailer(root / "agent-events", "*.jsonl"),
                     per_file_key=True,
+                    multi_file=True,
+                )
+            )
+        if bool(self._config_value("ai_agent_cursor_enabled", False)):
+            sources.append(
+                _Source(
+                    key="cursor",
+                    reader=RecursiveJsonlSource(
+                        home / ".cursor" / "projects",
+                        "**/agent-transcripts/*.jsonl",
+                        "cursor",
+                        parse_cursor_line,
+                        limit=50,
+                        max_age_s=86400,
+                    ),
+                    multi_file=True,
+                )
+            )
+        if bool(self._config_value("ai_agent_codex_enabled", False)):
+            sources.append(
+                _Source(
+                    key="codex",
+                    reader=RecursiveJsonlSource(
+                        home / ".codex" / "sessions",
+                        "**/*.jsonl",
+                        "codex",
+                        lambda record: (parse_codex_line(record), ""),
+                        limit=30,
+                    ),
+                    multi_file=True,
+                )
+            )
+        if bool(self._config_value("ai_agent_opencode_enabled", False)):
+            sources.append(
+                _Source(
+                    key="opencode",
+                    reader=OpenCodeSource(
+                        home / ".local" / "share" / "opencode" / "opencode.db"
+                    ),
+                    multi_file=True,
                 )
             )
         for item in self._custom_agents():
@@ -325,7 +375,13 @@ class AgentLinkRuntime:
                 if path.is_dir()
                 else ByteTailer(path, prime_to_end=True)
             )
-            sources.append(_Source(key=str(item.get("key") or ""), reader=reader))
+            sources.append(
+                _Source(
+                    key=str(item.get("key") or ""),
+                    reader=reader,
+                    multi_file=path.is_dir(),
+                )
+            )
         return sources
 
     def _custom_agents(self) -> list[dict]:

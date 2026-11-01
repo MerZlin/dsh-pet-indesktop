@@ -55,7 +55,7 @@ def test_parse_credits_falls_back_to_default_static_entries() -> None:
         "@MerZlin",
         "@炎圣人但丁",
     ]
-    assert len(credits.special_thanks) == 11
+    assert len(credits.special_thanks) == 15
 
 
 def test_merge_credits_prefers_newer_dynamic_entries() -> None:

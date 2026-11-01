@@ -69,7 +69,7 @@ Name: "mod_aichat"; Description: "AI 对话（ai.chat，需自备 API）"; Group
 Name: "mod_ocr"; Description: "本地 OCR（tool.ocr，离线提取文字）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 Name: "mod_weather"; Description: "天气（tool.weather，需联网）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 Name: "mod_filereader"; Description: "文件解读（tool.file-reader，需 API）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
-Name: "mod_agent"; Description: "Agent 联动（ai.agent，需 DSH 桥接或自写事件）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
+Name: "mod_agent"; Description: "Agent 联动（ai.agent：DSH / Claude / Cursor / Codex / OpenCode）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 Name: "mod_qq"; Description: "QQ 互通（im.qq，Beta：需自备 OneBot 网关 NapCat/Lagrange）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 Name: "mod_aibrowser"; Description: "AI 网页（tool.ai-browser：在 AI 对话窗里内嵌网页版 AI，需 Edge WebView2 运行时）"; GroupDescription: "随附扩展：不勾选就不会写进安装目录，之后随安装程序卸载"; Flags: unchecked
 

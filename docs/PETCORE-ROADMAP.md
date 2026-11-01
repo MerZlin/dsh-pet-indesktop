@@ -419,8 +419,9 @@ AI/识屏/音乐/语音等**执行**仍走 worker 或 mod；P3 表里的「账�
 | 未做（c2.1） | DSH 桥接插件一键安装（不跑 pnpm、不写 DSH profile）；Claude hooks 注入；Cursor transcript / OpenCode sqlite 直读；审批/提问常驻卡片；live 回合成本统计；`ai.agent` 插件市场条目 |
 
 **计划变更**：原 §25.2 把 c2 估成「DSH JSONL + 自定义 JSONL」，实际只做**只读**那半——
-写方安装与直读适配器单独列为 c2.1。c3（提醒域转正）仍未做：`reminder.todo` /
-`fun.festival` / `fun.divination` 已是随包可选扩展并带 `.trusted`，但这不代表业务齐全。
+写方安装与直读适配器单独列为 c2.1。2026-11-02：`ai.agent` 1.1.0 已补齐 Claude hooks
+显式安装、Cursor / OpenCode 只读直读与第四个 rollout Agent；Core 仍不出现 Agent 名。
+`reminder.todo` / `fun.festival` / `fun.divination` 已是随包可选扩展并带 `.trusted`，但这不代表业务齐全。
 待办调度、农历节日及 48 签仍未实现，不能以市场条目或文档替代实现验收。
 前序质量审查不做这些新能力。2026-10-24 用户随后批准 c3：A 质量阻断 → B 通用接口 → C 待办 → D 节日生日 → E 48签 → 功能扩展仓库分发。当前只执行 A，后三域与分发尚未实现。
 

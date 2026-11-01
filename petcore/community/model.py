@@ -101,6 +101,10 @@ DEFAULT_SPECIAL_THANKS: tuple[SpecialThanks, ...] = (
     SpecialThanks("bilibili", "@玄秋沐雨", "", "手机版大肥鱼作者"),
     SpecialThanks("bilibili", "@咕噜千鹤子", "", "项目参与、部分功能开发"),
     SpecialThanks("bilibili", "@月匠", "", "余额部分功能的参考实现"),
+    SpecialThanks("bilibili", "@夜宵夜吃", "", "素材制作与桌宠开发"),
+    SpecialThanks("bilibili", "@小透明到处逛", "", "桌宠素材制作"),
+    SpecialThanks("bilibili", "@苏辞SuTzu", "", "QQ、DSH与桌宠联动贡献者"),
+    SpecialThanks("bilibili", "@貓事液體這件事", "", "Codex联动作者"),
     SpecialThanks(
         "company",
         "深度求索 DeepSeek",

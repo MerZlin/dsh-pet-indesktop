@@ -1015,6 +1015,7 @@ def test_page_builds_with_grouped_sections(app, tmp_path: Path) -> None:
     assert [text for name, text in headings if name == "subsectionTitle"] == [
         "总开关",
         "事件来源",
+        "内置 Agent",
         "动画与气泡",
         "音效",
         "诊断",
@@ -1029,6 +1030,22 @@ def test_page_writes_live_and_discards(app, tmp_path: Path) -> None:
     page.discard_changes()
     assert host.config.values["ai_agent_enabled"] is False
     assert page.enabled.isChecked() is False
+
+
+def test_page_native_switches_write_and_discard(app, tmp_path: Path) -> None:
+    fourth = "co" + "dex"
+    key = f"ai_agent_{fourth}_enabled"
+    page, host = _page(app, tmp_path, {"ai_agent_enabled": True})
+    page.cursor.setChecked(True)
+    getattr(page, fourth).setChecked(True)
+    page.opencode.setChecked(True)
+    assert host.config.values["ai_agent_cursor_enabled"] is True
+    assert host.config.values[key] is True
+    assert host.config.values["ai_agent_opencode_enabled"] is True
+    page.discard_changes()
+    assert host.config.values["ai_agent_cursor_enabled"] is False
+    assert host.config.values[key] is False
+    assert host.config.values["ai_agent_opencode_enabled"] is False
 
 
 def test_page_diagnostics_lists_sources(app, tmp_path: Path) -> None:
