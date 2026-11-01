@@ -695,6 +695,9 @@ class ChatWindow(QDialog):
         self.close_button.setToolTip("关闭")
         self.close_button.setAccessibleName("关闭聊天窗口")
         title_layout.addWidget(self.minimize_button)
+        # Windows 习惯：最小化 → 最大化/还原 → 关闭。少这一行时按钮是没有布局
+        # 的裸子控件，停在标题栏 (0,0)（用户截图里标题左侧那个方块）。
+        title_layout.addWidget(self.maximize_button)
         title_layout.addWidget(self.close_button)
         chat_main_layout.addWidget(self.title_bar)
 

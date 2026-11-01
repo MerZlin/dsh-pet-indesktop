@@ -5634,3 +5634,71 @@ DSH→AI 切换卡顿、关掉 DSH 仍停在 DSH、执行测试指令没有审�
 包内 `_internal/integrations/dsh-pet-bridge/channel.js` 含 `sameCommandFamily` 与
 `reasoningOf`。打包 onedir 真机启动 10 秒：进程存活、窗口 `dsh-pet-core`、`Responding=True`。
 安装包未签名（本机 SAC 已关时可直接运行；对外分发要换正式证书）。
+
+## L152 — 2026-11-01 — 聊天/DSH 稳定性 + 启动/静息 CPU（用户反馈批次 5）
+
+用户三条反馈：① 最大化按钮跑到标题左侧；② 审批卡弹出时桌宠卡死（Windows
+`Application Hang 1002 / AppHangB1`，01:52:12）；③ 启动 CPU 冲到 9%、静息 2%。
+
+**根因**
+
+1. `ChatWindow.__init__` 创建了 `maximize_button` 却没 `addWidget` 进
+   `title_layout`，裸子控件停在 (0,0)；用户截图红框即它。
+2. 旧 `dsh.channel`（0.1.0，用户数据目录，未停用）在自己的 SSE 线程收到审批后
+   直接 `chat.append(...)`：`ChatController.append` 首次调用会在**该后台线程**
+   `_ensure → _create_window` 建整个 ChatWindow；同一路径还直接 `presentation.say`
+   操作气泡、`notify` 调托盘。Qt 跨线程建窗/托盘气泡与 GUI 线程互锁 = AppHang。
+   同时 DSH 审批路径在 GUI 线程整段重放最多 200 条历史 + 逐帧
+   `store.save + _refresh_history`，放大卡死窗口。
+3. 旧安装每次启动约 60s 后 `首跑供给完成 converted=2 ... deferred=24`：迁移
+   2 个 `random/` 新素材（实测 34.1s + 29.4s = 63.5s / 67.2 CPU-s，平均 6.62%
+   总 CPU、峰值 13.28%）；petcore 没有主分支的闲置降帧，静息 2% 是 48fps
+   （`playback_speed=2.0`）待机解码 + 整窗缩放绘制。
+
+**改动**
+
+- `window.py`：最大化按钮插到 `minimize` 与 `close` 之间。
+- `controller.py`：`append_received/open_received` 信号 + GUI 线程判定；DSH
+  会话缓存 + 400ms 合并落盘 + 切会话/关闭前 flush；审批耗时打点。
+- `app.py`：`_PresentationAdapter` 的 say/say_sequence/show_image/notify/
+  play_event/play_animation/release_loop/hide 非 GUI 线程全部排队；`run()` 启动
+  阶段耗时日志。
+- `dsh_view.py`：历史 20 条/批重放，重放期间实时帧/审批帧延后按序落地。
+- `provision.py`：Windows 上等系统连续空闲 60s（每 20s 查一次）才起手；日志
+  写等待/开始（已空闲 N 秒）/elapsed。
+- `pet/frameseq_clip.py` + `petcore/media/clip.py`：`set_frame_divisor`（跳帧 +
+  间隔倍率）；`pet_window.py` 30s 无交互门控 + 交互立即恢复；`config.py` 新增
+  `idle_low_fps_enabled`（本宠，默认 True，设置页「互动与物理 → 动画」）。
+- 测试新增 `test_petcore_ports_thread.py`、`test_petcore_chat_dsh_persist.py`、
+  `test_petcore_idle_fps.py`、`test_petcore_provision_idle.py`，扩
+  `test_petcore_chat_dsh_ui.py` / `test_petcore_chat_ui.py` / `test_frameseq_clip.py`
+  / `test_petcore_settings.py`；脚本 `scripts/bench_petcore_idle_cpu.py`。
+
+**验证**
+
+- 审批 A/B（真实 DSH 44.7.0 + 桥 v2.0.0 + 旧 `dsh.channel` 副本，`PET_FRAMESEQ=0`）：
+  旧安装包审批后第 1 次采样即 `IsHungAppWindow`（HUNG=1）；新源码同流程 90 次采样
+  全部响应（hung=0，进程存活），审批卡出现、answer `ok=True`。
+- 静息 CPU（16 核，60s 窗口，`playback_speed=2.0`）：受控待机 1.736% → 0.873%
+  （−49.7%）；默认权重 1.300% → 0.800%（−38.5%）。
+- 启动：最小数据根各阶段 qapp 63–68ms / host 295–300ms / restore 361–403ms；
+  带用户 legacy mod 824ms。两个待转 clip 63.5s / 67.2 CPU-s，与用户旧安装
+  01:48:02→01:49:11 的 69s 窗口对齐；新逻辑在用户活跃时只等待不派生 ffmpeg。
+- 聚焦测试 185 passed；全量 `tests/test_petcore_*.py` **2785 passed / 1 skipped in 232.08s**；
+  ruff（含 scripts/）全绿；`node --test tests/test_bridge_*.js` 60 passed。
+
+**未验证 / 风险**
+
+- 闲置降帧默认开与主分支默认关相反（用户明确要求降静息）；设置页可关，阈值固定 30s。
+- 供给等待只改起手时机；用户从不离开电脑时迁移会一直推迟（不影响播放）。
+- 旧 `dsh.channel` 不自动停用（第三方数据 mod，已把端口做成线程安全；建议用户手动停用）。
+- 旧包 WER 报告未等落盘（采样后进程被 kill）；以 `IsHungAppWindow` +
+  `SendMessageTimeout` 为判据。
+- 任务管理器功耗/电池未测；bench 数值受后台负载 ±0.1%。
+
+**产物**：`rel-chat-fix-2026-11-01/dsh-pet-core-setup.exe`，301,146,242 B，SHA-256
+`8b9535232528badeda98b920b0e95455909dbb0cb6ccc6eea4be95935b54c46a`（未签名）；
+onedir exe 15,856,317 B；`check.json`：version 0.3.0 / menu_template=json /
+strict.problems=[] / shenshen 106 动画（frameseq 23 + webm 83）/ daily 1200 / 配图 24/24；
+Inno `Successful compile (117.859 sec)`；打包 onedir 真机 8 秒：窗口 `dsh-pet-core`、
+`IsHungAppWindow=False`。

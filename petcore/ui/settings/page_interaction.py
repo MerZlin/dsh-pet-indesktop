@@ -68,6 +68,7 @@ class InteractionPage(SettingsPage):
         "no_move",
         "lock_position",
         "shift_drag",
+        "idle_low_fps_enabled",
     )
 
     def __init__(self, host, parent=None):
@@ -319,6 +320,11 @@ class InteractionPage(SettingsPage):
             speed_layout.addWidget(self.playback_speed)
             speed_layout.addStretch(1)
             animation_card.add_row("播放速率", speed_row, "0.5x–2.0x，立即作用于当前动画。")
+            animation_card.add_row(
+                "闲置降帧",
+                self._checks["idle_low_fps_enabled"],
+                "30 秒无操作后待机动画隔帧播放（24→12fps），降低 CPU 与耗电；点击/拖动立即恢复。",
+            )
             self.animation_gap = QSpinBox(self)
             self.animation_gap.setRange(0, 3600)
             self.animation_gap.setSuffix(" 秒")

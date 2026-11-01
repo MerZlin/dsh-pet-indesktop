@@ -814,6 +814,12 @@
   `Content-Range` 起止/总长，200 只回退单流一次，429/Retry-After 不重试，取消每 256KiB 检查，
   成功装配后段文件/侧车全删；所有 `urlopen` 仍 `pollute=False`。
 
+- **端口 GUI 亲和**：`ChatPort.append/open` 与 `PresentationPort.say/say_sequence/show_image/notify/play_event/play_animation/release_loop/hide` 必须可被后台线程调用——非 GUI 线程一律经信号/`QtScheduler` 排队，**绝不在 worker 线程 `_ensure()` 建窗、碰气泡或 `QSystemTrayIcon.showMessage`**。现场：旧 `dsh.channel` mod 在自己的 SSE 线程里调 `chat.append`，审批卡弹出时整个应用 AppHang（Windows 1002）。
+- **标题栏按钮顺序**：`[pin][最小化][最大化][关闭]`；最大化按钮必须 `addWidget` 进标题栏布局（少这一行会作为裸子控件停在 (0,0)，用户看到标题左侧多一个方块）。
+- **审批路径不整段重放/逐帧落盘**：`DshView._on_history` 每批 20 条、批间 `QTimer.singleShot(0)` 让出事件循环；重放期间的实时帧/审批帧进 `_deferred_frames`，结束后按序落地。`_persist_dsh_frame` 只改内存 + 400ms 合并落盘，`_refresh_history` 跟随落盘；`_on_closed`/`_on_view_changed`/`_on_session`/`_on_dsh_submit`/`_load_fallback` 前必须 `_flush_dsh`。审批处理 >1s 记 warning。
+- **闲置降帧**：`idle_low_fps_enabled`（本宠，默认开）命中条件 = 开关开 + 可见 + 未锁屏 + 非拖拽/探头/击飞 + 距上次用户交互 ≥30s；命中后对当前 clip `set_frame_divisor(2)`（帧序列间隔 ×2、每拍跳 2 帧，时长不变；WebM 退 `set_decode_throttle`）。点击/拖动/滚轮/右键/手动播放/取消隐藏必须立刻回 1；随机自播动作也属于「静息」并降帧（同主分支），别只给 idle clip 降。
+- **首跑供给等系统空闲**：`start_background_provision` 在 Windows 上等 `GetLastInputInfo` 连续空闲 ≥60s（每 20s 查一次）才起手，非 Windows 保留 5s 初延时；日志写「等待系统空闲」「开始（已空闲 N 秒）」与 `elapsed`。用户活跃时启动的进程**不许**派生 ffmpeg（现场：每次启动迁移 2 个 clip，VP9 解码 + WebP 编码约一分钟、16 核机器 9%）。迁移是质量升级，宁可多等几次启动。
+
 ## 4. 变更纪律
 
 - 行为修复先写会红的测试，再改产品代码；Qt 行为用真实事件循环或 `offscreen`。

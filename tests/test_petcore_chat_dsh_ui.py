@@ -239,6 +239,34 @@ def test_maximized_window_has_no_resize_edges(app) -> None:
         window.deleteLater()
 
 
+def test_maximize_button_sits_between_minimize_and_close(app) -> None:
+    """标题栏按钮顺序：… pin → 最小化 → 最大化 → 关闭（用户报的「方块在左上角」）。
+
+    ``maximize_button`` 以前只创建、没进布局，作为裸子控件停在标题栏 (0,0)；
+    这里同时钉布局序和真实几何，防止再靠「看起来在右边」蒙混过关。
+    """
+    window = ChatWindow(dsh=None)
+    window.resize(960, 700)
+    window.show()
+    _pump(app)
+    try:
+        layout = window.title_bar.layout()
+        assert layout is not None
+        minimum = layout.indexOf(window.minimize_button)
+        maximum = layout.indexOf(window.maximize_button)
+        close = layout.indexOf(window.close_button)
+        assert 0 <= minimum < maximum < close, (minimum, maximum, close)
+        minimum_rect = window.minimize_button.geometry()
+        maximum_rect = window.maximize_button.geometry()
+        close_rect = window.close_button.geometry()
+        assert maximum_rect.left() > minimum_rect.left()
+        assert maximum_rect.right() < close_rect.left()
+        assert window.title_bar.rect().contains(maximum_rect)
+    finally:
+        window.close()
+        window.deleteLater()
+
+
 def test_dsh_sidebar_section_hidden_until_enabled(app) -> None:
     window = ChatWindow(dsh=None)
     window.resize(960, 700)

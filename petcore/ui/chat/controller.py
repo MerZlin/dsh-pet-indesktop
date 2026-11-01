@@ -10,11 +10,12 @@ mod 通过端口注册「用户发送 / 停止」回调，窗口关闭只隐藏�
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from ...chat.session_store import ChatSession, SessionStore
@@ -51,6 +52,12 @@ def asr_reason_text(reason: object) -> str:
     return _ASR_REASON_TEXT.get(str(reason or ""), "语音输入失败")
 
 
+#: DSH 实时帧的落盘合并窗口：逐帧 `store.save + _refresh_history` 会把 GUI 线程
+#: 拖住（一次工具密集的回合几十帧、每帧重写整份会话并重建侧栏），400ms 合并一次
+#: 既保证重开会话前数据已落盘（切换/关闭时会强制 flush），又不卡界面。
+DSH_FLUSH_MS = 400
+
+
 @dataclass
 class _ChatState:
     owner: str
@@ -79,6 +86,11 @@ class ChatController(QObject):
     done_received = Signal(str, str, int)
     error_received = Signal(str, str, str, int)
     record_received = Signal(str, str, str, int)
+    #: 外部 mod（含第三方）可能从自己的 SSE/worker 线程调 ChatPort。``append``
+    #: 首次调用会创建整个 ChatWindow，``open`` 会显示/抬起窗口——都必须在 GUI
+    #: 线程做；这里用信号排队，绝不让后台线程碰控件。
+    append_received = Signal(str, str, str, int)
+    open_received = Signal(str, int, str)
 
     def __init__(self, host, root: Path) -> None:
         super().__init__(host if isinstance(host, QObject) else None)
@@ -105,6 +117,8 @@ class ChatController(QObject):
         self.done_received.connect(self._apply_done)
         self.error_received.connect(self._apply_error)
         self.record_received.connect(self._apply_record)
+        self.append_received.connect(self._apply_append)
+        self.open_received.connect(self._apply_open)
         self.register_channel("dsh", self._submit_dsh, self._stop_dsh)
 
     # ---------------------------------------------------------------- 公共状态
@@ -117,8 +131,18 @@ class ChatController(QObject):
         return state.window if state is not None else None
 
     # ---------------------------------------------------------------- ChatPort
+    def _on_gui_thread(self) -> bool:
+        return QThread.currentThread() == self.thread()
+
     def open(self, owner: str, *, pet_slot: int | None = None, title: str = "") -> bool:
-        state = self._ensure(owner, pet_slot)
+        slot = self._slot(pet_slot)
+        if not self._on_gui_thread():
+            self.open_received.emit(str(owner), int(slot), str(title or ""))
+            return True
+        return self._apply_open(str(owner), int(slot), str(title or ""))
+
+    def _apply_open(self, owner: str, slot: int, title: str) -> bool:
+        state = self._ensure(owner, slot)
         window = state.window
         if window is None:
             return False
@@ -134,7 +158,19 @@ class ChatController(QObject):
     def append(
         self, owner: str, role: str, text: str, *, pet_slot: int | None = None
     ) -> None:
-        state = self._ensure(owner, pet_slot)
+        text = str(text or "").strip()
+        if not text:
+            return
+        slot = self._slot(pet_slot)
+        if not self._on_gui_thread():
+            self.append_received.emit(
+                str(owner), str(role or "user"), text, int(slot)
+            )
+            return
+        self._apply_append(str(owner), str(role or "user"), text, int(slot))
+
+    def _apply_append(self, owner: str, role: str, text: str, slot: int) -> None:
+        state = self._ensure(owner, slot)
         if state.window is not None:
             state.window.append_message(role, text)
         state.session.append(role, text)
@@ -326,6 +362,9 @@ class ChatController(QObject):
         return "pet"
 
     def _dsh_local(self, state: _ChatState) -> list[dict]:
+        # 视口比 Hub 缓存更早激活时会走本地历史：先把内存里未落盘的帧写下去，
+        # 否则刚到的 assistant 帧会在重开视图时“消失”。
+        self._save_dsh_now(state)
         sessions = state.store.list_sessions(include_archived=True, channel="dsh")
         if not sessions:
             return []
@@ -367,6 +406,7 @@ class ChatController(QObject):
         state = self._states.get(key)
         if state is None or not session_id:
             return
+        self._flush_dsh(state)
         self.open_channel(
             "dsh",
             str(session_id),
@@ -388,11 +428,10 @@ class ChatController(QObject):
         value = str(text or "").strip()
         if not value:
             return
+        self._flush_dsh(state)
         if state.session.channel != "dsh":
             conversation = self._dsh_conversation(state)
-            state.session = state.store.ensure_conversation(
-                "dsh", conversation, title="DSH 会话"
-            )
+            state.session = self._dsh_session(state, conversation)
         state.session.append("user", value, channel="dsh")
         self._save(state)
         self._memory_note(state, "user", value)
@@ -406,9 +445,7 @@ class ChatController(QObject):
         if kind not in {"user", "assistant", "tool-call", "tool-result"}:
             return
         conversation = str(frame.get("sessionId") or "pet")
-        session = state.store.ensure_conversation(
-            "dsh", conversation, title="DSH 会话"
-        )
+        session = self._dsh_session(state, conversation)
         boot = ""
         hub = self._dsh_hub
         if hub is not None:
@@ -460,16 +497,56 @@ class ChatController(QObject):
                 },
             )
         if added:
-            try:
-                state.store.save(session)
-            except OSError:
-                logger.debug("dsh frame persist failed", exc_info=True)
             if state.session.session_id == session.session_id:
                 # 同一会话的新对象才是磁盘真相；否则关闭窗口时 _save(state) 会用
                 # 打开时的旧快照把刚写入的 assistant/tool 消息覆盖掉。
                 state.session = session
-            if state.window is not None:
-                self._refresh_history(state)
+            self._mark_dsh_dirty(state, session)
+
+    def _dsh_session(self, state: _ChatState, conversation: str) -> ChatSession:
+        """按会话 id 缓存 DSH 会话对象：逐帧 `ensure_conversation` 会读整目录。"""
+        cache = state.extras.setdefault("dsh_sessions", {})
+        session = cache.get(conversation)
+        if session is None:
+            session = state.store.ensure_conversation(
+                "dsh", conversation, title="DSH 会话"
+            )
+            cache[conversation] = session
+        return session
+
+    def _mark_dsh_dirty(self, state: _ChatState, session: ChatSession) -> None:
+        """标记会话有未落盘帧；400ms 合并写一次，不再每帧写盘 + 重建侧栏。"""
+        state.extras.setdefault("dsh_dirty", set()).add(session.session_id)
+        timer = state.extras.get("dsh_flush_timer")
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(DSH_FLUSH_MS)
+            timer.timeout.connect(lambda s=state: self._flush_dsh(s))
+            state.extras["dsh_flush_timer"] = timer
+        if not timer.isActive():
+            timer.start()
+
+    def _save_dsh_now(self, state: _ChatState) -> bool:
+        dirty = state.extras.pop("dsh_dirty", set())
+        if not dirty:
+            return False
+        sessions = state.extras.get("dsh_sessions") or {}
+        for session in list(sessions.values()):
+            if session.session_id not in dirty:
+                continue
+            try:
+                state.store.save(session)
+            except OSError:
+                logger.warning("dsh session save failed", exc_info=True)
+        return True
+
+    def _flush_dsh(self, state: _ChatState) -> None:
+        timer = state.extras.get("dsh_flush_timer")
+        if timer is not None and timer.isActive():
+            timer.stop()
+        if self._save_dsh_now(state) and state.window is not None:
+            self._refresh_history(state)
 
     def append_to_session(
         self, owner: str, role: str, text: str, *, pet_slot: int | None = None
@@ -952,6 +1029,7 @@ class ChatController(QObject):
         state = self._states.get(key)
         if state is None:
             return
+        self._flush_dsh(state)
         self._cancel_stream_for_switch(state)
         if not session_id:
             state.session = state.store.new_session()
@@ -994,6 +1072,9 @@ class ChatController(QObject):
         state = self._states.get(key)
         if state is None:
             return
+        # 切走之前先落盘：DSH 缓存对象里的最新帧还没写进文件，下面的
+        # `_channel_session` 会从磁盘重新读一份，不 flush 就会丢最后几帧。
+        self._flush_dsh(state)
         target = "dsh" if str(view or "").lower() == "dsh" else "ai"
         config = self._config()
         if config is not None:
@@ -1009,7 +1090,10 @@ class ChatController(QObject):
         if current == target:
             self._refresh_history(state)
             return
-        session = self._channel_session(state, target)
+        if target == "dsh":
+            session = self._dsh_session(state, self._dsh_conversation(state))
+        else:
+            session = self._channel_session(state, target)
         self._cancel_stream_for_switch(state)
         state.session = session
         state.active = False
@@ -1028,6 +1112,7 @@ class ChatController(QObject):
         """
         if not self._states or not isinstance(frame, dict):
             return
+        started = time.perf_counter()
         state = next(iter(self._states.values()), None)
         if state is None:
             return
@@ -1059,6 +1144,11 @@ class ChatController(QObject):
         window.set_view("dsh")
         window.show()
         window.raise_()
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        logger.debug("dsh approval UI prepared in %.0f ms", elapsed_ms)
+        if elapsed_ms >= 1000.0:
+            # 现场留痕：审批路径再出现秒级停顿，日志能直接指出是哪一段。
+            logger.warning("dsh approval UI took %.0f ms", elapsed_ms)
 
     def _on_archive(
         self, state: _ChatState, session_id: str, archived: bool
@@ -1109,6 +1199,7 @@ class ChatController(QObject):
 
     def _load_fallback(self, state: _ChatState) -> None:
         """当前会话被归档/删除/隐藏后，切到下一个可见会话或新建。"""
+        self._flush_dsh(state)
         # 流式回答还在吐 token 时切会话：先取消，迟到的 done 由
         # stream_session_id 守卫丢弃，不会写进新会话。
         self._cancel_stream_for_switch(state)
@@ -1200,6 +1291,7 @@ class ChatController(QObject):
     def _on_closed(self, key: tuple[str, int]) -> None:
         state = self._states.get(key)
         if state is not None:
+            self._flush_dsh(state)
             self._save(state)
 
     def _on_pin_toggled(self, on: bool) -> None:

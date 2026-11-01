@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -51,6 +52,8 @@ _TIMELINE_MARGIN = 30
 #: 折叠标记。
 _COLLAPSED = "▸"
 _EXPANDED = "▾"
+#: 历史重放每批条数（批间 `QTimer.singleShot(0)` 让出事件循环）。
+_HISTORY_BATCH = 20
 
 
 class _WrapLabel(QLabel):
@@ -162,6 +165,13 @@ class DshView(QWidget):
         self._client = client
         self._started = False
         self._transcript: list[tuple[str, str]] = []
+        #: 历史重放是**分批**的：审批到达时若时间线里已有几十条工具/对话，
+        #: 一次性建 200 个控件会把 GUI 线程占住数秒（桌宠同线程 → 看起来卡死）。
+        #: 每批 20 条、批间让出事件循环；重放期间的实时帧排队，结束后按序落地。
+        self._history_queue: deque[tuple[str, str]] = deque()
+        self._history_token = 0
+        self._history_draining = False
+        self._deferred_frames: list[dict] = []
         #: callId → 工具卡（``tool-call`` 建卡，``tool-result`` 收尾）。
         self._tool_cards: dict[str, _Collapsible] = {}
         #: requestId → (card, allow, deny)；审批卡是交互控件，结构与既有测试一致。
@@ -329,7 +339,9 @@ class DshView(QWidget):
                 local = self._hub.local_history()
                 if local:
                     self._on_history(local)
-            self._replay_approvals()
+            # 分批重放会自己补审批卡；重放中再补一遍会插到历史中间。
+            if not self._history_draining:
+                self._replay_approvals()
             return
         if self._controller is not None:
             self._controller.start()
@@ -427,27 +439,71 @@ class DshView(QWidget):
         self._reopen_approvals()
         self.set_status(_REASON_TEXT.get(reason, f"DSH 操作失败（{reason}）"), False)
 
+    #: 重放期间必须延后的帧（历史快照之后到达的实时帧；按原序落地）。
+    _DEFERRED_KINDS = frozenset(
+        {
+            "user",
+            "assistant",
+            "tool-call",
+            "tool-result",
+            "approval-request",
+            "approval-resolved",
+        }
+    )
+
     def _on_history(self, items) -> None:
+        self._history_token += 1
+        token = self._history_token
         self._clear_rows()
         self._transcript.clear()
-        if not isinstance(items, list):
-            self._replay_approvals()
+        self._history_queue.clear()
+        self._deferred_frames.clear()
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                role = str(item.get("role") or "")
+                text = str(item.get("text") or "").strip()
+                if role in ("user", "assistant") and text:
+                    self._history_queue.append((role, text))
+        self._history_draining = bool(self._history_queue)
+        if not self._history_draining:
+            self._finish_history()
             return
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            role = str(item.get("role") or "")
-            text = str(item.get("text") or "").strip()
-            if role in ("user", "assistant") and text:
-                self._add_text(role, text)
+        self._drain_history(token)
+
+    def _drain_history(self, token: int) -> None:
+        if token != self._history_token or not self._history_draining:
+            return
+        for _ in range(_HISTORY_BATCH):
+            if not self._history_queue:
+                break
+            role, text = self._history_queue.popleft()
+            self._add_text(role, text, scroll=False)
+        if self._history_queue:
+            QTimer.singleShot(0, self, lambda: self._drain_history(token))
+            return
+        self._finish_history()
+
+    def _finish_history(self) -> None:
         # 历史回放会重建整条时间线，但**待审批是 Hub 级状态**：回放完必须把
         # 仍然挂着的卡补回来（桥不会在 /pet/history 里重放 approval 帧）。
+        self._history_draining = False
         self._replay_approvals()
+        deferred = self._deferred_frames
+        self._deferred_frames = []
+        for frame in deferred:
+            self._on_frame(frame)
+        self._scroll_bottom()
 
     def _on_frame(self, frame) -> None:
         if not isinstance(frame, dict):
             return
         kind = str(frame.get("kind") or "")
+        if self._history_draining and kind in self._DEFERRED_KINDS:
+            # 历史还没铺完就插实时帧会让时间线错序；排队到 `_finish_history`。
+            self._deferred_frames.append(dict(frame))
+            return
         if kind == "connection":
             if frame.get("ok"):
                 self.set_status("已连接 DSH", True)
@@ -516,7 +572,9 @@ class DshView(QWidget):
     def _append(self, widget: QWidget) -> None:
         self.timeline_layout.insertWidget(self.timeline_layout.count() - 1, widget)
 
-    def _add_text(self, role: str, text: str, *, record: bool = True) -> None:
+    def _add_text(
+        self, role: str, text: str, *, record: bool = True, scroll: bool = True
+    ) -> None:
         value = str(text or "").strip()
         if not value:
             return
@@ -534,7 +592,8 @@ class DshView(QWidget):
         self._append(label)
         if record and role in ("user", "assistant"):
             self._transcript.append((role, value))
-        self._scroll_bottom()
+        if scroll:
+            self._scroll_bottom()
 
     def _add_assistant(self, frame: dict) -> None:
         """一条 assistant 帧 → 「已思考 N 字」一行 + 正文。"""

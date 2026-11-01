@@ -146,6 +146,17 @@ class PetClip:
             except Exception:
                 pass
 
+    def set_frame_divisor(self, divisor: int) -> None:
+        """闲置降帧：帧序列走跳帧，WebM 没有该接口时退回解码节流。"""
+        native = getattr(self._impl, "set_frame_divisor", None)
+        if callable(native):
+            try:
+                native(divisor)
+                return
+            except Exception:
+                pass
+        self.set_decode_throttle(divisor)
+
     def set_playback_speed(self, speed: float) -> None:
         setter = getattr(self._impl, "set_playback_speed", None)
         if callable(setter):

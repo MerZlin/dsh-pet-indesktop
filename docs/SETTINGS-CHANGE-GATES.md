@@ -965,3 +965,9 @@ C 盘剩余空间显示选项（性能占用要低）」。
 5. **文档/视觉**：本节 + L144–L148 + `PR-REPORT-FEEDBACK-BATCH3-2026-10-31.md` +
    `INTEROP-ARCHITECTURE.md` + `INDEX.md` 登记；离屏截图见 `.scratch/daily/` 与
    `.scratch/capture_market_progress.py` 产物。
+
+### 2026-11-01 — petcore 批次 5：闲置降帧（`idle_low_fps_enabled`）
+
+| 键 | 默认 | 作用域 | 披露 | 依赖 / 失败路径 | 搜索别名 |
+|---|---|---|---|---|---|
+| `idle_low_fps_enabled` | `True` | 本宠 | primary | 30 秒无交互后动画隔帧播放（帧序列 divisor=2，24→12fps；用户 2x 播放时 48→24fps）。点击/拖动/滚轮/右键菜单/手动播放/取消隐藏立即恢复全速；锁屏、拖拽、探头、击飞期间不降帧；关闭后只保留 1Hz 门控检查（常数开销），不调用 divisor。新增键，老配置取默认；无旧键/旧入口迁移。与主分支默认（关）相反：本批按用户「静息 CPU 还能降吗」的明确要求默认开，设置页可关。 | 闲置降帧 / 省电 / CPU / 卡顿 |

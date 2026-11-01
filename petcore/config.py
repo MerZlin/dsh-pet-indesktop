@@ -388,6 +388,9 @@ DEFAULTS: dict[str, Any] = {
     "lock_position": False,
     "shift_drag": False,
     "playback_speed": 1.0,
+    # 闲置降帧：30 秒无交互后待机动画隔帧播放（24fps→12fps），交互即恢复。
+    # 用户明确要求降低静息 CPU；与主分支默认关不同，本批默认开、设置页可关。
+    "idle_low_fps_enabled": True,
     "animation_gap_seconds": 0.0,
     "head_pat_enabled": True,
     "head_pat_animation_mode": "default_click",
@@ -1362,6 +1365,9 @@ class Config:
         normalized["lock_position"] = _bool(normalized.get("lock_position"), False)
         normalized["shift_drag"] = _bool(normalized.get("shift_drag"), False)
         normalized["playback_speed"] = _number(normalized.get("playback_speed"), 1.0, 0.5, 2.0)
+        normalized["idle_low_fps_enabled"] = _bool(
+            normalized.get("idle_low_fps_enabled"), True
+        )
         normalized["animation_gap_seconds"] = _number(
             normalized.get("animation_gap_seconds"), 0.0, 0.0, 3600.0
         )

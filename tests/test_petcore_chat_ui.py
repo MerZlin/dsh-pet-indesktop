@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -895,3 +896,47 @@ def test_opening_dsh_mode_selects_a_dsh_session(controller) -> None:
     assert state.session.channel == "dsh"
     assert window.dsh_enabled() is True
     assert controller._config_get("chat_dsh_mode", False) is True
+
+
+def test_append_from_worker_thread_builds_the_window_on_the_gui_thread(
+    app, controller
+) -> None:
+    """后台线程调 ChatPort.append 不许在后台建窗（旧 dsh.channel 的 SSE 线程）。
+
+    旧实现第一次 append 会在调用线程里 `ChatWindow(...)`，随后与 GUI 线程
+    争 Qt 内部锁；现场表现是审批卡弹出时整个桌宠 AppHang。这里把「建窗线程」
+    钉死成 GUI 线程。
+    """
+    created: list = []
+    original = controller._create_window
+
+    def tracked(state):
+        created.append(QThread.currentThread())
+        return original(state)
+
+    controller._create_window = tracked
+    thread = threading.Thread(
+        target=lambda: controller.append("dsh.channel", "assistant", "审批来了"),
+        name="legacy-dsh-sse",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=2.0)
+    assert _wait_until(lambda: controller.window_for("dsh.channel") is not None)
+    assert created and created[0] == app.thread()
+    state = controller.states()[("dsh.channel", 0)]
+    assert any(item.get("content") == "审批来了" for item in state.session.messages)
+
+
+def test_open_from_worker_thread_defers_to_the_gui_thread(app, controller) -> None:
+    thread = threading.Thread(
+        target=lambda: controller.open("ai.chat", pet_slot=0),
+        name="legacy-mod-worker",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=2.0)
+    assert _wait_until(lambda: controller.window_for("ai.chat") is not None)
+    window = controller.window_for("ai.chat")
+    assert window is not None
+    assert window.isVisible() is True

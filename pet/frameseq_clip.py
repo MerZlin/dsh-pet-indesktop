@@ -392,6 +392,9 @@ class FrameSeqClip(QObject):
         self._img_frame = -1
         self._pm: QPixmap | None = None
         self.playback_speed = 1.0
+        #: 消费端隔帧除数（闲置降帧）：>1 时计时器间隔 ×n、每次前进 n 帧，
+        #: 动画时长不变、解码/绘制帧数减半（同主分支的 idle low fps 口径）。
+        self._frame_divisor = 1
         self._running = False
         # 播放节拍暂停（O3）：隐藏/挂起期为 True——定时器停摆（不推进、不预取
         # 下一帧），播放位置/在途帧/显示图原地保留，恢复时从暂停处续播。
@@ -510,9 +513,9 @@ class FrameSeqClip(QObject):
             # 显示槽已是帧 0（预热装载/jumpToFrame(0) 起播/上一圈停在帧 0）：
             # 直接起播并补发帧 0 通知，零解码
             self.frameChanged.emit(0)
-            # 预取链深度与旧路径保持一致（旧路径帧 0 一到货就 `_request(1)`）：
-            # 不预取帧 1 会让起播后第一个 tick 停在等待上（不跳帧但白等一拍）
-            self._request(1)
+            # 预取链深度与旧路径保持一致（旧路径帧 0 一到货就预取下一目标帧）：
+            # 不预取会让起播后第一个 tick 停在等待上（不跳帧但白等一拍）
+            self._request(self._frame_divisor)
         else:
             # 帧 0 尚未到货：**不清显示槽**——保留预热帧/上一圈末帧直到新帧
             # 交付（与 WebMClip edecd57 的语义对齐）。清空会让 sprite.paint
@@ -652,6 +655,21 @@ class FrameSeqClip(QObject):
         if self._running and not self._paused:
             self._apply_interval(self._interval_ms())
 
+    def set_frame_divisor(self, divisor: int) -> None:
+        """消费端隔帧（闲置降帧）：1 = 全速；2 = 每拍前进 2 帧、间隔 ×2。
+
+        和 ``set_decode_throttle``（WebM 的 reader 背压）不同，帧序列的帧是
+        按需从磁盘读的：跳过帧就真的少读少画。``_advance``/预取链都按
+        ``_frame_divisor`` 走，所以动画总时长保持不变，只是采样从 24fps 降到
+        12fps（用户 2x 播放时是 48→24fps）。
+        """
+        value = max(1, min(4, int(divisor or 1)))
+        if value == self._frame_divisor:
+            return
+        self._frame_divisor = value
+        if self._running and not self._paused:
+            self._apply_interval(self._interval_ms())
+
     def _apply_interval(self, interval: int) -> None:
         """落地帧表间隔：同值不重设；运行中真变速排到下一次 timeout 落地。
 
@@ -770,7 +788,9 @@ class FrameSeqClip(QObject):
         return len(self._frames)
 
     def _interval_ms(self) -> int:
-        return max(1, round(1000.0 / self._fps / self.playback_speed))
+        # 除数只在闲置降帧时 >1：间隔 ×n、每拍前进 n 帧，动画时长不变。
+        divisor = max(1, int(self._frame_divisor))
+        return max(1, round(1000.0 / self._fps / self.playback_speed) * divisor)
 
     def _apply(self, img: QImage, frame: int) -> None:
         """上屏一帧：只存 QImage + 帧号；pixmap 交给 ``currentPixmap()`` 惰性建。
@@ -810,7 +830,8 @@ class FrameSeqClip(QObject):
             self._clear_awaiting()  # 到货 = 恢复：看门狗状态清零，此后不再告警
             self._apply(img, idx)
             self.frameChanged.emit(idx)
-            self._request(idx + 1)  # 链式预取下一帧
+            # 链式预取下一目标帧（隔帧时跳过中间帧，省掉它们的解码）。
+            self._request(idx + max(1, int(self._frame_divisor)))
         else:
             self._pending[idx] = img
 
@@ -818,7 +839,8 @@ class FrameSeqClip(QObject):
         if self._closed:
             return  # 收口后时钟可能还有一拍在途（timer 事件已排队）：不得再推进/复活 worker
         self._flush_pending_interval()  # 排队的变速在本次 timeout 落地（零代价）
-        nxt = self._cur + 1
+        step = max(1, int(self._frame_divisor))
+        nxt = self._cur + step
         if nxt >= len(self._frames):
             # 链式一次性播放到尾：停表并发 finished（上层据此接下一个动画）
             self._running = False
@@ -830,7 +852,7 @@ class FrameSeqClip(QObject):
             self._cur = nxt
             self._apply(img, nxt)
             self.frameChanged.emit(nxt)
-            self._request(nxt + 1)
+            self._request(nxt + step)
         else:
             # 未到货：等待不跳帧（同 WebMClip 空转语义），并向 worker 催取
             self._set_awaiting(nxt)

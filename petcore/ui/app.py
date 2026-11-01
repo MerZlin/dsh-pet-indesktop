@@ -3,11 +3,12 @@ from __future__ import annotations
 import inspect
 import logging
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QLockFile, QRect, QTimer, QUrl
+from PySide6.QtCore import QCoreApplication, QLockFile, QRect, QThread, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPalette
 from PySide6.QtWidgets import QApplication
 
@@ -93,6 +94,31 @@ class _PresentationAdapter:
         self._host = host
         self._target_window = target_window
 
+    # ---------------------------------------------------------------- 线程
+    def _on_gui_thread(self) -> bool:
+        app = QCoreApplication.instance()
+        return app is None or QThread.currentThread() == app.thread()
+
+    def _defer(self, callback) -> bool:
+        """把后台线程的展示调用排队到 GUI 线程（mod 不该自己碰控件）。
+
+        第三方 mod 常在自己的 SSE/worker 线程里直接 ``presentation.say()``
+        （旧 ``dsh.channel`` 就是这样）：Qt 控件跨线程操作会与 GUI 线程互锁，
+        现场表现就是审批卡弹出时整个桌宠 AppHang。调度器本身是线程安全的
+        （``QtScheduler`` 用信号排队）；没有调度器（测试替身）时丢弃并记 debug。
+        """
+        scheduler = getattr(self._host, "scheduler", None)
+        call_later = getattr(scheduler, "call_later", None)
+        if not callable(call_later):
+            logger.debug("presentation call from worker thread dropped (no scheduler)")
+            return False
+        try:
+            call_later(0, callback)
+            return True
+        except Exception:  # noqa: BLE001 - 展示失败不能影响调用方状态机
+            logger.debug("presentation defer failed", exc_info=True)
+            return False
+
     def _window(self):
         if self._target_window is not None:
             if not hasattr(self._target_window, "isVisible"):
@@ -127,6 +153,17 @@ class _PresentationAdapter:
 
     def say(self, text: str, *, duration_ms: int = 4000, force: bool = False,
             subtitle: str = "", owner: str = "") -> bool:
+        if not self._on_gui_thread():
+            self._defer(
+                lambda: self.say(
+                    text,
+                    duration_ms=duration_ms,
+                    force=force,
+                    subtitle=subtitle,
+                    owner=owner,
+                )
+            )
+            return False
         quiet = getattr(self._host, "quiet", None)
         if not force and quiet is not None and quiet.quiet_active():
             return False
@@ -146,6 +183,15 @@ class _PresentationAdapter:
 
     def say_sequence(self, items, *, force: bool = False, on_show=None,
                      owner: str = "") -> bool:
+        if not self._on_gui_thread():
+            # 生成器一旦排队就会被别的线程消费：先固化成列表。
+            frozen = list(items or ())
+            self._defer(
+                lambda: self.say_sequence(
+                    frozen, force=force, on_show=on_show, owner=owner
+                )
+            )
+            return False
         quiet = getattr(self._host, "quiet", None)
         if not force and quiet is not None and quiet.quiet_active():
             return False
@@ -201,6 +247,9 @@ class _PresentationAdapter:
 
     def hide(self, owner: str = "") -> None:
         """收起气泡；给了 ``owner`` 就只在它仍持有展示会话时收（别人的不动）。"""
+        if not self._on_gui_thread():
+            self._defer(lambda: self.hide(owner))
+            return
         name = str(owner or "").strip()
         if name and presentation_gate.owner() != name:
             return
@@ -237,10 +286,16 @@ class _PresentationAdapter:
             return None
 
     def play_animation(self, name: str, *, loop: bool = False) -> bool:
+        if not self._on_gui_thread():
+            self._defer(lambda: self.play_animation(name, loop=loop))
+            return False
         window = self._window()
         return bool(window is not None and window.play_animation(name, loop=loop))
 
     def release_loop(self) -> bool:
+        if not self._on_gui_thread():
+            self._defer(self.release_loop)
+            return False
         window = self._window()
         return bool(window is not None and window.release_loop())
 
@@ -254,6 +309,18 @@ class _PresentationAdapter:
         force: bool = False,
         owner: str = "",
     ) -> bool:
+        if not self._on_gui_thread():
+            self._defer(
+                lambda: self.show_image(
+                    path,
+                    caption,
+                    duration_ms=duration_ms,
+                    scale=scale,
+                    force=force,
+                    owner=owner,
+                )
+            )
+            return False
         if not force and not presentation_gate.allows(owner):
             # 与 say() 同一条闸门：别人占着气泡时，图片气泡也要让路。
             return False
@@ -264,10 +331,22 @@ class _PresentationAdapter:
         )
 
     def play_event(self, group: str, variant: str | int | None = None) -> bool:
+        if not self._on_gui_thread():
+            self._defer(lambda: self.play_event(group, variant))
+            return False
         window = self._window()
         return bool(window is not None and window.play_event(group, variant))
 
     def notify(self, title: str, message: str, *, force: bool = False, on_click=None) -> bool:
+        if not self._on_gui_thread():
+            # 托盘气泡（Shell_NotifyIcon）也不能从 worker 线程发：会等 GUI 线程
+            # 处理消息，而对方可能正等 GIL——现场表现同样是整个应用卡死。
+            self._defer(
+                lambda: self.notify(
+                    title, message, force=force, on_click=on_click
+                )
+            )
+            return True
         # Preserve explicit command feedback; automatic reminders never force.
         text = f"{title}：{message}" if title else message
         if self.say(text, force=force):
@@ -1693,6 +1772,12 @@ def _wire_screens(app: QApplication, manager) -> None:
 
 def run(config: Config, *, root: Path, mod_dirs, instance: str | None = None) -> int:
     setup_logging(paths.logs_dir(root))
+    started = time.perf_counter()
+    stages: list[tuple[str, float]] = []
+
+    def mark(name: str) -> None:
+        stages.append((name, (time.perf_counter() - started) * 1000.0))
+
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(f"dsh-pet-core-{instance}" if instance else "dsh-pet-core")
     app.setQuitOnLastWindowClosed(False)
@@ -1707,6 +1792,7 @@ def run(config: Config, *, root: Path, mod_dirs, instance: str | None = None) ->
     icon_path = paths.legacy_asset_root() / "icon.ico"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
+    mark("qapp")
 
     lock = QLockFile(str(root / "petcore.lock"))
     lock.setStaleLockTime(0)
@@ -1714,19 +1800,24 @@ def run(config: Config, *, root: Path, mod_dirs, instance: str | None = None) ->
     if not lock.tryLock(100):
         logger.warning("another petcore instance is already running")
         return 0
+    mark("lock")
 
     host = CoreHost(app, config, root, mod_dirs)
+    mark("host")
     manager = PetManager(host, root, config)
     host.pets = manager
     character = host.character_for(str(config.get("character") or ""))
     window = manager.create_primary(character)
+    mark("character")
     host.window = window
     host.attach_window(window)
+    mark("attach")
     host.memory.start()
     manager.restore()
     host.reload_menu()
     host.tray = _install_tray(host)
     host.install_hotkeys()
+    mark("restore")
     # 全屏自动隐藏：单实例监视器，1 Hz 探测；配置门关闭时不建定时器。
     host.start_fullscreen_hide()
     if str(config.get("frameseq") or "auto") != "off":
@@ -1747,6 +1838,10 @@ def run(config: Config, *, root: Path, mod_dirs, instance: str | None = None) ->
     )
     watcher.install()
     _wire_screens(app, manager)
+    logger.info(
+        "启动耗时 %s",
+        " ".join(f"{name}={milliseconds:.0f}ms" for name, milliseconds in stages),
+    )
 
     def finish() -> None:
         host._closing = True

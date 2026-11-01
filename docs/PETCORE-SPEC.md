@@ -306,7 +306,7 @@ petcore/
 - **移动同步**：朝向由移动方向决定；窗口位置由 clip 帧号 + `move_curves` 推进，静态帧不位移，末拍精确到位。
 
 - **打包**：PyInstaller 6.22.3 装入 `.venv`；Inno Setup 6.7.3 便携安装到 `tools/InnoSetup`；`scripts/build_petcore.ps1 -Clean -Installer` 实际产出 onedir 与安装包，`--check --out` 取证。
-- **动画**：`animation_gap_seconds`、`playback_speed` 生效；Q 弹/回旋/击飞/投喂/碰撞属于本轮交互动画。
+- **动画**：`animation_gap_seconds`、`playback_speed` 生效；`idle_low_fps_enabled`（默认开）在 30 秒无交互后把动画隔帧（24→12fps）以降低静息 CPU，任何交互立即恢复；Q 弹/回旋/击飞/投喂/碰撞属于本轮交互动画。
 - 后续：P3 网络/worker 域（F01/F02/F03/F04/F05/F06/F07/F09），P4 动画与性能 backlog（共享解码、预测预热、WebM 全量、VPet PNG、Agent 联动动画、音乐唱歌、动态岛、head_box 精细探头）。见 [`PETCORE-ANIMATION-BACKLOG.md`](PETCORE-ANIMATION-BACKLOG.md)。
 
 

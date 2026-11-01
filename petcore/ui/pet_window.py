@@ -83,6 +83,11 @@ from .slingshot import SlingshotController
 
 logger = logging.getLogger("petcore.ui.window")
 
+#: 闲置降帧：连续无交互多少秒后生效（固定阈值，不新增配置键）。
+IDLE_LOW_FPS_THRESHOLD = 30.0
+#: 隔帧除数：2 = 24fps→12fps（用户 2x 播放时 48→24fps）。
+IDLE_LOW_FPS_DIVISOR = 2
+
 
 @dataclass
 class ScreenState:
@@ -204,6 +209,13 @@ class PetWindow(QWidget):
         self._right_hold_timer.setSingleShot(True)
         self._right_hold_timer.setInterval(POINTER_MENU_HOLD_MS)
         self._right_hold_timer.timeout.connect(self._on_right_hold)
+        # 闲置降帧：30 秒无交互后待机动画隔帧（24→12fps），任何点击/拖动立即
+        # 恢复。1Hz 检查一次；只在 idle 动作上生效，随机动作/移动/拖拽全速。
+        self._last_activity = time.monotonic()
+        self._idle_low_fps_active = False
+        self._idle_fps_timer = QTimer(self)
+        self._idle_fps_timer.setInterval(1000)
+        self._idle_fps_timer.timeout.connect(self._tick_idle_fps)
         self._layout = None
         self._apply_flags(initial=True)
         # 色键直播窗必须是不透明窗口：OBS 色度键需要一个真正有像素的底色；
@@ -306,6 +318,8 @@ class PetWindow(QWidget):
         else:
             apply_tool_window(int(self.winId()))
         self._play_idle()
+        self._last_activity = time.monotonic()
+        self._idle_fps_timer.start()
         click_spec = self.catalog.find_for(GraphType.TOUCH_BODY, AnimatType.SINGLE)
         if click_spec is not None:
             QTimer.singleShot(800, lambda spec=click_spec: self.library.warm_first_frame(spec))
@@ -550,6 +564,7 @@ class PetWindow(QWidget):
         if abs(speed - 1.0) > 1e-9:
             clip.set_playback_speed(speed)
         clip.start()
+        self._apply_idle_divisor(self._idle_low_fps_allowed())
         if clip.current_image() is not None:
             self._on_frame(clip.current_frame_number())
         if kind == KIND_MOVE:
@@ -570,6 +585,46 @@ class PetWindow(QWidget):
             self._clip.stop()
             self._clip.clear_callbacks()
             self._clip = None
+        self._idle_low_fps_active = False
+
+    # ---------------------------------------------------------------- 闲置降帧
+    def _note_activity(self) -> None:
+        """任何用户交互都立刻回到全速（不必等下一次 1Hz 检查）。"""
+        self._last_activity = time.monotonic()
+        if self._idle_low_fps_active:
+            self._apply_idle_divisor(False)
+
+    def _idle_low_fps_allowed(self) -> bool:
+        if not bool(self.config.get("idle_low_fps_enabled", True)):
+            return False
+        if not self.isVisible() or self._paused_for_session:
+            return False
+        if self._clip is None:
+            return False
+        if self.dragging or self.motion.thrown or self._effects_lock_active():
+            return False
+        if bool(getattr(self, "probe_active", False)):
+            return False
+        return (time.monotonic() - self._last_activity) >= IDLE_LOW_FPS_THRESHOLD
+
+    def _apply_idle_divisor(self, active: bool) -> None:
+        active = bool(active)
+        if active == self._idle_low_fps_active:
+            return
+        self._idle_low_fps_active = active
+        clip = self._clip
+        if clip is None:
+            return
+        setter = getattr(clip, "set_frame_divisor", None)
+        if not callable(setter):
+            return
+        try:
+            setter(IDLE_LOW_FPS_DIVISOR if active else 1)
+        except Exception:  # noqa: BLE001 - 降帧失败不能影响播放
+            logger.debug("idle frame divisor failed", exc_info=True)
+
+    def _tick_idle_fps(self) -> None:
+        self._apply_idle_divisor(self._idle_low_fps_allowed())
 
     def _on_frame(self, _number: int) -> None:
         if self._clip is None:
@@ -1137,6 +1192,7 @@ class PetWindow(QWidget):
             self._sync_host_pet_visibility()
             return
         self.show()
+        self._note_activity()
         if self._input_controller is not None and not self._paused_for_session:
             self._input_controller.resume()
         if not self._paused_for_session:
@@ -1361,6 +1417,7 @@ class PetWindow(QWidget):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
+        self._note_activity()
         self._head_pat_tracker.reset()
         self._last_cursor_local = event.position()
         if self.click_through:
@@ -1426,6 +1483,9 @@ class PetWindow(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         self._last_cursor_local = event.position()
+        if event.buttons():
+            # 拖动/按住也算交互：按住不放时不该降帧。
+            self._note_activity()
         if self.slingshot.aiming:
             self._head_pat_tracker.reset()
             self.slingshot.update(event.position())
@@ -1696,6 +1756,7 @@ class PetWindow(QWidget):
         self._play_throw_animation()
 
     def _on_click(self, *, sound_already_played: bool = False) -> None:
+        self._note_activity()
         if self.motion.thrown or self.effects.throw_egg_active:
             # 主分支 on_sprite_clicked：非 normal 状态不消费点击。飞行中换素材
             # 会与 16ms 位移叠加成「两个位置的桌宠在闪」。
@@ -1875,6 +1936,7 @@ class PetWindow(QWidget):
             self._edge_probe.maybe_enter()
 
     def contextMenuEvent(self, event) -> None:
+        self._note_activity()
         if self.click_through:
             # 穿透模式的菜单只由右键长按计时弹出，原生右键事件一律吞掉。
             event.accept()
@@ -1917,6 +1979,7 @@ class PetWindow(QWidget):
         self.feeding.handle_drop(event)
 
     def wheelEvent(self, event) -> None:
+        self._note_activity()
         steps = list(SCALE_STEPS)
         current = min(steps, key=lambda item: abs(item - self.state.scale))
         index = steps.index(current)
@@ -2090,6 +2153,7 @@ class PetWindow(QWidget):
             return
 
     def play_animation(self, name: str, *, loop: bool = False) -> bool:
+        self._note_activity()
         self._cancel_animation_gap()
         spec = (
             self.catalog.find(name, AnimatType.SINGLE)
@@ -2296,6 +2360,7 @@ class PetWindow(QWidget):
         self.easter.close_all()
         self._cancel_animation_gap()
         self._move_timer.stop()
+        self._idle_fps_timer.stop()
         self._stop_clip()
         self.library.close_all()
         if self._input_controller is not None:

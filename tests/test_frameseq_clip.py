@@ -1187,3 +1187,34 @@ def test_dropped_without_close_stays_pinned_for_inflight_delivery(tmp_path):
     for _ in range(40):
         QApplication.processEvents()
         time.sleep(0.005)
+
+
+def test_frame_divisor_skips_frames_and_keeps_duration(tmp_path):
+    """闲置降帧：divisor=2 时每拍前进 2 帧、间隔 ×2（帧数减半、时长不变）。"""
+    d = tmp_path / "clip"
+    _make_frames(d, count=6)
+    clip = FrameSeqClip(d)
+    frames, done = [], []
+    clip.frameChanged.connect(frames.append)
+    clip.finished.connect(lambda: done.append(1))
+    try:
+        base = round(1000.0 / 24.0)
+        clip.set_frame_divisor(2)
+        assert clip._interval_ms() == base * 2
+        clip.start()
+        clip._timer.stop()
+        _pump_until(lambda: frames == [0])
+        clip._advance()
+        _pump_until(lambda: frames == [0, 2])
+        clip._advance()
+        _pump_until(lambda: frames == [0, 2, 4])
+        clip._advance()  # 6 >= 6：越末 finished
+        assert done == [1]
+        # 运行中改除数：停表后立即落地新间隔（在跑时排到下一拍）。
+        assert clip.start() is True
+        clip._timer.stop()
+        clip.set_frame_divisor(1)
+        assert clip._interval_ms() == base
+        assert clip._timer.interval() == base
+    finally:
+        clip.close()

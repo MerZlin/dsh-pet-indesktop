@@ -145,6 +145,7 @@
 ## PR 报告存档
 
 - [DSH v2 真机联调（2026-10-31）](PR-REPORT-DSH-REAL-MACHINE-2026-10-31.md)：在真实 DSH 44.7.0 上补齐 v1→v2 迁移（旧 junction / patch `insert` / 旧 channel 链接三处）、历史只回放 `source.kind=user`（实测注入 10,292 字符）、审批指纹忽略 `description`（修重复弹卡）、`pet_control` 改标准 JSON Schema 并如实报 `commands`、`/pet/new` 清旧审批。**改 DSH 安装器、审批闸、历史过滤或 `pet_control` 前必读**；未验证项见报告末节。
+- [聊天/DSH 稳定性与启动/静息 CPU（2026-11-01）](PR-REPORT-CHAT-FIX-CPU-2026-11-01.md)：最大化按钮归位；ChatPort/PresentationPort 后台线程调用收口 GUI（旧 `dsh.channel` 审批 AppHang：旧包第 1 次采样必挂、新代码 90 次采样全响应）；DSH 历史 20 条/批重放 + 400ms 合并落盘；首跑供给等系统空闲 60s（2 clip 实测 63.5s/67.2 CPU-s/平均 6.62%）；闲置降帧默认开（受控待机 1.736%→0.873%）。**改聊天端口线程模型、DSH 审批/落盘、首跑供给或待机帧率前必读**。
 - [聊天/DSH 视图、审批投递与网易云识别（2026-11-01）](PR-REPORT-CHAT-DSH-UX-2026-11-01.md)：审批升 `DshHub` 级并常驻订阅（真机：AI 视图也能收到卡，允许后 4.0s 续跑、无第二张卡）、SSE 关流移出 GUI 线程（切换 0.0ms）、DSH 行宽按 viewport（修 1186px→每行裁 450px）、工具/思考折叠 + Markdown、窗口圆角与最大化、`chat_dsh_mode` 侧栏开关与视图↔会话通道、音乐诊断有界化（8s 预算 + 15s 降级窗）与网易云标题。**改 `petcore/ui/chat/`、DSH 审批/订阅、聊天窗几何或音乐采样前必读**。
 
 - [用户反馈批次 3：音频输出 / 每日千句 / 并行下载 / 桌宠×DSH×QQ 互通与人格记忆（2026-10-31）](PR-REPORT-FEEDBACK-BATCH3-2026-10-31.md)：音频输出设备（热插拔/不回退）；每日 1200 句池 + 每天 12 句；PCL2 式多连接分段下载 + 进度条；会话 schema 2 + 侧栏 AI/DSH/QQ 分组；分层人格记忆（inbox/衰减卡/预算渲染/迁移）；DSH v2 单插件（SSE 重放/审批/历史过滤/记忆注入）；QQ OneBot Beta（WebhookPort/白名单/AI 回复）；联网多引擎 + 正文抽取。**改上述任一模块前必读**；真机 DSH/QQ 未验证项见报告末节。

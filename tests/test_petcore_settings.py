@@ -27,7 +27,7 @@ from petcore.engine.catalog import GraphCatalog
 from petcore.engine.enums import AnimatType, GraphType
 from petcore.mods.feature import FeatureManager
 from petcore.ui.menu_model import MenuItem, MenuModel
-from petcore.ui.settings.base import SettingsPage
+from petcore.ui.settings.base import SettingsPage, page_search_texts
 from petcore.ui.icons import MENU_ICON_SIZE
 from petcore.ui.settings.dialog import SettingsDialog
 
@@ -501,6 +501,20 @@ def test_golden_spin_sub_option_follows_its_parent(app, tmp_path):
     assert row.isVisibleTo(interaction) is True
     interaction._checks["golden_spin_on_click"].setChecked(False)
     assert row.isVisibleTo(interaction) is False
+    dialog.close()
+
+
+def test_idle_low_fps_toggle_is_on_by_default_and_searchable(app, tmp_path):
+    host = _host(tmp_path)
+    dialog = SettingsDialog(host)
+    interaction = _page(dialog, "互动与物理")
+    box = interaction._checks["idle_low_fps_enabled"]
+    assert box.isChecked() is True
+    texts = page_search_texts(interaction)
+    assert any("闲置降帧" in text for text in texts)
+    box.setChecked(False)
+    assert host.config.get("idle_low_fps_enabled") is False
+    box.setChecked(True)
     dialog.close()
 
 
