@@ -32,6 +32,7 @@ from .page_api import ApiSettingsPage
 from .page_extensions import ExtensionsPage
 from .page_interaction import InteractionPage
 from .page_pets import PetsPage
+from .page_thanks import ThanksPage
 from .page_voice import VoicePage
 from .pages_core import AppearancePage, GeneralPage, MenuPage
 from .style import is_dark, nav_row_heights, stylesheet
@@ -48,6 +49,7 @@ _PAGE_ICONS = {
     "扩展管理": "application",
     "API 与账户": "network",
     "关于与诊断": "info",
+    "致谢": "sparkles",
 }
 
 _PAGE_KEYS = {
@@ -60,6 +62,7 @@ _PAGE_KEYS = {
     "扩展管理": "mods",
     "API 与账户": "api",
     "关于与诊断": "about",
+    "致谢": "thanks",
 }
 
 
@@ -289,6 +292,7 @@ class SettingsDialog(QDialog):
             ExtensionsPage(self.host),
             ApiSettingsPage(self.host),
             AboutPage(self.host),
+            ThanksPage(self.host),
         ):
             title = str(getattr(page, "title", "") or "")
             pages.append((title, page, self._page_keywords(page), _PAGE_KEYS.get(title, "")))

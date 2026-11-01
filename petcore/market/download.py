@@ -11,6 +11,7 @@ from typing import Callable, Protocol
 
 from ..contracts.archive import ArchiveLimits
 from ..contracts.http import TransferSpec
+from .. import paths
 from ..net import ranged
 from . import verify
 from .errors import DownloadError, IntegrityError, TransferCancelled
@@ -57,7 +58,7 @@ class DownloadResult:
 
 
 def download_dir(root: Path) -> Path:
-    return Path(root) / "market" / "downloads"
+    return paths.cache_dir(root, "market", "downloads")
 
 
 def _part_path(directory: Path, package_id: str, version: str) -> Path:

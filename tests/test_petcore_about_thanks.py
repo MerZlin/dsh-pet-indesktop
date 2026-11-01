@@ -1,4 +1,4 @@
-"""关于页 → 致谢分页：折叠、粉丝分页/搜索、刷新与签名。"""
+"""致谢面板：折叠、粉丝分页/搜索、刷新与签名（宿主是侧栏「致谢」页）。"""
 
 from __future__ import annotations
 
@@ -340,12 +340,13 @@ def test_clear_removes_the_saved_signature(app, tmp_path: Path, names) -> None:
         panel.deleteLater()
 
 
-def test_about_page_always_builds_both_tabs(app, tmp_path: Path) -> None:
+def test_about_page_keeps_the_community_report(app, tmp_path: Path) -> None:
+    # 致谢面板已是侧栏独立页（``ThanksPage``）；关于页只保留诊断里的 community 段。
     page = AboutPage(FakeHost(tmp_path))
     try:
         assert page.tab_container is not None
-        assert page.tab_container.labels() == ("版本与诊断", "致谢")
-        assert hasattr(page, "thanks_panel")
+        assert page.tab_container.labels() == ("版本与诊断",)
+        assert not hasattr(page, "thanks_panel")
         assert "fans" in page._report()["community"] or page._report()["community"] == {"available": False}
         community = page._report()["community"]
         if community.get("available"):

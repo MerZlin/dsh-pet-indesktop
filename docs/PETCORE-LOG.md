@@ -5770,3 +5770,192 @@ Inno `Successful compile (117.859 sec)`；打包 onedir 真机 8 秒：窗口 `d
 **产物**
 
 - setup：`rel-chat-view-2026-11-01/dsh-pet-core-setup.exe`，301,224,113 B，SHA-256 `d7dd74c13fae71a5cb12f29f31d1fc734debeb2ced8af8370328fcdb2ef03582`（未签名）；onedir exe 15,868,552 B；`check.json` version 0.4.0 / strict.problems=[] / shenshen 106 动画 / daily 1200；包内 `_internal/PySide6/Qt6WebView.dll`（60,216 B）与 `plugins/webview/qtwebview_webview2.dll`（132,408 B）已确认；打包 `--check --strict` exit=0；真机 10s 冒烟窗口 `dsh-pet-core`、`IsHungAppWindow=False`；在 onedir 里放入 v2 扩展后 `--check` 报 `tool.ai-browser 2.0.0 enabled`、diagnostics 空。
+## L154 — 2026-11-01 — 视图回切 / 数据与缓存目录可搬 / 致谢独立页 / 素材包仓库与应用内下载
+
+用户四条诉求：① 打开「网页 AI」后再点一次要能回到 AI 对话；② 所有缓存与数据的位置
+可选，调整后自动搬到新位置；③ 致谢单开一个设置页（与「关于与诊断」同级），补特别鸣谢、
+把炎圣人但丁加进作者栏、更新 B 站粉丝名单；④ 新开一个 GitHub 仓库存素材包，把「常规」
+两个素材包下载改成应用内下载（设置页显示进度与实时网速、默认落到桌宠目录下的 tmp），
+保留原来的跳转按钮，并实测 PCL 式分段下载有没有加速。
+
+**根因 / 设计**
+
+1. `_make_view_button` 把 `clicked` 直接接 `set_view(view_id)`，而 `set_view` 在
+   `previous == key` 时整段 no-op ⇒ 再点当前视图毫无反应，只能靠侧栏会话或「新对话」回 AI。
+2. 数据根只有 `--root/--portable/--instance` 三个 CLI 参数，`CoreHost`/各 service/
+   `StorageAdapter` 全部在构造时捕获 root，日志 handler 进程内只配一次 ⇒ 换根必须重启，
+   而且**指针不能写在数据根里**（根一搬指针自己也跟着搬走，下次启动只剩空默认根）。
+3. 致谢是「关于与诊断」页里的第二个子标签，侧边栏 9 页；`special_thanks` 只有 4 条。
+4. 两个素材包行只有浏览器跳转（且两行指向同一对 URL），仓库里没有任何索引/下载链路。
+
+**改动**
+
+- 对话窗：新增 `_activate_view_button()`（当前视图再点 → `set_view("ai")`），内联按钮与
+  溢出菜单共用；tooltip/可访问名补「再次点击回到 AI 对话」。不动 AI/DSH 按钮语义。
+- 存储：新增 `petcore/storage/roots.py`（零 Qt）= 引导指针 `location.json`（常规
+  `%APPDATA%\dsh-pet-core`，绿色版 exe 目录）、`resolve_roots` 优先级 `--root` > 指针 >
+  默认根、`validate_target`（同目录/子目录/父目录/非空/不可写/盘符根六拒）、`plan_move` +
+  `copy_tree`（1 MiB 分块、进度、可取消）+ `verify_copy`（文件数 + 字节）、`write_pointer`
+  （原子）、`write_journal`/`cleanup_moved_source`（下次启动删旧根，删树前保存并回写旧根里的指针）。
+- `paths.py`：`default_data_root`/`resolve_roots`/`pointer_path`/`set_cache_root(data_root=)`
+  /`cache_dir(root, …)`；缓存根**绑定数据根**（按 A 根设置的缓存根不会被 B 根取走——
+  第一版没绑，直接把 12 个市场测试打红：`--check`/`cli` 会把缓存根设成别的根）。
+- 缓存根接管：`speech/cache.py`（TTS）、`market/download.py`（`market/downloads`）、
+  `update/service.py`（`updates/`）；默认（未设缓存根）三者路径与拆分前逐字节一致。
+- `cli`/`ui.app.run`：解析并下发两个根，启动后后台线程清理上次搬迁的旧目录；
+  `--check` 报告新增 `cache_root`。
+- 设置页：常规 →「数据」两行（路径只读 `QLineEdit` + 更改位置…/打开/清空缓存），搬迁走
+  `roots_job.RootsMoveJob`（守护线程 + 进度/取消 + 就地进度面板），完成后提示重启（「立即重启」
+  走 `QProcess.startDetached`）；两行 `expand=True`，路径用只读输入框（`QLabel` 长路径会把整页
+  撑到 1010px 触发横向滚动，实测）。
+- 致谢页：新增 `petcore/ui/settings/page_thanks.py`（`ThanksPage` 复用 `ThanksPanel`），
+  从 `page_about.py` 摘掉致谢标签；`dialog.py` 三处登记（图标 `sparkles`、key `thanks`、
+  排在最后）；`credits.json` + `model.py` 兜底常量补 7 条特别鸣谢（含深度求索 DeepSeek）
+  与作者 `@炎圣人但丁`；新增 `scripts/refresh_community_snapshot.py`（读钥匙串 SESSDATA，
+  无凭据退出码 2，partial 不写，凭据不进日志）。
+- 素材包：`petcore/net/stream_download.py`（单流 + `.part` 续传 + sha 校验）、
+  `petcore/net/packs.py`（索引 schema=1/id 正则/filename 白名单/https + 主机白名单/64 位
+  sha256；`download_pack` 主路 4 连接分段，`RangesUnsupported` 同址回退单流一次）、
+  `petcore/ui/download_progress.py`（SpeedMeter + `describe_progress` + `DownloadPanel`，
+  市场页改为共用）、`petcore/ui/settings/pack_download.py`（索引 6 小时磁盘缓存 + 下载任务 +
+  「导入这个素材包」）。
+- 仓库与脚本：`MerZlin/Animations`（README + `packs-index.json` + Release `packs-v1`）、
+  `scripts/make_animation_pack.py`、`scripts/publish_animation_pack.ps1`、
+  `scripts/bench_pack_download.py`。
+
+**验证**
+
+- 全量 `tests/test_petcore_*.py` + `test_pr_report_discipline.py`：首跑 12 个市场测试红
+  （缓存根全局泄漏，见下），修好后复跑 **3290 passed / 1 skipped / 0 failed in 246.78s**（含 `test_architecture.py`）。
+- 分段加速实测：国内镜像（npmmirror 29.7 MB）1 连接 4.633s / 6.12 MiB·s⁻¹、4 连接
+  4.706s / 6.17 MiB·s⁻¹（**1.01×**；单流基线 6.91 MiB/s 已跑满约 55 Mbps）。GitHub Release
+  资产在本机无代理网络下 30 秒窗口只拿到 **2 KiB**（1 与 4 连接相同；首字节 20.71s、HTTP 206）
+  ——是被拦截而不是被限速，加连接救不回来。结论与建议写进 PR 报告 §4.1。
+- ruff `pet/ tests/ petcore/ integrations/ examples/ scripts/`：All checks passed。
+- 构建：`build_petcore.ps1 -Clean -Installer -OutputRoot rel-storage-2026-11-01b` exit 0；
+  setup 301,271,121 B / sha256 `041e8eb7…`；包内 `--check --strict` exit 0、`strict.problems=[]`、
+  `characters=shenshen:106`、`menu_template=json`；真实启动 10 秒存活、标题 `dsh-pet-core`。
+  最终包 `rel-storage-2026-11-01f/dsh-pet-core-setup.exe` 301,308,486 B / sha256 `634d373e…`，
+  包内 `--check --strict` exit 0、`strict.problems=[]`、`shenshen:106`（`-b` 是过程产物）。
+  首轮 `rel-storage-2026-11-01/` 早于角色 id 修正，只作对照，别装。
+- `gh` 2.103.3 已装并授权（`MerZlin`，scopes `repo,gist,read:org`）。
+- 真机截图：`.scratch/batch-chat-web.png`（进入网页视图）、`.scratch/batch-chat-back-to-ai.png`
+  （再点一次回 AI）、`.scratch/batch-general.png`（数据/缓存两行）、`.scratch/batch-thanks.png`
+  （独立致谢页 + 11 条特别鸣谢 + 作者栏 5 行）。
+- **直链解析（第二轮追加）**：`github.com` 那一跳在本机 TCP 直接超时（`api.github.com` 0.48s、
+  `release-assets.githubusercontent.com` 单连接 3.2 MiB/s）。新增 `net/packs.resolve_github_asset()`：
+  走 api 域取 302 的签名直链再分段下载，失败回落原链接；`market.download_segmented(state_url=)`
+  保证签名地址不进侧车。真机：126 MiB 包 **45.9s / 2.75 MiB·s⁻¹**；1 vs 4 连接 **1.23×**（解析路径）
+  与 **2.07×**（直链直测）。
+- **素材包镜像策略（第三轮追加）**：新增全局 `pack_mirror_policy`（`auto|mirror|github`，默认 auto），
+  「常规 → 数据 → 下载镜像」下拉即时生效、取消回滚；`packs.download_pack(policy=)` 只决定先试哪套源，
+  另一套永远做兜底；完成行显示实际来源主机。用例：mirror 先分片、github 不碰分片、未知值按 auto、
+  归一化与全局作用域、设置行写入/回滚/搜索。
+- **索引缓存污染事故（第三轮修复）**：现场报「素材包索引没有可用条目：shenshen: 分片 1 urls 为空」。
+  根因是 jsDelivr 分支缓存返回旧索引 + 旧代码「先写缓存再解析、解析失败抛穿整条链路」。修法照
+  主分支 `pet/updater.py` 口径：先解析后落缓存、坏内容只跳过该源、全失败删缓存、读到坏缓存即自愈。
+  新增 5 个回归用例（旧索引回落 / 全坏不留缓存 / 坏缓存删除 / 旧缓存删除 / 有效缓存复用）。
+- **免费下载方案对比（第三轮）**：同一份 126 MiB 包实测——GitHub 直链 2.75 MiB/s（好的时候）/ 0.35 MiB/s（抖的时候）；
+  jsDelivr（fastly/gcore，吃 GitHub 仓库、单文件 ≤20 MB）0.25 MiB/s；GitHub Pages 0.11 MiB/s；
+  ghproxy 类 6 家全部不可达或 6 KiB/s；raw 常被 RST。结论：免费通道里 GitHub 直链仍是最快的，
+  jsDelivr 只能当兜底。
+- **分包下载**：`PackPart` + `entry.parts` + `prefer_parts`（逐片下载、跳过已校验分片、拼装后核对整包、
+  成功后删分片；进度按整包字节聚合）；`DEFAULT_PACK_HOSTS` 加 `api.github.com` 与三个 jsDelivr 域。
+  索引改为 **Release 资产**（`packs-index.json`）经 api 直链读取——jsDelivr 分支缓存曾把旧索引
+  （分片 urls 为空）返回给客户端，被 `parse_index` 拦下。索引多源 + 每源重试 2 次，失败时报每个主机的
+  原因。
+- 索引真机可达：`packs.fetch_index(raw.githubusercontent.com/MerZlin/Animations/main/packs-index.json)`
+  → `schema 1 / packs ['shenshen'] / 132036744 B / c6d17c49…`。
+- 打包 126 MiB 素材包：5675 个文件、sha256 `c6d17c49e57c…`；Release `packs-v1` 已发布
+  （`gh release view` 显示 `shenshen-1.zip 132036744`）。
+- 数据根搬迁 E2E（`.scratch/roots-e2e.py`，真任务 + 真线程 + 真 `--check`）：3 个文件复制、
+  指针写入、重启解析 `source=pointer`、`--check exit 0` 且 `data_root/cache_root` 均指向新根、
+  旧根清理 `True`。
+- 素材包下载 + 导入 E2E（`.scratch/pack-e2e.py`，真 `PackJob` + 本地 http.server + 真 importer）：
+  132,036,744 字节、504 次进度回调、末值 `(total,total)`、按设计回退单流；导入得到
+  `character.shenshen`。**跑出两个真问题并已修**：① 导入默认用 ZIP 文件名当角色 id
+  （`character.shenshen-1`），改为取索引里的 `character`；② `set_cache_root` 全局泄漏打红 12 个
+  市场测试，改为缓存根绑定数据根。
+
+**未验证 / 边界**
+
+- 跨盘搬迁的真实耗时、目标盘空间不足的失败路径未逐一实测（失败时旧目录不动、指针不写，有单测）。
+- 搬迁期间用户改的设置不会带去新根（界面文案已写「搬迁期间请不要改其它设置」）。
+- 缓存根只接管三处大件，其余仍在数据根。
+- 无 SESSDATA，粉丝名单快照未刷新（脚本已就绪，用户在设置里配好后运行一次即可）。
+
+## L155 — 2026-11-01 — petcore 架构地图（离线 HTML）与 mod 接缝说明
+
+**背景**：需要向新协作者解释重写版（core + mod）架构，并回答「能否做一个自带 UI / 功能 / 数据的小游戏 mod」。
+
+**改动**
+
+- 新增 `docs/PETCORE-ARCHITECTURE-MAP.html`（单文件、离线、零外链）：分层总图、启动路径、插件流水线、10 个 contribution kind 的真实消费点、27 个 `HostPorts` 的注入状态（22 有实现 / 5 恒为 `None`）、线程模型，以及小游戏 mod 的三条 UI 路线、游戏循环、数据落点、骨架代码与已知坑。
+- `docs/INDEX.md`：petcore 组新增本页一行，并在 `PETCORE-ARCHITECTURE.md` 行补「先看架构图」。
+- `docs/PETCORE-ARCHITECTURE.md`：文首加互链。
+- 未改任何运行时代码、配置或 mod 包。
+
+**验证**
+
+- `html.parser` 结构检查：无未闭合/错配标签；全文 0 个 `http(s)` 外链；11 个 `section` / 4 个 `table` / 8 个 `pre`，75,204 字节。
+- 页内 8 个代码块：5 个 Python 片段全部通过 `compile(..., "exec")`；`mod.json` 片段可被 `json.loads` 解析（`game.board / api 1 / >=0.2.0,<1.0.0`）。
+- 内置浏览器（`127.0.0.1` 静态服务）实看：浅色/深色切换、端口表筛选（选「恒为 None 5」后只剩 5 行）、锚点跳转、窄视口表格横向滚动均正常。
+- `QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest tests/test_petcore_docs.py -q` → `4 passed in 0.68s`。
+
+**未验证 / 边界**
+
+- 只在 Windows 的 Chromium 内嵌浏览器里看过；Firefox / Safari / 打印排版未实测。
+- 文件计数（251 个 py / 76.9k 行）是 2026-11-01 工作区快照，会随代码变化。
+- 图中「小游戏骨架」是参考实现，未作为新 example 包安装运行；可运行性依据是官方五文件骨架的既有实测（`PETCORE-MOD-DEVELOPMENT.md` §3 文末记录）。
+
+## L156 — 2026-11-01 — 重写 mod 开发文档（开发者 / 用户 AI）
+
+**背景**：旧的两份开发文档（`PETCORE-MOD-DEVELOPMENT.md`、`PETCORE-MOD-AI-GUIDE.md`）
+包含会让外部开发者/用户 AI 直接踩坑的错误命令与过时结论；本轮按 0.5.0 工作区逐条核对后重写。
+
+**改动**（`git diff --numstat`，行数含行尾换行差异）
+
+- `docs/PETCORE-MOD-DEVELOPMENT.md`：+519 / −461，重写为 0.5.0 基线；新增「今天做不到的事」、
+  扫描/授信闸门、三个真实接线点的精确语义、22/5 端口表、自建窗口与小游戏、重载生效边界。
+- `docs/PETCORE-MOD-AI-GUIDE.md`：+378 / −249，重写为可整份交付 AI 的自包含说明；
+  修正命令、数据目录、端口、`chat_view` 时序与生成提示词。
+- `docs/PETCORE-MOD-FORMAT.md`：+20 / −16，字段表补 `summary`/`summary_zh`/`requires`；
+  修正菜单 `section`（不生效）、`worker` 执行、端口清单漏 `reminders`、示例数量。
+- `examples/petcore-mods/README.md`：+65 / −53，改为 12 个样板（补 `im.qq` 与 `ai.chat`/`tool.ai-browser`），
+  端口与贡献类型口径与新文档对齐。
+- `docs/INDEX.md`：+5 / −3，更新上述两篇的「一句话 / 何时必读」。
+
+**修正的硬错误**（旧文档原文 → 现结论）
+
+- `python -m petcore mods uninstall` → 不存在；是 `mods remove`（且只处理数据目录）。
+- `python -m petcore --settings` → 不存在；设置从托盘/右键打开。
+- 「源码运行默认仓库 `data/`」→ 源码与安装包都默认 `%APPDATA%\dsh-pet-core`，
+  只有 `--portable`/`--root`/`--instance`/`location.json` 才改变。
+- 端口清单漏 `reminders`；实际是 27 声明 / 22 注入 / 5 恒为 `None`。
+- `execution: "worker"` 不是「协议留给 P1/P3」，而是当前启动时跳过并记
+  `worker feature is not supported yet`。
+- `chat_view` 改代码不是「重开对话窗」；窗口关闭只是隐藏，视图清单建窗时固定，**必须重启应用**。
+- 菜单 `data` 的 `section` 不生效；真正生效的是 `label/command/order/icon/checked`。
+- `settings_factory` 收到的是设置宿主代理，不是 `FeatureContext`；取消只恢复配置快照，
+  控件要靠页面自己的 `discard_changes()` 刷新。
+- `context.config` 当前恒为 `{}`、`context.events` 恒为 `None`，旧文档暗示它们是可用配置源。
+
+**验证**
+
+- 新文档代码块：DEVELOPMENT 10/10 Python 通过 `compile()`、1/1 JSON 可解析；
+  AI-GUIDE 9/9 Python、1/1 JSON。
+- 从 DEVELOPMENT §2 抽取五文件骨架到临时目录：`python -m petcore mods validate` 返回 `ok`；
+  `import_entrypoint` → `create_host` 得到 `owner=my.hello`、`menu/hello` + `settings_page/page`；
+  `runtime.commands == ['hello']`，`start()/stop()` 正常。
+- 设置页样例在 `QT_QPA_PLATFORM=offscreen` 下实测：初始 `dirty=False`，改文字后 `True`，
+  `discard_changes()` 后文字与配置回滚、`dirty=False`；`confirm_save()` 后 `dirty=False`。
+- 相对链接检查 0 缺失；`QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest
+  tests/test_petcore_docs.py tests/test_petcore_example_mods.py -q` → `7 passed`。
+- 未把样例装进真实用户数据目录；12 个 example 包未逐个启动，仅做文档与静态校验。
+
+**未验证 / 边界**
+
+- 文档里的截图/界面描述仍以源码与测试为准；本轮没有实机逐页点设置窗口。
+- 行数包含 CRLF/LF 归一化差异，不代表实际内容删改量。
+- `chat_view` 的「必须重启」来自当前实现（`ChatWindow._view_specs` 建窗时固定、closeEvent 只 hide）；
+  若后续改动重建窗口，需要同步本文。

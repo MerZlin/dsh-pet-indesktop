@@ -28,6 +28,9 @@ from ...net.market import HttpFetcher
 from ...net.market_transport import local_file_root_for_index
 from ..market_jobs import MarketJobRegistry
 from .base import SettingsPage, make_button
+from ..download_progress import SpeedMeter as _SpeedMeter
+from ..download_progress import describe_progress as _describe_progress
+from ..download_progress import format_bytes as _format_bytes
 
 FILTER_ALL = ""
 
@@ -36,46 +39,6 @@ PROGRESS_INTERVAL_S = 0.1
 
 #: 旧测试/第三方探针的兼容符号；真实任务由应用级 MarketJobRegistry 持有。
 _ORPHAN_JOBS: set[QThread] = set()
-
-
-def _format_bytes(value: float) -> str:
-    size = float(max(0.0, value))
-    for unit in ("B", "KiB", "MiB", "GiB"):
-        if size < 1024 or unit == "GiB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} TiB"
-
-
-class _SpeedMeter:
-    """把 ``(done, total)`` 采样换算成速度与 ETA（只按最近几秒算）。"""
-
-    def __init__(self, *, window: float = 2.0) -> None:
-        self._window = max(0.2, float(window))
-        self._samples: list[tuple[float, int]] = []
-
-    def reset(self) -> None:
-        self._samples.clear()
-
-    @property
-    def samples(self) -> int:
-        return len(self._samples)
-
-    def update(self, done: int, total: int) -> tuple[float, float | None]:
-        now = time.monotonic()
-        self._samples.append((now, int(done)))
-        cutoff = now - self._window
-        while len(self._samples) > 2 and self._samples[0][0] < cutoff:
-            self._samples.pop(0)
-        if len(self._samples) < 2:
-            return 0.0, None
-        first_time, first_done = self._samples[0]
-        elapsed = now - first_time
-        speed = (int(done) - first_done) / elapsed if elapsed > 0.05 else 0.0
-        speed = max(0.0, speed)
-        remaining = max(0, int(total) - int(done))
-        eta = remaining / speed if speed > 0 else None
-        return speed, eta
 
 
 class _CancellableJob(QThread):
@@ -680,17 +643,14 @@ class MarketPage(SettingsPage):
         resumed: int = 0,
     ) -> str:
         """进度行文本：已下载/总量 · 速度 · 剩余 · 连接数（可选续传量）。"""
-        parts = [f"{_format_bytes(done)} / {_format_bytes(total)}"]
-        if speed > 0:
-            parts.append(f"{_format_bytes(speed)}/s")
-            if eta is not None:
-                parts.append(f"剩余 {max(0, int(round(eta)))} 秒")
-        else:
-            parts.append("正在连接…")
-        if resumed > 0:
-            parts.append(f"续传 {_format_bytes(resumed)}")
-        parts.append(f"{max(1, int(connections))} 连接")
-        return " · ".join(parts)
+        return _describe_progress(
+            done=done,
+            total=total,
+            speed=speed,
+            eta=eta,
+            connections=connections,
+            resumed=resumed,
+        )
 
     def _on_install_progress(self, done: int, total: int) -> None:
         if self._disposed:

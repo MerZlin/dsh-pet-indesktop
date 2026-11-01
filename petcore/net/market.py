@@ -686,6 +686,7 @@ def download_segmented(
     cancel: CancelCallback | None = None,
     policy: TransportPolicy | None = None,
     max_bytes: int | None = None,
+    state_url: str = "",
 ) -> SegmentedOutcome:
     """多连接 Range 下载到 ``part_path``（先预检，再交给纯引擎装配）。
 
@@ -693,7 +694,7 @@ def download_segmented(
       回退单流**一次**，绝不把 200 的正文写进段文件；
     - 429/``Retry-After`` 等明确答复直接抛 :class:`~petcore.net.errors.HttpStatusError`，
       不换路重试；
-    - 侧车只记 ``url``（索引地址），跳转后的签名 CDN 地址不落盘。
+    - 侧车只记 ``state_url or url``：跳转后的签名 CDN 地址绝不落盘，调用方拿原地址传进来。
     """
     part_path = Path(part_path)
     part_path.parent.mkdir(parents=True, exist_ok=True)
@@ -741,7 +742,7 @@ def download_segmented(
         total=total,
         sha256=expected_sha256,
         connections=connections,
-        url=str(url),
+        url=str(state_url or url),
         fetch=fetch,
         progress=progress,
         cancel=cancel,

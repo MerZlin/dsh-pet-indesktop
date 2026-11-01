@@ -237,6 +237,7 @@ def _check(
     report = {
         "version": __version__,
         "data_root": str(root),
+        "cache_root": str(paths.cache_root() or root),
         "config": config.snapshot(),
         "config_corrupt_backup": str(getattr(config, "corrupt_backup", "") or ""),
         "active_pets": list(config.get("active_pets") or [0]),
@@ -298,12 +299,19 @@ def _check(
 def _resolve_root(args: argparse.Namespace) -> Path:
     # `--root ""` 在 Windows 上等于 `Path(".")`，会把数据根变成当前工作目录。
     raw = getattr(args, "root", None)
+    explicit = None
     if raw is not None and str(raw).strip():
-        return Path(str(raw).strip())
-    if getattr(args, "root", None) is not None:
+        explicit = Path(str(raw).strip())
+    elif getattr(args, "root", None) is not None:
         logger = get_logger("cli")
         logger.warning("--root 是空字符串，按未指定处理")
-    return paths.data_root(portable=args.portable, instance=args.instance)
+    roots = paths.resolve_roots(
+        portable=bool(getattr(args, "portable", False)),
+        instance=getattr(args, "instance", None),
+        explicit=explicit,
+    )
+    paths.set_cache_root(roots.cache_root, data_root=roots.data_root)
+    return roots.data_root
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -540,4 +548,10 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("starting petcore %s", __version__)
     from .ui.app import run
 
-    return run(config, root=root, mod_dirs=mod_dirs, instance=args.instance)
+    return run(
+        config,
+        root=root,
+        mod_dirs=mod_dirs,
+        instance=args.instance,
+        cache_root=paths.cache_root() or root,
+    )

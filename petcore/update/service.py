@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import __version__
+from .. import paths
 from ..net.errors import NetworkError
 from ..net.http import build_request, is_allowed_https_url, urlopen
 from ..performance import runtime_metrics
@@ -66,7 +67,7 @@ class UpdateService:
         launcher: Callable[[Path], object] | None = None,
     ) -> None:
         self.root = Path(root)
-        self.update_dir = self.root / "updates"
+        self.update_dir = paths.cache_dir(self.root, "updates")
         self.current_version = str(current_version).lstrip("v")
         self.manifest_url = manifest_url or DEFAULT_MANIFEST_URL
         fallbacks = fallback_manifest_urls if fallback_manifest_urls is not None else DEFAULT_FALLBACK_MANIFEST_URLS

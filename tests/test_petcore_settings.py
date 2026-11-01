@@ -41,6 +41,7 @@ CORE_TITLES = [
     "扩展管理",
     "API 与账户",
     "关于与诊断",
+    "致谢",
 ]
 
 
@@ -710,7 +711,6 @@ def test_core_pages_host_their_feature_tabs(app, tmp_path):
     about = _page(dialog, "关于与诊断")
     assert about.tab_container.labels() == (
         "版本与诊断",
-        "致谢",
         "链接与项目",
         "网络信息",
         "回收内存",

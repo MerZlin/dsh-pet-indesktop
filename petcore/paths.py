@@ -1,12 +1,36 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sys
+import threading
 from pathlib import Path
+
+from .storage import roots as storage_roots
 
 APP_NAME = "dsh-pet-core"
 LEGACY_APP_NAME = "dsh-pet-standalone"
+
+logger = logging.getLogger("petcore.paths")
+
+#: 缓存根（进程级，启动时由 ``cli`` / ``ui.app`` 设一次）。为空表示跟随数据根，
+#: 这条缺省路径必须与拆分前的行为逐字节一致。
+_cache_root: Path | None = None
+#: 设置缓存根时的数据根；两者绑定，避免「按 A 根设置、却被 B 根取走」。
+_cache_data_root: Path | None = None
+_cache_lock = threading.Lock()
+#: 本次启动实际使用的引导指针路径（设置页搬迁时要知道写到哪）。
+_pointer_path: Path | None = None
+
+
+def _norm(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    try:
+        return Path(os.path.normcase(os.path.abspath(str(path))))
+    except OSError:
+        return Path(path)
 
 
 def repo_root() -> Path:
@@ -69,13 +93,86 @@ def normalize_instance(instance: str | None) -> str | None:
     return value
 
 
-def data_root(portable: bool = False, instance: str | None = None) -> Path:
+def location_path(portable: bool) -> Path:
+    """引导指针的位置。**必须在默认根之外**，否则根本一搬指针就跟着没了。"""
+    if portable:
+        return install_root() / storage_roots.LOCATION_FILENAME
+    return base_dir() / APP_NAME / storage_roots.LOCATION_FILENAME
+
+
+def default_data_root(portable: bool = False, instance: str | None = None) -> Path:
+    """不含引导指针的默认根（拆之前 ``data_root`` 的完整语义）。"""
     name = normalize_instance(instance)
     if portable:
         # 冻结包是 onedir：`repo_root()` 指向 `_internal`，升级/卸载替换该目录即丢数据。
         # 绿色版的数据应该在 exe 旁边。
         return install_root() / (f"data-{name}" if name else "data")
     return base_dir() / (f"{APP_NAME}-{name}" if name else APP_NAME)
+
+
+def resolve_roots(
+    *,
+    portable: bool = False,
+    instance: str | None = None,
+    explicit: Path | None = None,
+) -> storage_roots.Roots:
+    """解析数据根与缓存根。
+
+    优先级：显式 ``--root`` > ``location.json`` 引导指针 > 默认根。
+    ``--instance`` 一律走默认根：多个实例共享同一份指针会互相抢数据。
+    """
+    default = default_data_root(portable, instance)
+    pointer = location_path(portable)
+    global _pointer_path
+    _pointer_path = pointer
+    if instance:
+        return storage_roots.Roots(default, default, pointer, "default")
+    return storage_roots.resolve_roots(default, pointer_path=pointer, explicit=explicit)
+
+
+def pointer_path() -> Path:
+    """本次启动用的引导指针；还没解析过时给出常规安装的默认位置。"""
+    return _pointer_path or location_path(portable=False)
+
+
+def data_root(portable: bool = False, instance: str | None = None) -> Path:
+    """数据根（有引导指针时以指针为准）。"""
+    return resolve_roots(portable=portable, instance=instance).data_root
+
+
+def set_cache_root(path: Path | None, *, data_root: Path | None = None) -> None:
+    """设置进程级缓存根；``None`` 表示跟随数据根。
+
+    ``data_root`` 给了就绑定：只有该数据根会用到这个缓存根，别的根（例如
+    ``--check`` 临时指向的目录）仍回落到自己的 ``<root>/cache``。
+    这让「按 A 根设置、被 B 根取走」不可能发生。
+    """
+    global _cache_root, _cache_data_root
+    with _cache_lock:
+        _cache_root = Path(path) if path is not None else None
+        _cache_data_root = _norm(data_root) if path is not None else None
+
+
+def cache_root() -> Path | None:
+    with _cache_lock:
+        return _cache_root
+
+
+def cache_dir(root: Path, *parts: str) -> Path:
+    """缓存目录：设了缓存根就落在缓存根，否则就是 ``<root>/<parts>``。
+
+    未拆开（默认）时返回值与拆分前逐字节一致，这是拆分的兼容底线。
+    """
+    with _cache_lock:
+        base = _cache_root
+        bound = _cache_data_root
+    if base is not None and bound is not None and _norm(Path(root)) != bound:
+        base = None
+    if base is None:
+        return Path(root).joinpath(*parts) if parts else Path(root)
+    return base.joinpath(*parts) if parts else base
+
+
 
 
 def config_path(root: Path) -> Path:

@@ -117,6 +117,46 @@ def test_switching_to_a_view_is_lazy_and_activates(app):
         _close(window)
 
 
+def test_clicking_the_active_view_button_returns_to_ai(app):
+    built: list[FakeView] = []
+
+    def factory() -> FakeView:
+        view = FakeView()
+        built.append(view)
+        return view
+
+    window = _window(views=[_spec(factory=factory)])
+    try:
+        button = window._view_buttons["tool.demo:web"]
+        button.click()
+        assert window.current_view() == "tool.demo:web"
+        assert len(built) == 1
+        # 已经停在该视图：再点一次要回到 AI 对话页，而不是死点
+        button.click()
+        assert window.current_view() == "ai"
+        assert window.view_stack.currentWidget() is window.ai_view
+        assert button.isChecked() is False
+        assert built[0].calls.count("deactivate") == 1
+        assert len(built) == 1  # 页面对象没被重建
+        button.click()
+        assert window.current_view() == "tool.demo:web"
+        assert len(built) == 1
+        assert window._view_widgets["tool.demo:web"] is built[0]
+    finally:
+        _close(window)
+
+
+def test_clicking_an_inactive_view_button_switches_to_it(app):
+    window = _window(views=[_spec()])
+    try:
+        assert window.current_view() == "ai"
+        window._view_buttons["tool.demo:web"].click()
+        assert window.current_view() == "tool.demo:web"
+        assert window.view_stack.currentWidget() is window._view_pages["tool.demo:web"]
+    finally:
+        _close(window)
+
+
 def test_unknown_view_is_refused(app):
     window = _window(views=[_spec()])
     try:
@@ -203,6 +243,23 @@ def test_third_view_goes_into_overflow_menu(app):
         assert actions == ["视图三"]
         window.set_view("c.three:v")
         assert window.current_view() == "c.three:v"
+    finally:
+        _close(window)
+
+
+def test_clicking_the_active_view_in_the_overflow_menu_returns_to_ai(app):
+    specs = [
+        _spec("a.one:v", "视图一", order=1),
+        _spec("b.two:v", "视图二", order=2),
+        _spec("c.three:v", "视图三", order=3),
+    ]
+    window = _window(views=specs)
+    try:
+        action = window.view_more_menu.actions()[0]
+        action.trigger()
+        assert window.current_view() == "c.three:v"
+        action.trigger()
+        assert window.current_view() == "ai"
     finally:
         _close(window)
 

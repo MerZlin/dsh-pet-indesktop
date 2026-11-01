@@ -100,3 +100,6 @@ android/**/build/
 *.keystore
 *.jks
 dist-android/
+
+# 素材包应用内下载的默认落地目录（桌宠目录下开 tmp）
+/tmp/

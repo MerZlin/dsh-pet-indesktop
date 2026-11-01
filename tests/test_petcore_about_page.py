@@ -16,6 +16,8 @@ from petcore.ui.app import CoreHost
 from petcore.update import UpdateResult
 from petcore.ui.menu_actions import core_items
 from petcore.ui.settings.page_about import AboutPage
+from petcore.ui.settings.page_about_thanks import ThanksPanel
+from petcore.ui.settings.page_thanks import ThanksPage
 
 
 class FakeHost:
@@ -53,13 +55,23 @@ def test_about_is_a_settings_page_not_a_window(app, tmp_path: Path) -> None:
     try:
         assert page.title == "关于与诊断"
         assert page.tab_container is not None
-        assert page.tab_container.labels() == ("版本与诊断", "致谢")
+        assert page.tab_container.labels() == ("版本与诊断",)
+        # 致谢已提成侧栏独立页（ThanksPage 才是它的宿主），关于页不再内嵌它。
+        assert not hasattr(page, "thanks_panel")
         assert "关于与诊断" in page.snapshot_view.toPlainText() or "version" in page.snapshot_view.toPlainText()
         assert '"pets"' in page.snapshot_view.toPlainText()
         page._copy_report()
         assert "version" in QApplication.clipboard().text()
     finally:
         page.deleteLater()
+
+    thanks = ThanksPage(FakeHost(tmp_path))
+    try:
+        assert thanks.title == "致谢"
+        assert isinstance(thanks.panel, ThanksPanel)
+    finally:
+        thanks.dispose()
+        thanks.deleteLater()
 
 
 def test_about_menu_item_is_gone() -> None:

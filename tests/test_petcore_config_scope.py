@@ -139,3 +139,26 @@ def test_squash_elasticity_keys_are_per_pet_and_clamped(tmp_path: Path) -> None:
     assert pet_config.get("click_squash_bounces") == 5
     assert pet_config.get("click_squash_strength") == 30
     assert pet_config.get("click_squash_ms") == 1000
+
+
+def test_pack_mirror_policy_is_global_and_normalized(tmp_path: Path) -> None:
+    config = Config(tmp_path, {"pack_mirror_policy": "MIRROR"})
+    assert config.get("pack_mirror_policy") == "mirror"
+
+    broken = Config(tmp_path, {"pack_mirror_policy": "whatever"}, filename="config-b.json")
+    assert broken.get("pack_mirror_policy") == "auto"
+
+    default = Config(tmp_path, {}, filename="config-c.json")
+    assert default.get("pack_mirror_policy") == "auto"
+
+    # 全局键：ScopedConfig 的写入必须落到主配置，不进子宠文件。
+    from petcore.config import GLOBAL_CONFIG_KEYS
+
+    assert "pack_mirror_policy" in GLOBAL_CONFIG_KEYS
+    parent = Config(tmp_path, {"pack_mirror_policy": "auto"}, filename="config-main.json")
+    child = Config(tmp_path, {"character": "kid"}, filename="config-pet-1.json")
+    scoped = ScopedConfig(parent, child)
+    assert scoped.get("pack_mirror_policy") == "auto"
+    scoped.set("pack_mirror_policy", "github")
+    assert parent.get("pack_mirror_policy") == "github"
+    assert child.get("pack_mirror_policy") == "auto"

@@ -865,3 +865,42 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest \
 | Agent 联动的事件协议 | [`../docs/AGENT_LINK_PROTOCOL.md`](../docs/AGENT_LINK_PROTOCOL.md)（实现见 SPEC §28） |
 | 改过什么 | [`../docs/PETCORE-LOG-INDEX.md`](../docs/PETCORE-LOG-INDEX.md) |
 | 上手命令与目录 | [`README.md`](README.md) |
+
+- **数据根 / 缓存根由引导指针决定**：`paths.resolve_roots()` 的优先级是
+  `--root` > `location.json` 指针 > 默认根；`--instance` 一律走默认根。指针**必须**
+  放在默认根之外（`%APPDATA%\dsh-pet-core\location.json`，绿色版 `<exe>/location.json`）——
+  写进数据根里，根一搬指针自己也跟着走，下次启动只剩空默认根。坏指针回落默认根且
+  **不删不覆盖**原文件。
+- **缓存根绑定数据根**：`set_cache_root(path, data_root=…)` 记成一对，`cache_dir(root, …)`
+  只在 `root` 命中绑定根时才用缓存根，否则回落 `<root>/…`。不绑的话 `--check` 指向
+  另一个根（或测试换 `tmp_path`）会把缓存写进上一个根——第一版就是这样打红 12 个市场测试。
+  未拆分时三处缓存路径必须与拆分前逐字节一致。
+- **搬迁只在校验通过后写指针**：`validate_target` → `plan_move` → `copy_tree`（可取消）→
+  `verify_copy`（文件数 + 字节）→ `write_pointer` → `write_journal` → 提示重启。
+  校验失败/取消时旧目录不动、指针不写。旧根删除放在**下一次启动**（`cleanup_moved_source`），
+  删树前先保存并回写旧根里的指针文件。日志 handler 进程内只配一次，改根必须重启。
+- **下载进度只有一个实现**：`petcore/ui/download_progress.py` 的 `SpeedMeter` /
+  `describe_progress` / `DownloadPanel`；市场页与素材包行共用，不许再各抄一份
+  「已下载 / 总量 · 速度 · 剩余 · 连接数」。
+- **素材包索引只认白名单**：`net/packs.parse_index` 校验 schema=1、id 正则、filename
+  白名单、https + 主机白名单、64 位 sha256；`download_pack` 主路分段，`RangesUnsupported`
+  只对**同一地址**回退 `net/stream_download` 单流一次，摘要不符删产物换镜像。
+- **视图按钮再点 = 回到 AI**：`_activate_view_button()` 是唯一入口（内联按钮与溢出菜单共用）；
+  再点当前扩展视图必须 `set_view("ai")`，不许再出现「点了没反应」。`set_view` 仍是唯一状态机。
+- **致谢是独立页**（侧边栏「致谢」，与「关于与诊断」同级）：`page_thanks.ThanksPage` 托管
+  `ThanksPanel`；静态条目（作者账号/特别鸣谢）只从 `petcore/community/data/credits.json` 读，
+  `DEFAULT_*` 兜底常量必须同步，运行期不回写随包数据。
+
+- **GitHub Release 下载先换签名直链**：`net/packs.resolve_github_asset()` 把
+  `github.com/<owner>/<repo>/releases/download/<tag>/<asset>` 换成
+  `api.github.com` 302 给出的 `release-assets.githubusercontent.com` 直链。现场：
+  部分网络里 `github.com` 那一跳 TCP 直接被吞（进度条永远「正在连接…」），而 api 域
+  与 CDN 都通——同一份 126 MiB 包换直链后 45.9s / 2.75 MiB·s⁻¹ 下完。解析失败必须回落
+  原链接；**签名地址不落盘**（`market.download_segmented(state_url=原链接)` 只写侧车）。
+
+- **UI 层不许 import `urllib`**：架构守卫（`test_no_network_stack_in_core`）只放行
+  `net/`、`api/`、`account/`。设置页要显示「哪个源失败」时用 `net/packs.host_of(url)`，
+  不要在 UI 里 `from urllib.parse import urlsplit`（L154 就因此红过一次）。
+- **素材包分片**：`entry.parts` + `entry.prefer_parts`；逐片下载、已校验的分片跳过、拼装后
+  核对整包 `size`/`sha256`、成功后删分片；进度必须按整包字节聚合（`_offset_progress`）。
+  分片大小要同时满足 jsDelivr ≤20 MB 与 Gitee ≤100 MB，当前用 18 MiB。

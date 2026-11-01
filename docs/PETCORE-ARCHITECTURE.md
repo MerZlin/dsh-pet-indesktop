@@ -1,6 +1,10 @@
 # petcore 架构
 
 > 基线：分支 `feat/petcore-vpet-architecture`，2026-10-20。本文描述首版 core 的分层、契约与边界，不代替实现。
+>
+> 需要一张能点开的全局图（分层、启动路径、插件流水线、端口注入状态、小游戏 mod 可行性）：
+> [`PETCORE-ARCHITECTURE-MAP.html`](PETCORE-ARCHITECTURE-MAP.html)。图是导读，本文与
+> [`PETCORE-MOD-FORMAT.md`](PETCORE-MOD-FORMAT.md) 才是字段与契约的真源。
 
 ## 1. 目标
 

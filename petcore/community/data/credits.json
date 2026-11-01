@@ -22,6 +22,11 @@
       "platform": "GitHub",
       "handle": "@MerZlin",
       "url": "https://github.com/MerZlin"
+    },
+    {
+      "platform": "BiliBili",
+      "handle": "@炎圣人但丁",
+      "url": ""
     }
   ],
   "special_thanks": [
@@ -48,6 +53,48 @@
       "name": "@ZipZipPipe",
       "url": "",
       "note": "桌宠形象来源"
+    },
+    {
+      "kind": "bilibili",
+      "name": "@浩瀚星空2005",
+      "url": "",
+      "note": "参考项目作者、初始动画素材来源"
+    },
+    {
+      "kind": "bilibili",
+      "name": "@邦多利素世",
+      "url": "",
+      "note": "冬装大肥鱼形象作者"
+    },
+    {
+      "kind": "bilibili",
+      "name": "@炎圣人但丁",
+      "url": "",
+      "note": "新动画素材制作者"
+    },
+    {
+      "kind": "bilibili",
+      "name": "@玄秋沐雨",
+      "url": "",
+      "note": "手机版大肥鱼作者"
+    },
+    {
+      "kind": "bilibili",
+      "name": "@咕噜千鹤子",
+      "url": "",
+      "note": "项目参与、部分功能开发"
+    },
+    {
+      "kind": "bilibili",
+      "name": "@月匠",
+      "url": "",
+      "note": "余额部分功能的参考实现"
+    },
+    {
+      "kind": "company",
+      "name": "深度求索 DeepSeek",
+      "url": "https://www.deepseek.com/",
+      "note": "提供 DeepSeek 模型与 DeepSeek Harness，以及开源精神"
     }
   ],
   "contributors": [

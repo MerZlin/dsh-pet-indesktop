@@ -946,7 +946,9 @@ class ChatWindow(QDialog):
         for spec in extra:
             action = menu.addAction(str(spec.label))
             action.triggered.connect(
-                lambda _checked=False, view_id=str(spec.id): self.set_view(view_id)
+                lambda _checked=False, view_id=str(spec.id): self._activate_view_button(
+                    view_id
+                )
             )
         self.view_more_button.setMenu(menu)
         self.view_more_button.setPopupMode(
@@ -960,16 +962,28 @@ class ChatWindow(QDialog):
         button.setProperty("viewId", str(spec.id))
         button.setCheckable(True)
         button.setText(str(spec.label))
-        button.setToolTip(f"切换到{spec.label}")
-        button.setAccessibleName(f"切换到{spec.label}")
+        button.setToolTip(f"{spec.label}（再次点击回到 AI 对话）")
+        button.setAccessibleName(f"切换到{spec.label}，再次点击回到 AI 对话")
         icon = str(getattr(spec, "icon", "") or "")
         if icon:
             button.setIcon(tool_icon(button, icon, 16, dark=self._dark))
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         button.clicked.connect(
-            lambda _checked=False, view_id=str(spec.id): self.set_view(view_id)
+            lambda _checked=False, view_id=str(spec.id): self._activate_view_button(
+                view_id
+            )
         )
         return button
+
+    def _activate_view_button(self, view_id: str) -> None:
+        """标题栏视图按钮/溢出菜单项的统一入口。
+
+        再点当前视图 = 回到 AI 对话（按钮此时已选中，不处理就成了死点）。
+        """
+        if view_id == self._current_view:
+            self.set_view("ai")
+            return
+        self.set_view(view_id)
 
     def _ensure_view_page(self, view_id: str) -> QWidget | None:
         """懒建扩展视图页；工厂抛异常时退化成错误占位，绝不带走对话窗。"""

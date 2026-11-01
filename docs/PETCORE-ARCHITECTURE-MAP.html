@@ -1,0 +1,1286 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>petcore 架构图 · 0.5.0 · core 与插件</title>
+<style>
+  :root {
+    --bg: #f6f4ef;
+    --bg-soft: #efece5;
+    --panel: #ffffff;
+    --panel-2: #fbfaf7;
+    --ink: #1b2430;
+    --ink-2: #33414f;
+    --muted: #5f6d7c;
+    --line: #dde1e6;
+    --line-strong: #c7ced7;
+    --accent: #0f766e;
+    --accent-soft: #e6f4f1;
+    --amber: #b45309;
+    --amber-soft: #fdf1e3;
+    --blue: #1d4ed8;
+    --blue-soft: #e8eefc;
+    --red: #b91c1c;
+    --red-soft: #fbeaea;
+    --green: #15803d;
+    --green-soft: #e8f5ec;
+    --violet: #6d28d9;
+    --violet-soft: #f0eafc;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 8px 24px rgba(16, 24, 40, .05);
+    --radius: 14px;
+    --mono: "Cascadia Code", "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    --sans: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  }
+  html[data-theme="dark"] {
+    --bg: #0f141b;
+    --bg-soft: #131a23;
+    --panel: #161e28;
+    --panel-2: #1a2330;
+    --ink: #e7edf4;
+    --ink-2: #c8d3df;
+    --muted: #93a2b4;
+    --line: #26313e;
+    --line-strong: #354354;
+    --accent: #4fd1c5;
+    --accent-soft: #12312e;
+    --amber: #f0b06a;
+    --amber-soft: #33240f;
+    --blue: #8db4ff;
+    --blue-soft: #14233f;
+    --red: #f19999;
+    --red-soft: #3a1717;
+    --green: #7bd39a;
+    --green-soft: #12301e;
+    --violet: #c4b5fd;
+    --violet-soft: #241a3d;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .25), 0 10px 30px rgba(0, 0, 0, .28);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-padding-top: 0; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15.5px;
+    line-height: 1.72;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, .mono {
+    font-family: var(--mono);
+    font-size: .88em;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
+  h1, h2, h3, h4 { line-height: 1.3; letter-spacing: -.01em; }
+  h2 { font-size: 27px; margin: 0 0 6px; }
+  h3 { font-size: 19px; margin: 28px 0 10px; }
+  h4 { font-size: 15.5px; margin: 18px 0 6px; }
+  p { margin: 9px 0; }
+  ul, ol { margin: 8px 0 8px 22px; padding: 0; }
+  li { margin: 5px 0; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 26px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13.5px; }
+  .nowrap { white-space: nowrap; }
+
+  /* ---------- top bar ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(12px);
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar-inner {
+    max-width: 1180px; margin: 0 auto; padding: 10px 26px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .brand { font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+  .brand span { color: var(--accent); }
+  .toc {
+    display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none;
+    flex: 1; padding: 2px 0;
+  }
+  .toc::-webkit-scrollbar { display: none; }
+  .toc a {
+    color: var(--muted); font-size: 13px; padding: 5px 9px; border-radius: 7px;
+    white-space: nowrap;
+  }
+  .toc a:hover { background: var(--bg-soft); color: var(--ink); text-decoration: none; }
+  .theme-btn {
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 8px; padding: 5px 10px; cursor: pointer; font: inherit; font-size: 12.5px;
+    white-space: nowrap;
+  }
+  .theme-btn:hover { border-color: var(--line-strong); }
+
+  /* ---------- hero ---------- */
+  .hero {
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(900px 340px at 12% -8%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 70%),
+      radial-gradient(700px 300px at 92% 0%, color-mix(in srgb, var(--amber) 12%, transparent), transparent 68%),
+      var(--bg);
+  }
+  .hero .wrap { padding-top: 54px; padding-bottom: 38px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--accent); font-weight: 700;
+  }
+  .eyebrow::before {
+    content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block;
+  }
+  h1 { font-size: clamp(30px, 4.2vw, 46px); margin: 12px 0 10px; letter-spacing: -.035em; }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 860px; margin: 0; }
+  .kpis {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px; margin-top: 26px;
+  }
+  .kpi {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; box-shadow: var(--shadow);
+  }
+  .kpi b { display: block; font-size: 22px; letter-spacing: -.03em; }
+  .kpi span { color: var(--muted); font-size: 12.5px; }
+
+  /* ---------- sections ---------- */
+  main { counter-reset: sec; }
+  section { padding: 46px 0 8px; border-bottom: 1px solid var(--line); }
+  section:last-of-type { border-bottom: 0; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  .sec-num {
+    font: 700 12px var(--mono); color: var(--accent);
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+    background: var(--accent-soft); border-radius: 6px; padding: 2px 7px;
+  }
+  .sec-sub { color: var(--muted); margin: 0 0 18px; max-width: 900px; }
+  .grid-2 { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 900px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    .topbar-inner { padding: 8px 16px; }
+    .wrap { padding: 0 18px; }
+  }
+  @media (max-width: 760px) { .brand { display: none; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px 18px; box-shadow: var(--shadow);
+  }
+  .card h4 { margin-top: 0; }
+  .card-tight { padding: 13px 15px; }
+  .tag {
+    display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .04em;
+    padding: 2px 7px; border-radius: 999px; border: 1px solid transparent; vertical-align: 1px;
+  }
+  .tag-qt { color: var(--violet); background: var(--violet-soft); border-color: color-mix(in srgb, var(--violet) 28%, transparent); }
+  .tag-py { color: var(--blue); background: var(--blue-soft); border-color: color-mix(in srgb, var(--blue) 28%, transparent); }
+  .tag-ok { color: var(--green); background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 28%, transparent); }
+  .tag-warn { color: var(--amber); background: var(--amber-soft); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+  .tag-no { color: var(--red); background: var(--red-soft); border-color: color-mix(in srgb, var(--red) 28%, transparent); }
+  .tag-neutral { color: var(--muted); background: var(--bg-soft); border-color: var(--line); }
+
+  /* ---------- layer diagram ---------- */
+  .stack { display: grid; gap: 8px; margin: 18px 0 6px; }
+  .layer {
+    position: relative; background: var(--panel); border: 1px solid var(--line);
+    border-left: 4px solid var(--line-strong); border-radius: 12px;
+    padding: 12px 16px 13px; box-shadow: var(--shadow);
+  }
+  .layer.entry { border-left-color: var(--amber); }
+  .layer.shell { border-left-color: var(--violet); }
+  .layer.host { border-left-color: var(--accent); }
+  .layer.infra { border-left-color: var(--blue); }
+  .layer.data { border-left-color: var(--green); }
+  .layer-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .layer-head b { font-size: 16px; }
+  .layer-head .path { font: 12.5px var(--mono); color: var(--muted); }
+  .layer p { margin: 4px 0 8px; color: var(--ink-2); font-size: 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font: 12.5px var(--mono); background: var(--bg-soft); border: 1px solid var(--line);
+    border-radius: 7px; padding: 2px 8px; color: var(--ink-2);
+  }
+  .chip.hot { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); color: var(--accent); font-weight: 600; }
+  .down {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    color: var(--muted); font-size: 12.5px; padding: 1px 0;
+  }
+  .down::before, .down::after { content: ""; height: 1px; background: var(--line); flex: 1; }
+  .plane-note {
+    border: 1px dashed var(--line-strong); border-radius: 12px; padding: 12px 16px;
+    background: var(--panel-2); color: var(--ink-2); font-size: 14px;
+  }
+  .redlines { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 14px; }
+  @media (max-width: 760px) { .redlines { grid-template-columns: 1fr; } }
+  .redline {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 13px; font-size: 13.5px;
+  }
+  .redline b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+  .redline code { font-size: 12px; }
+
+  /* ---------- boot timeline ---------- */
+  .timeline { display: grid; gap: 0; margin-top: 16px; }
+  .step {
+    display: grid; grid-template-columns: 42px 1fr; gap: 14px;
+    padding: 10px 0; border-bottom: 1px dashed var(--line);
+  }
+  .step:last-child { border-bottom: 0; }
+  .step-num {
+    width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--accent-soft); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+    font: 700 13px var(--mono);
+  }
+  .step-body b { font-size: 15px; }
+  .step-body .where { font: 12.5px var(--mono); color: var(--muted); margin-left: 6px; }
+  .step-body p { margin: 2px 0 0; font-size: 14px; color: var(--ink-2); }
+
+  /* ---------- pipeline ---------- */
+  .pipe { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin: 16px 0 4px; }
+  .pipe-node {
+    flex: 1 1 160px; min-width: 150px; background: var(--panel); border: 1px solid var(--line);
+    border-top: 3px solid var(--accent); border-radius: 11px; padding: 10px 12px;
+  }
+  .pipe-node b { display: block; font-size: 13.5px; }
+  .pipe-node span { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .pipe-node.gate { border-top-color: var(--amber); }
+  .pipe-node.run { border-top-color: var(--violet); }
+  .pipe-node.sink { border-top-color: var(--green); }
+  .pipe-arrow { align-self: center; color: var(--muted); font: 700 18px var(--mono); }
+
+  /* ---------- tables ---------- */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 700px; font-size: 13.8px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th {
+    position: sticky; top: 0; background: var(--panel-2); z-index: 1;
+    font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+  }
+  tbody tr:hover { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+  tbody tr:last-child td { border-bottom: 0; }
+  td code { white-space: normal; overflow-wrap: anywhere; }
+  td:first-child code { white-space: nowrap; }
+  .status { font-weight: 700; font-size: 12px; white-space: nowrap; }
+  .status.on { color: var(--green); }
+  .status.off { color: var(--red); }
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 10px; }
+  .filter {
+    font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--panel);
+    color: var(--muted); border-radius: 8px; padding: 4px 10px; cursor: pointer;
+  }
+  .filter.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); font-weight: 700; }
+  .hidden { display: none !important; }
+
+  /* ---------- code ---------- */
+  pre {
+    margin: 10px 0; background: #10171f; color: #dbe6f0; border: 1px solid #223040;
+    border-radius: 11px; padding: 14px 16px; overflow-x: auto; font: 12.7px/1.62 var(--mono);
+  }
+  pre code { background: none; border: 0; padding: 0; color: inherit; font-size: inherit; white-space: pre; }
+  .tok-k { color: #7dd3fc; }
+  .tok-s { color: #fcd34d; }
+  .tok-c { color: #7f8fa3; font-style: italic; }
+
+  /* ---------- callouts ---------- */
+  .callout {
+    border-radius: 12px; padding: 13px 16px; margin: 14px 0; border: 1px solid var(--line);
+    background: var(--panel); font-size: 14.2px;
+  }
+  .callout b:first-child { display: block; margin-bottom: 3px; }
+  .callout.ok { background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 30%, var(--line)); }
+  .callout.warn { background: var(--amber-soft); border-color: color-mix(in srgb, var(--amber) 34%, var(--line)); }
+  .callout.no { background: var(--red-soft); border-color: color-mix(in srgb, var(--red) 30%, var(--line)); }
+  .callout.info { background: var(--blue-soft); border-color: color-mix(in srgb, var(--blue) 28%, var(--line)); }
+
+  /* ---------- game section ---------- */
+  .verdict {
+    display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start;
+    border: 1px solid color-mix(in srgb, var(--green) 34%, var(--line));
+    background: linear-gradient(180deg, var(--green-soft), var(--panel));
+    border-radius: 16px; padding: 18px 20px; box-shadow: var(--shadow);
+  }
+  .verdict .stamp {
+    font: 800 13px/1.2 var(--mono); letter-spacing: .1em; color: var(--green);
+    border: 2px solid currentColor; border-radius: 10px; padding: 10px 12px;
+    text-align: center; transform: rotate(-3deg); white-space: nowrap; margin-top: 2px;
+  }
+  .verdict h3 { margin: 0 0 4px; font-size: 20px; }
+  .verdict p { margin: 4px 0; }
+  @media (max-width: 640px) { .verdict { grid-template-columns: 1fr; } .verdict .stamp { justify-self: start; transform: none; } }
+  .route-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
+  @media (max-width: 900px) { .route-grid { grid-template-columns: 1fr; } }
+  .route { border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; background: var(--panel); }
+  .route.recommended { border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent); }
+  .route h4 { margin: 0 0 2px; font-size: 15px; }
+  .route .for { font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+  .route ul { margin: 6px 0 0 18px; font-size: 13.4px; }
+  .route li { margin: 3px 0; }
+  .tree {
+    font: 12.8px/1.65 var(--mono); background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 11px; padding: 14px 16px; white-space: pre; overflow-x: auto; color: var(--ink-2);
+  }
+  .kv { display: grid; grid-template-columns: 170px 1fr; gap: 6px 14px; font-size: 14px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+  @media (max-width: 640px) { .kv { grid-template-columns: 1fr; gap: 2px; } .kv dd { margin-bottom: 8px; } }
+
+  /* ---------- evidence ---------- */
+  .evidence { columns: 2; column-gap: 26px; font-size: 13.4px; }
+  .evidence li { break-inside: avoid; margin: 0 0 7px; }
+  @media (max-width: 760px) { .evidence { columns: 1; } }
+
+  footer {
+    border-top: 1px solid var(--line); margin-top: 20px; padding: 26px 0 40px;
+    color: var(--muted); font-size: 13px;
+  }
+  .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 12px; color: var(--muted); margin: 2px 4px 2px 0; }
+  details { margin: 10px 0; }
+  summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 14px; }
+  summary:hover { text-decoration: underline; }
+  .anchor { scroll-margin-top: 76px; }
+  @media print {
+    .topbar, .theme-btn, .copy, .filters { display: none; }
+    body { background: #fff; color: #000; font-size: 11pt; }
+    section { break-inside: avoid; border-bottom: 1px solid #ccc; padding: 18px 0; }
+    pre { white-space: pre-wrap; }
+    .card, .layer, .table-wrap { box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">petcore <span>架构图</span></div>
+    <nav class="toc" aria-label="目录">
+      <a href="#verdict">结论</a>
+      <a href="#layers">分层</a>
+      <a href="#boot">启动</a>
+      <a href="#plugin">插件流水线</a>
+      <a href="#contrib">贡献类型</a>
+      <a href="#ports">端口</a>
+      <a href="#threads">线程</a>
+      <a href="#game">小游戏 mod</a>
+      <a href="#skeleton">骨架</a>
+      <a href="#pitfalls">坑与验收</a>
+      <a href="#evidence">证据</a>
+    </nav>
+    <button class="theme-btn" id="themeBtn" type="button">深色</button>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">petcore 0.5.0 · api_version 1 · 2026-11-01</div>
+    <h1>桌宠的「内核 + 插件」是怎么搭起来的</h1>
+    <p class="lede">
+      <code>petcore</code> 把旧版单个 <code>pet/</code> 包拆成了 <b>core</b> 与 <b>mod</b>：core 只负责让桌宠活着、能交互、能管理扩展；
+      角色是 content 包，功能是 feature 包。下面这张长图按「分层 → 启动 → 插件流水线 → 端口 → 线程 → 小游戏可行性」组织，
+      每个结论都能在文末找到对应的源码位置。
+    </p>
+    <div class="kpis">
+      <div class="kpi"><b>0.5.0</b><span>当前 core 版本 / API 1 / schema 1</span></div>
+      <div class="kpi"><b>251</b><span>petcore 下的 .py 文件</span></div>
+      <div class="kpi"><b>76.9k</b><span>Python 行数（ui 36.8k、platform 8.5k）</span></div>
+      <div class="kpi"><b>27 → 22</b><span>HostPorts 声明端口 / 实际注入</span></div>
+      <div class="kpi"><b>3 / 10</b><span>真正被消费的贡献类型 / 白名单总数</span></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- ================= 1. 一页结论 ================= -->
+<section id="verdict" class="anchor">
+  <div class="sec-head"><span class="sec-num">01</span><h2>一页结论</h2></div>
+  <p class="sec-sub">先把「谁负责什么」记住，后面的图都只是这句话的展开。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <h4>core 的职责，只有三件事</h4>
+      <ol>
+        <li><b>让桌宠活着</b>：窗口、渲染、动画链、行为决策、物理与碰撞、气泡、托盘、灵动岛。</li>
+        <li><b>让用户能配置</b>：设置窗口、菜单布局、热键、自启、多宠 profile、数据目录与迁移。</li>
+        <li><b>让扩展能挂上来</b>：发现/校验/安装/启停 mod，提供 <code>HostPorts</code>，托管设置页与对话窗槽位。</li>
+      </ol>
+      <p class="small muted">core 不认识「天气」「抽签」「AI 人格」这些业务词；这些都在 mod 里。</p>
+    </div>
+    <div class="card">
+      <h4>三类产物，别混着放</h4>
+      <dl class="kv">
+        <dt><span class="tag tag-ok">feature</span></dt>
+        <dd>能带 Python 代码（<code>entrypoint</code>），提供菜单、命令、设置页、对话窗页。装到 <code>&lt;data_root&gt;/mods/&lt;id&gt;</code>。</dd>
+        <dt><span class="tag tag-py">content</span></dt>
+        <dd>角色/素材包，<b>不能</b>带可执行文件。id 形如 <code>character.&lt;名字&gt;</code>。</dd>
+        <dt><span class="tag tag-neutral">内容块</span></dt>
+        <dd><code>sounds / themes / phrases / seasonal</code>：loader 会读成 ContentEntry，但当前运行期没有消费方（详见 §05）。</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <b>一句话版本</b>
+    core = 运行时 + 窗口壳 + 扩展宿主；mod = 业务逻辑 + 业务 UI + 业务数据。
+    mod 与 core 之间只有两条正式通道：<b>contributions</b>（菜单/设置页/对话窗页）和 <b>HostPorts</b>（22 个已注入端口）。
+    其余路径（直接 import core 实现、自己开窗口）要么被架构测试拦，要么属于「文档允许但后果自负」。
+  </div>
+</section>
+
+<!-- ================= 2. 分层 ================= -->
+<section id="layers" class="anchor">
+  <div class="sec-head"><span class="sec-num">02</span><h2>分层总图：四个平面</h2></div>
+  <p class="sec-sub">从下往上读是依赖方向：上层可以依赖下层，下层不许反向依赖具体业务域。下面的「扩展平面」不在这个栈里，它通过端口和贡献点接进来。</p>
+
+  <div class="stack">
+    <div class="layer entry">
+      <div class="layer-head"><b>① 入口</b><span class="path">petcore/cli.py · petcore/__main__.py</span></div>
+      <p>解析全局参数（<code>--root / --portable / --instance / --allow-feature-mods</code>）、<code>mods</code> 子命令、<code>--check</code> 自检；正常路径最终创建 <code>QApplication</code> 与 <code>CoreHost</code>。</p>
+      <div class="chips"><span class="chip">cli.main</span><span class="chip">mods validate/install</span><span class="chip">pack-character</span><span class="chip">migrate</span><span class="chip">--check</span></div>
+    </div>
+
+    <div class="down">只向下依赖</div>
+
+    <div class="layer shell">
+      <div class="layer-head"><b>② 外壳（Qt）</b><span class="path">petcore/ui/</span></div>
+      <p>桌宠窗口与多宠管理、气泡、菜单、托盘、设置页聚合、对话窗、截图窗、灵动岛。这里是唯一大量使用 PySide6 的业务层。</p>
+      <div class="chips">
+        <span class="chip hot">CoreHost</span><span class="chip">PetManager</span><span class="chip">PetWindow</span>
+        <span class="chip">SpeechBubble</span><span class="chip">MenuModel</span><span class="chip">SettingsDialog</span>
+        <span class="chip">chat/</span><span class="chip">screen/</span><span class="chip">island.py</span><span class="chip">ports.py</span>
+      </div>
+    </div>
+
+    <div class="down">通过 contracts 认识 mod；通过 ports 把能力交出去</div>
+
+    <div class="layer host">
+      <div class="layer-head"><b>③ 契约与宿主</b><span class="path">petcore/contracts/ · petcore/mods/</span></div>
+      <p><b>contracts</b> 只用标准库：端口 Protocol、FeatureDefinition、Contribution、能力清单、内容模型。<b>mods</b> 负责 manifest 校验、发现、启停、安装/卸载、trust、FeatureManager。</p>
+      <div class="chips">
+        <span class="chip hot">HostPorts</span><span class="chip">FeatureDefinition</span><span class="chip">Contribution</span>
+        <span class="chip">loader.load_mods</span><span class="chip">FeatureManager</span><span class="chip">install / trust</span>
+      </div>
+    </div>
+
+    <div class="down">纯逻辑不碰 Qt；系统调用集中在 platform</div>
+
+    <div class="layer infra">
+      <div class="layer-head"><b>④ 领域与基础设施</b><span class="path">engine · island · media · content · platform · storage · speech · chat · net · api · account · market · update · community · interop · migration</span></div>
+      <p>动画/行为/物理/几何（零 Qt）、媒体解码、内容收集、Win32 与屏幕、会话与锁、语音、会话存储、HTTP 唯一出口、API 规格与钥匙串、市场、更新、致谢、记忆、旧数据迁移。</p>
+      <div class="chips">
+        <span class="chip">engine/</span><span class="chip">island/</span><span class="chip">media/</span><span class="chip">platform/</span>
+        <span class="chip">net/</span><span class="chip">api/</span><span class="chip">speech/</span><span class="chip">storage/</span>
+        <span class="chip">market/</span><span class="chip">migration/</span><span class="chip">interop/</span>
+      </div>
+    </div>
+
+    <div class="down">读写</div>
+
+    <div class="layer data">
+      <div class="layer-head"><b>⑤ 数据落点</b><span class="path">&lt;data_root&gt; = %APPDATA%/dsh-pet-core</span></div>
+      <p>全局配置、每宠 profile、停用集合、已安装包、扩展私有数据、日志、缓存。安装目录下的 <code>mods/</code> 只放安装器投放的受信包。</p>
+      <div class="chips">
+        <span class="chip">config.json</span><span class="chip">config-pet-N.json</span><span class="chip">mods-state.json</span>
+        <span class="chip">mods/&lt;id&gt;</span><span class="chip">feature-data/&lt;owner&gt;</span><span class="chip">logs/petcore.log</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>四条由测试守着的红线</h3>
+  <div class="redlines">
+    <div class="redline"><b>engine/ 禁 Qt</b>只依赖标准库与同层模块；动画、几何、物理、行为都在这里，方便无头测试。</div>
+    <div class="redline"><b>contracts/ 只用标准库</b>端口是 Protocol，不是实现；谁都能读，但核心不许把实现塞进契约。</div>
+    <div class="redline"><b>网络库只在 net / api / account</b>mod 不得 import 这三个包，只能拿 <code>HostPorts.http</code> / <code>api</code>。</div>
+    <div class="redline"><b>ui 单向依赖</b><code>ui → engine/contracts/media/content/mods/platform</code>；core 不反向依赖具体业务域。</div>
+  </div>
+  <p class="small muted" style="margin-top:10px">守卫在 <code>tests/test_petcore_architecture.py</code>；红了不许改测试放行。</p>
+
+  <h3>扩展平面：不在上面的栈里，但每一层都能看到它</h3>
+  <div class="plane-note">
+    <b>mod 包</b> → <code>loader</code> 校验/发现 → <code>FeatureManager</code> 导入 <code>entrypoint</code> → <code>create_host(context)</code> 返回
+    <code>FeatureDefinition</code> → 菜单/设置页/对话窗页进入 <b>外壳</b>；runtime 通过 <b>HostPorts</b> 调 <b>契约</b>背后的实现。
+    扩展代码始终与 core 同进程、同 Python 解释器，没有沙箱。
+  </div>
+</section>
+
+<!-- ================= 3. 启动路径 ================= -->
+<section id="boot" class="anchor">
+  <div class="sec-head"><span class="sec-num">03</span><h2>启动路径：一只桌宠是怎么出现的</h2></div>
+  <p class="sec-sub">正常启动与 <code>--check</code> 走同一条内容链路；区别只在于后者不创建窗口、不写配置。</p>
+
+  <div class="timeline">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body"><b>解析参数</b><span class="where">petcore/cli.py</span>
+        <p><code>--root</code> 定数据根，<code>--portable / --instance</code> 换根，<code>--allow-feature-mods</code> 打开功能扩展总开关，<code>mods</code> 子命令走 CLI 分支。</p></div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body"><b>加载全局配置</b><span class="where">Config.load(data_root)</span>
+        <p>读 <code>config.json</code>、各 slot 的 <code>config-pet-N.json</code>、<code>overlay-active-pets.json</code>；<code>--check</code> 用 <code>persist=False</code>，不落盘、不建迁移备份。</p></div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body"><b>单实例锁</b><span class="where">QLockFile</span>
+        <p>同一数据根只允许一个进程；<code>--instance NAME</code> 用独立数据根与独立锁，可以并行开多份。</p></div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-body"><b>创建 CoreHost</b><span class="where">petcore/ui/app.py:398</span>
+        <p>进程级服务在这里组装：<code>QtScheduler</code>、音频路由、记忆、Webhook、API 规格与钥匙串、账户/余额、语音与 ASR、DSH 客户端、社区、聊天/快速对话控制器、截图问答、菜单模型、免打扰、WorkerHost、市场任务。</p></div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div class="step-body"><b>加载内容与扩展</b><span class="where">CoreHost.load_content · mods/loader.py</span>
+        <p>只读加载 <code>assets/characters</code>，再扫描 mod 目录；content 包进角色列表，feature 包过 manifest 与授信闸门后由 <code>FeatureManager</code> 装配。</p></div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div class="step-body"><b>创建宠物窗口</b><span class="where">PetManager / PetWindow</span>
+        <p>动画目录 + 播放器 + 行为导演 + ClipLibrary（frameseq → webm → gif 回退）；恢复位置/屏幕/缩放；渲染首帧后显示。多宠时 slot 1..98 各自有 profile。</p></div>
+    </div>
+    <div class="step">
+      <div class="step-num">7</div>
+      <div class="step-body"><b>装配端口并启动 runtime</b><span class="where">ui/ports.py::build_ports:981</span>
+        <p>27 个端口字段里实际注入 22 个；内置 7 个 Core 特性无条件加载，用户 feature 通过 <code>runtime.start()</code> 起来，菜单贡献合并进「扩展」子菜单。</p></div>
+    </div>
+    <div class="step">
+      <div class="step-num">8</div>
+      <div class="step-body"><b>托盘、菜单、监听器</b><span class="where">TrayIcon · MenuModel · SessionWatcher</span>
+        <p>托盘菜单独立于右键菜单；屏幕变化、锁屏/睡眠、全屏检测、灵动岛采样按需启停——空闲时不该有常驻定时器。</p></div>
+    </div>
+    <div class="step">
+      <div class="step-num">9</div>
+      <div class="step-body"><b>进入事件循环</b><span class="where">QApplication.exec()</span>
+        <p>之后所有 GUI 操作都在主线程；mod 的跨线程回调统一经 <code>QtScheduler</code> 排队。</p></div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b><code>--check</code> 是排障第一入口</b>
+    它输出角色、每段动画实际采用的后端、mod 列表与诊断、配置快照（<code>menu_template=json|builtin</code>、<code>speech</code>、<code>self_talk_images</code> 等）。
+    构建门用的是 <code>--check --strict</code>；普通 <code>--check</code> 只读，不该写任何文件。
+  </div>
+</section>
+
+<!-- ================= 4. 插件流水线 ================= -->
+<section id="plugin" class="anchor">
+  <div class="sec-head"><span class="sec-num">04</span><h2>插件流水线：从磁盘上的一个目录到菜单里的一项</h2></div>
+  <p class="sec-sub">这是 feature mod 的完整生命周期。每一步失败都只产生一条诊断，不会阻断 core 启动。</p>
+
+  <div class="pipe">
+    <div class="pipe-node"><b>1. 扫描</b><span>数据目录 mods → 安装目录 mods → 仓库 mods → 额外目录；同 id 后者覆盖，记诊断</span></div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-node gate"><b>2. 校验</b><span>mod.json schema、id、version、api_version、路径逃逸、content 包禁可执行文件</span></div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-node gate"><b>3. 授信闸门</b><span>feature 必须在 user mods 内，且 allow_feature_mods 或安装目录 .trusted</span></div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-node"><b>4. 导入入口</b><span>entrypoint 必须包内相对路径；<code>host/__init__.py</code> 按包加载，支持相对 import</span></div>
+  </div>
+  <div class="pipe" style="margin-top:8px">
+    <div class="pipe-node"><b>5. create_host</b><span>收到 FeatureContext（owner / core_version / api_version / ports / host / log）</span></div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-node run"><b>6. FeatureDefinition</b><span>contributions + runtime_factory + settings_factory + view_factories</span></div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-node run"><b>7. runtime.start()</b><span>订阅、定时器、加载数据；命令表 <code>runtime.commands</code> 在此暴露</span></div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-node sink"><b>8. 贡献落地</b><span>菜单项 / 设置页 / 对话窗页进入 core 的 UI 槽位</span></div>
+  </div>
+
+  <div class="grid-2" style="margin-top:18px">
+    <div class="card">
+      <h4>命令是怎么被点到的</h4>
+      <ol class="small">
+        <li>菜单贡献 id 统一成 <code>&lt;owner&gt;:&lt;contribution&gt;</code>，默认进「扩展 → &lt;manifest 名字&gt;」二级子菜单。</li>
+        <li>点击时 core 取该菜单项的 <code>data.command</code>（缺省等于贡献 id），再调 <code>FeatureManager.command(owner, command_id)</code>，拿到 runtime 的 <code>commands</code> 字典里那一项。</li>
+        <li>命令函数如果声明了 <code>slot</code> 形参，core 会把发起菜单的那只宠的 slot 传进来。</li>
+        <li>命令抛异常：记日志并气泡「扩展执行失败，详情见日志」；core 不会崩。</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h4>停用 / 卸载的顺序</h4>
+      <ol class="small">
+        <li><code>stop_owner()</code>：先撤销 speech / reminders / interaction 的 owner 订阅，再 <code>runtime.stop()</code>。</li>
+        <li>菜单模型注销该 owner 的所有节点。</li>
+        <li>清掉包目录下的 <code>sys.modules</code>，避免旧模块继续存活。</li>
+        <li>有 <code>install.json</code> 的按清单删文件；无清单的（安装器投放）整目录删。</li>
+        <li><b>个人数据永不删</b>：<code>feature-data/&lt;id&gt;</code>、配置键、钥匙串都保留。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <b>三个容易误会的点</b>
+    <ul class="small" style="margin-bottom:0">
+      <li><code>execution: "worker"</code> 合法但<b>永远不会被加载</b>，只在日志里留一句 <code>worker feature is not supported yet</code>；今天只支持 <code>host-only</code>。</li>
+      <li><code>capabilities</code> 是<b>声明</b>，不是沙箱：写不写、写什么，运行期都没有强制检查。</li>
+      <li>没有 Python 模块热卸载；「重新加载扩展」是停掉 runtime、清模块、重新导入，不是你代码里的模块级状态能全身而退。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================= 5. 贡献类型 ================= -->
+<section id="contrib" class="anchor">
+  <div class="sec-head"><span class="sec-num">05</span><h2>贡献类型：10 个白名单，今天只有 3 个真的生效</h2></div>
+  <p class="sec-sub">写 mod 时最常见的返工，就是把时间花在没有消费点的 contribution 上。</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>kind</th><th>你想干什么</th><th>真实消费点</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td><code>menu</code></td><td>右键菜单多一项</td><td><code>FeatureManager.menu_contributions()</code> → <code>MenuModel</code>；<code>data</code> 支持 label / command / order / icon / checked</td><td><span class="status on">生效</span></td></tr>
+        <tr><td><code>settings_page</code></td><td>设置里多一页</td><td><code>FeatureManager.settings_pages()</code> → <code>ExtensionsPage</code> 的页内导航；只有 <code>CORE_FEATURE_IDS</code> 能写 <code>host_page</code> 内嵌</td><td><span class="status on">生效</span></td></tr>
+        <tr><td><code>chat_view</code></td><td>在 AI 对话窗里占一页</td><td><code>FeatureManager.chat_views()</code> + <code>FeatureDefinition.view_factories</code>；core 管标题栏按钮、槽位、生命周期</td><td><span class="status on">生效（0.4.0+）</span></td></tr>
+        <tr><td><code>command</code></td><td>注册一个命令</td><td>没有消费点；真正的命令表是 <code>runtime.commands</code> 字典</td><td><span class="status off">无消费点</span></td></tr>
+        <tr><td><code>hotkey</code></td><td>注册全局热键</td><td>没有消费点；全局热键是 core 的 Win32 RegisterHotKey</td><td><span class="status off">无消费点</span></td></tr>
+        <tr><td><code>card</code></td><td>灵动岛卡片</td><td>没有消费点；灵动岛是 core 窗口，mod 只能走 presentation</td><td><span class="status off">无消费点</span></td></tr>
+        <tr><td><code>install_hook</code></td><td>安装时执行</td><td>没有消费点</td><td><span class="status off">无消费点</span></td></tr>
+        <tr><td><code>phrases / sound / theme / seasonal</code></td><td>内容块</td><td>loader 读成 ContentEntry，但 <code>content/collect.py</code> 只消费 <code>character</code></td><td><span class="status off">运行期不读</span></td></tr>
+        <tr><td><code>character</code>（mod.json 块）</td><td>新角色/新素材</td><td>content 收集器 → CharacterSpec</td><td><span class="status on">生效</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout info" style="margin-top:14px">
+    <b>菜单与设置的一一对应</b>
+    core 自己的每个菜单动作都必须在 <code>ui/settings/coverage.py</code> 有设置落点，<code>tests/test_petcore_settings_coverage.py</code> 会红。
+    mod 贡献的菜单项由 mod 自己的设置页负责说明；<b>有菜单贡献就必须提供 settings_page</b>（内置/示例包有测试强制）。
+  </div>
+</section>
+
+<!-- ================= 6. 端口 ================= -->
+<section id="ports" class="anchor">
+  <div class="sec-head"><span class="sec-num">06</span><h2>端口目录：插件能碰到的全部能力</h2></div>
+  <p class="sec-sub">
+    <code>HostPorts</code> 在 dataclass 里声明了 27 个字段；<code>build_ports()</code> 实际注入 22 个。空着不等于「以后可能有」——
+    运行期就是 <code>None</code>，照着 dataclass 写代码会在第一次调用时炸。
+  </p>
+
+  <div class="filters" id="portFilters">
+    <button class="filter on" data-filter="all" type="button">全部 27</button>
+    <button class="filter" data-filter="on" type="button">已注入 22</button>
+    <button class="filter" data-filter="off" type="button">恒为 None 5</button>
+  </div>
+
+  <div class="table-wrap">
+    <table id="portsTable">
+      <thead><tr><th>端口</th><th>用途 / 关键方法</th><th>线程</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr data-state="on"><td><code>presentation</code></td><td>气泡、图片、通知、动画、展示会话闸门：<code>say / say_sequence / show_image / notify / play_animation / play_event / begin_scene / hide / for_slot</code></td><td>GUI（实现会从后台线程排队）</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>scheduler</code></td><td>定时与回 GUI 线程：<code>call_later / call_every / cancel / cancel_owner</code></td><td><b>任意线程</b>，回调在 GUI</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>audio</code></td><td>播放音效：<code>play(path, volume)</code>、<code>set_volume</code></td><td>GUI</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>storage</code></td><td>私有数据目录：<code>data_dir(owner)</code>、<code>config_dir</code>、<code>data_root</code></td><td>阻塞（会建目录）</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>credentials</code></td><td>系统钥匙串：<code>get / set / delete</code>；密钥不落配置文件</td><td>阻塞</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>resources</code></td><td>随包只读资源：<code>bundle_path(*parts)</code></td><td>只读</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>config</code></td><td>偏好：<code>get</code> 只读；<code>set</code> 只给菜单勾选/命令切换这类一次性用户动作</td><td>set 会立即落盘</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>pets</code></td><td>只读宠物句柄：<code>pets() / primary() / active()</code>；句柄有 <code>body_rect / move_by / set_velocity / say / play_animation / animations</code></td><td>GUI</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>interaction</code></td><td>点击、拖文件、周期回调：<code>on_click / on_drop / on_tick(16ms) / cancel_owner</code></td><td>GUI（回调在 GUI）</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>quiet</code></td><td>进程级免打扰：<code>quiet_active / set_quiet / subscribe</code></td><td>GUI</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>reminders</code></td><td>带守卫的提醒交付：<code>deliver(owner, slot, key, target, title, text, guard, on_click)</code></td><td>GUI</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>http</code></td><td>普通取数唯一出口：<code>request(HttpRequest)</code>、<code>get_json(url, params, prefer_direct)</code></td><td><b>阻塞</b>，自己开线程</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>api</code></td><td>LLM 服务门面：<code>services() / stream_chat(...)</code>；SSE、代理、错误分类都在 core</td><td>回调在请求线程</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>chat</code></td><td>对话窗：<code>open / append / token / done / error / cancel / record / show_view / on_submit / register_channel</code></td><td>可后台调用，排队到 GUI</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>quick_chat</code></td><td>桌宠旁的快速对话气泡；与完整对话窗共用会话</td><td>可后台调用</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>screen</code></td><td>截图与窗口采样：<code>capture / capture_region / foreground_window / sample_foreground / capture_foreground / shrink_for_vision</code></td><td>GUI</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>screen_ask</code></td><td>截图动作条与问答窗：<code>on_action / on_ask</code></td><td>回调在<b>后台线程</b></td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>speech</code></td><td>语音：<code>providers / preflight / synthesize / speak / stop / set_secret / register_yield</code></td><td>synthesize 阻塞；speak 异步</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>memory</code></td><td>分层记忆：<code>remember / recall / render_prompt / stats / clear / export</code></td><td>GUI</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>webhook</code></td><td>本地回环 HTTP：<code>start(owner, port, path, token, handler)</code>；只绑 127.0.0.1</td><td>handler 在服务线程</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>system</code></td><td>屏幕与平台信息：<code>screens / platform_name / idle_seconds</code></td><td>GUI</td><td><span class="status on">已注入</span></td></tr>
+        <tr data-state="on"><td><code>worker</code></td><td>启动受管子进程：<code>start(owner, argv, env)</code></td><td>阻塞</td><td><span class="status on">已注入</span></td></tr>
+
+        <tr data-state="off"><td><code>commands</code></td><td>CommandPort.register —— 没有人注入；用 <code>runtime.commands</code></td><td>—</td><td><span class="status off">恒为 None</span></td></tr>
+        <tr data-state="off"><td><code>menu</code></td><td>MenuPort.register —— 没有人注入；用 contribution 注册</td><td>—</td><td><span class="status off">恒为 None</span></td></tr>
+        <tr data-state="off"><td><code>windows</code></td><td>WindowPort —— 没有窗口端口；需要窗口自己造</td><td>—</td><td><span class="status off">恒为 None</span></td></tr>
+        <tr data-state="off"><td><code>input</code></td><td>InputPort —— 没有注入；拖文件用 <code>interaction.on_drop</code></td><td>—</td><td><span class="status off">恒为 None</span></td></tr>
+        <tr data-state="off"><td><code>capabilities</code></td><td>CapabilityPort —— 没有注入；能力只是声明</td><td>—</td><td><span class="status off">恒为 None</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout warn">
+    <b>写代码前先判空</b>
+    <code>if ports.http is None: ...</code> 是推荐写法，不是洁癖。端口缺失在非 Windows、精简包、或某个服务初始化失败时是正常状态；
+    直接 <code>ports.speech.speak()</code> 会在用户机器上变成一条看不懂的 <code>AttributeError</code>。
+  </div>
+</section>
+
+<!-- ================= 7. 线程 ================= -->
+<section id="threads" class="anchor">
+  <div class="sec-head"><span class="sec-num">07</span><h2>线程模型：只有 scheduler 是「任意线程」</h2></div>
+  <p class="sec-sub">这是写 mod 最容易踩、也最难在测试里发现的一类问题：在后台线程碰了 Qt 控件，平时没事，用户点一下审批卡就整个应用挂起。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <h4><span class="tag tag-qt">GUI 线程</span> 主线程</h4>
+      <ul class="small">
+        <li>所有 Qt 控件、窗口、气泡、菜单、托盘。</li>
+        <li><code>presentation</code>、<code>pets</code>、<code>interaction</code>、<code>audio</code>、<code>screen</code>、<code>reminders</code> 的调用。</li>
+        <li>命令回调、<code>scheduler</code> 的定时回调、<code>interaction.on_tick</code>。</li>
+        <li>你的游戏窗口里的 <code>QTimer</code> 与 <code>paintEvent</code>。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4><span class="tag tag-py">后台线程</span> 你开的，或者 core 的回调</h4>
+      <ul class="small">
+        <li><code>http.request / get_json</code>：同步阻塞，自己开线程。</li>
+        <li><code>speech.synthesize</code>：阻塞；<code>speak</code> 才是异步入口。</li>
+        <li><code>config.set</code>、<code>storage.data_dir</code>：会碰磁盘。</li>
+        <li><code>screen_ask.on_ask / on_action</code>：回调本来就在后台线程。</li>
+        <li><code>chat.append/open</code> 与 <code>presentation</code> 现在可从后台调用，但实现只是帮你排队——别指望同步效果。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>六条铁律</h3>
+  <ol>
+    <li><b>回 GUI 只用 <code>ports.scheduler.call_later(0, cb)</code></b>。它是唯一明确允许从任意线程调用的端口；回调一定在 GUI 线程执行。</li>
+    <li><b>不要在 worker 里建窗口、碰气泡、改控件</b>。哪怕只是 <code>QLabel.setText()</code>，也可能在 Windows 上变成 AppHang。</li>
+    <li><b><code>stop()</code> 里先取消，再清状态</b>：<code>scheduler.cancel(handle)</code> / <code>cancel_owner(owner)</code>；订阅的注销函数也在这里调。</li>
+    <li><b><code>Runtime.close()</code> 永远不会被 core 调用</b>。清理写在 <code>stop()</code> 里，或者让 <code>close = stop</code>。</li>
+    <li><b>重活下后台，结果回 GUI</b>：解码、读大文件、网络、语音合成都不要在 <code>on_tick</code> 或 <code>QTimer</code> 回调里做。</li>
+    <li><b>迟到的结果要丢弃</b>：用代次号 / 取消事件 / <code>guard</code>，别让上一局的结果写进下一局。</li>
+  </ol>
+
+  <div class="callout info">
+    <b>为什么桌宠对线程这么敏感</b>
+    它每 16ms 有一条动画/碰撞节拍，同时还有透明窗、置顶、气泡从属窗口这些 Win32 层级关系。
+    一旦某个 mod 在后台线程直接 <code>show()</code> 或改控件，Qt 的事件循环会被跨线程的窗口消息拖住，表现就是「点一下卡死几秒」。
+    正式契约因此把 GUI 亲和写死；实现层的排队只是兜底，不是让你随便调。
+  </div>
+</section>
+
+<!-- ================= 8. 小游戏 mod ================= -->
+<section id="game" class="anchor">
+  <div class="sec-head"><span class="sec-num">08</span><h2>协作者想做一个小游戏 mod：能做到吗？</h2></div>
+  <p class="sec-sub">这是本文最重要的一节。结论、三条 UI 路线、游戏循环、数据、素材、分发和已知坑，都按「今天的工作区」给。</p>
+
+  <div class="verdict">
+    <div class="stamp">可以做<br>边界要清楚</div>
+    <div>
+      <h3>能。新 UI、新功能、新数据都能加，而且不需要改 core。</h3>
+      <p>
+        这是一个 <b>feature mod</b>：一个目录、一个 <code>mod.json</code>、一个 <code>create_host()</code>，再加你自己的窗口、逻辑和存档。
+        官方的 <code>fun.divination</code> 已经在命令里惰性开 <code>QDialog</code>，<code>tool.ai-browser</code> 已经在对话窗里放整页 <code>QWidget</code>——
+        两条路都有人走过。
+      </p>
+      <p class="small muted">
+        但它不是「独立程序」：和桌宠同一个进程、同一个 Python 解释器、没有沙箱、没有窗口生命周期治理、只支持 <code>host-only</code>。
+        下面四条边界要自己扛。
+      </p>
+    </div>
+  </div>
+
+  <h3>先选 UI 路线：三条，推荐第一条</h3>
+  <div class="route-grid">
+    <div class="route recommended">
+      <h4>① 自建窗口 <span class="tag tag-ok">推荐</span></h4>
+      <div class="for">棋盘、卡牌、实时玩法、带画布的游戏</div>
+      <ul>
+        <li>用 <code>QDialog</code> / <code>QMainWindow</code>，在菜单命令里惰性导入。</li>
+        <li>窗口 chrome、圆角、置顶、跟随、关闭清理都由你负责。</li>
+        <li>先例：<code>fun.divination/host/runtime.py::show_card</code>。</li>
+      </ul>
+    </div>
+    <div class="route">
+      <h4>② 对话窗里的一页 <code>chat_view</code></h4>
+      <div class="for">助手式面板、网页、状态页、轻量互动</div>
+      <ul>
+        <li><code>Contribution(kind="chat_view")</code> + <code>view_factories</code>。</li>
+        <li>core 管标题栏按钮、槽位、圆角、深色、生命周期。</li>
+        <li>不是独立窗口；每次开对话窗都回到 AI 页，别指望做默认页。</li>
+      </ul>
+    </div>
+    <div class="route">
+      <h4>③ 设置页</h4>
+      <div class="for">规则、难度、音量、存档管理</div>
+      <ul>
+        <li>继承 <code>SettingsPage</code>，进「扩展管理」的页内导航。</li>
+        <li>内容在 <code>QScrollArea</code> 里，默认阅读宽 860；<b>别把棋盘塞进来</b>。</li>
+        <li>保存/取消/回滚语义由 core 统一委托。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>游戏循环：按节奏选，不要一律上 16ms</h3>
+  <div class="grid-2">
+    <div class="card card-tight">
+      <h4>回合制 / 棋盘 / 卡牌</h4>
+      <p class="small">不需要帧循环。按钮、<code>QTimer.singleShot</code>、动画结束信号就够了。</p>
+      <p class="small muted">窗口关闭即停；没有常驻定时器，桌宠的待机帧率不受影响。</p>
+    </div>
+    <div class="card card-tight">
+      <h4>实时 / 动作 / 弹幕</h4>
+      <p class="small">两种写法：自己窗口里的 <code>QTimer(33ms)</code>，或 <code>ports.interaction.on_tick(owner, cb, 16)</code>。</p>
+      <p class="small muted">两者都在 GUI 线程；只做轻量状态推进与 <code>update()</code>，重活下后台。窗口隐藏/关闭必须停表。</p>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <b>别用 <code>on_tick</code> 驱动一个看不见的游戏</b>
+    16ms 回调即使在窗口关闭后也会继续跑，既烧 CPU 又会让「一局」在后台偷偷推进。正确做法：窗口 <code>showEvent</code> 启动、
+    <code>hideEvent/closeEvent</code> 停止，<code>runtime.stop()</code> 再兜底取消。
+  </div>
+
+  <h3>数据：存档进 feature-data，偏好才进 config</h3>
+  <div class="grid-2">
+    <div class="card">
+      <h4>存档（业务数据）</h4>
+      <pre><code>ports.storage.data_dir("game.board")
+# → &lt;data_root&gt;/feature-data/game.board/
+#     save.json      {"schema_version": 1, ...}
+#     stats.json
+#     replays/…</code></pre>
+      <ul class="small">
+        <li>自己写 JSON，<b>临时文件 + <code>os.replace</code></b> 原子替换。</li>
+        <li>带 <code>schema_version</code>，升级时自己迁移；损坏文件不要静默覆盖。</li>
+        <li>卸载 mod <b>不会删</b>这个目录；在设置页给用户一个「清除存档」入口。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>偏好（配置）</h4>
+      <pre><code>host.config.set("game_board_difficulty", "hard")
+ports.config.get("game_board_difficulty", "normal")</code></pre>
+      <ul class="small">
+        <li>第三方键自动落 <code>config.json</code> 的 <code>extra</code> 区块。</li>
+        <li>键名 <code>^[a-z0-9][a-z0-9._-]{0,127}$</code>；单值 ≤4KB、整块 ≤64KB。</li>
+        <li>命中密钥样式的值会被拒绝；<b>不要把运行时状态写进 config</b>。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>能力 → 端口对照表</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>小游戏需要</th><th>用什么</th><th>注意</th></tr></thead>
+      <tbody>
+        <tr><td>一个新窗口 / 一块画布</td><td>自己的 <code>QDialog</code> / <code>QWidget</code></td><td>没有窗口端口；引用自己持住，关闭停表</td></tr>
+        <tr><td>每帧推进</td><td><code>QTimer</code> 或 <code>interaction.on_tick</code></td><td>GUI 线程；窗口不可见就停</td></tr>
+        <tr><td>存档 / 排行榜 / 回放</td><td><code>storage.data_dir</code></td><td>原子写；版本号；卸载不删</td></tr>
+        <tr><td>难度 / 音量 / 开关</td><td><code>config</code> + <code>settings_page</code></td><td>只放偏好；extra 限额</td></tr>
+        <tr><td>音效 / BGM</td><td><code>audio.play(path)</code></td><td>文件在包内；大文件别在 GUI 线程解码</td></tr>
+        <tr><td>桌宠说话 / 表情 / 动作</td><td><code>presentation</code>、<code>pets</code></td><td>动画名必须存在于当前角色；缺了就安静降级</td></tr>
+        <tr><td>开局入口</td><td><code>menu</code> contribution + <code>runtime.commands</code></td><td>命令声明 <code>slot</code> 才知道是哪只宠</td></tr>
+        <tr><td>拖文件当输入</td><td><code>interaction.on_drop</code></td><td>拿到的是已投喂的文件路径列表</td></tr>
+        <tr><td>联网对战 / 拉排行榜</td><td><code>http</code></td><td>阻塞；自己开线程；结果经 scheduler 回 GUI</td></tr>
+        <tr><td>语音播报结果</td><td><code>speech.speak</code></td><td>可能失败；不要用 <code>on_done</code> 冒充播放完成</td></tr>
+        <tr><td>在对话窗里开一页</td><td><code>chat_view</code></td><td>只给槽位，不给窗口</td></tr>
+        <tr><td>全局快捷键开局</td><td>没有</td><td>全局热键是 core 的；窗口内可用 <code>QShortcut</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>四条必须接受的边界</h3>
+  <div class="grid-2">
+    <div class="card card-tight">
+      <h4><span class="tag tag-warn">边界 1</span> 没有窗口端口</h4>
+      <p class="small">core 不提供「给我一个受管窗口」的接口。置顶、跟随桌宠、多宠归属、关闭清理、几何持久化，全部你自己写。
+      文档明确说：别自己再造聊天窗；要占对话窗的一页就用 <code>chat_view</code>。</p>
+    </div>
+    <div class="card card-tight">
+      <h4><span class="tag tag-warn">边界 2</span> 与桌宠同进程</h4>
+      <p class="small">你的死循环会卡住桌宠的 16ms 节拍；原生崩溃会带走整个应用。重活必须下后台线程，
+      长时间任务要有取消与超时。</p>
+    </div>
+    <div class="card card-tight">
+      <h4><span class="tag tag-warn">边界 3</span> 能力不是沙箱</h4>
+      <p class="small"><code>capabilities</code> 只是声明，运行期没有闸门。mod 理论上能读文件、起进程、联网。
+      信任来自「安装位置 + 用户勾选 allow_feature_mods / 安装器 .trusted」，不是代码里的权限检查。</p>
+    </div>
+    <div class="card card-tight">
+      <h4><span class="tag tag-warn">边界 4</span> 只支持 host-only</h4>
+      <p class="small"><code>execution: "worker"</code> 合法但永远不会被加载。没有独立进程隔离，
+      也没有 Python 模块热卸载；「重新加载扩展」需要你的 <code>stop()</code> 把窗口、定时器、线程都收干净。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 9. 骨架 ================= -->
+<section id="skeleton" class="anchor">
+  <div class="sec-head"><span class="sec-num">09</span><h2>一个能跑的小游戏 mod 骨架</h2></div>
+  <p class="sec-sub">下面这份目录结构与代码是按官方样板的最小闭环改的：菜单 → 命令 → 自建窗口 → 存档 → 设置页。把它交给协作者可以直接开工。</p>
+
+  <div class="grid-2">
+    <div>
+      <h3>目录</h3>
+      <div class="tree">game.board/
+  mod.json
+  host/
+    __init__.py        # from .factory import create_host
+    factory.py         # 唯一的装配点
+    runtime.py         # 无 Qt；命令、定时、生命周期
+    game_window.py     # Qt：棋盘窗口 + 帧循环
+    store.py           # 纯逻辑：原子读写存档
+    settings_page.py   # Qt：规则/音量/清档
+  assets/
+    cards/…
+    sounds/win.wav</div>
+      <p class="small muted" style="margin-top:10px">
+        <b>模块边界：</b><code>runtime.py</code> / <code>store.py</code> 不 import PySide6；
+        Qt 只出现在 <code>game_window.py</code> 与 <code>settings_page.py</code>，
+        并且只在 GUI 线程的命令里惰性导入。
+      </p>
+    </div>
+    <div>
+      <h3><code>mod.json</code></h3>
+      <pre><code>{
+  "schema": 1,
+  "kind": "feature",
+  "id": "game.board",
+  "name": "Pet Board",
+  "name_zh": "桌宠小游戏",
+  "version": "1.0.0",
+  "api_version": "1",
+  "core_requires": "&gt;=0.2.0,&lt;1.0.0",
+  "author": "你的名字",
+  "execution": "host-only",
+  "entrypoint": "host/__init__.py:create_host",
+  "capabilities": [
+    "sound.play",
+    "speech.present",
+    "notification.present",
+    "settings.read",
+    "settings.write",
+    "filesystem.user_data"
+  ]
+}</code></pre>
+      <p class="small muted"><code>core_requires</code> 按你的实际用到的端口放宽/收紧；<code>api_version</code> 必须字面是 <code>"1"</code>。</p>
+    </div>
+  </div>
+
+  <h3><code>host/factory.py</code>：装配点</h3>
+  <pre><code>from petcore.contracts.contributions import Contribution
+from petcore.contracts.feature import FeatureDefinition
+
+from .runtime import GameRuntime
+from .settings_page import GameSettingsPage
+
+
+def create_host(_context):
+    holder = {}
+
+    def runtime_factory(context):
+        holder["runtime"] = GameRuntime(context)
+        return holder["runtime"]
+
+    return FeatureDefinition(
+        owner="game.board",
+        contributions=(
+            Contribution(
+                kind="menu",
+                id="play",
+                data={"label": "来一局", "command": "play", "order": 120, "icon": "sparkles"},
+            ),
+            Contribution(
+                kind="settings_page",
+                id="board",
+                data={"title": "桌宠小游戏", "order": 720, "icon": "sparkles"},
+            ),
+        ),
+        runtime_factory=runtime_factory,
+        settings_factory=lambda host: GameSettingsPage(host, runtime=holder.get("runtime")),
+    )</code></pre>
+
+  <h3><code>host/runtime.py</code>：无 Qt 的运行时</h3>
+  <pre><code>import logging
+from pathlib import Path
+
+OWNER = "game.board"
+ASSETS = Path(__file__).resolve().parent.parent / "assets"
+log = logging.getLogger(OWNER)
+
+
+class GameRuntime:
+    def __init__(self, context):
+        self.ports = context.ports
+        self.commands = {"play": self.play}
+        self._window = None
+
+    def play(self, slot=None):
+        if self._window is not None:
+            self._window.raise_()
+            self._window.activateWindow()
+            return
+        # Qt 只在 GUI 线程的命令里惰性导入
+        from .game_window import GameWindow
+
+        self._window = GameWindow(on_finish=lambda score: self._finish(slot, score))
+        self._window.finished.connect(self._forget_window)
+        self._window.start()
+
+    def _forget_window(self, _code=0):
+        self._window = None
+
+    def _finish(self, slot, score):
+        target = None
+        if self.ports.presentation is not None:
+            target = self.ports.presentation.for_slot(slot) if slot is not None else self.ports.presentation
+        if target is not None:
+            target.say(f"这局拿了 {score} 分", force=True)
+        if self.ports.audio is not None:
+            self.ports.audio.play(ASSETS / "sounds" / "win.wav")
+
+    def stop(self):
+        if self._window is not None:
+            self._window.close()
+            self._window = None</code></pre>
+
+  <h3><code>host/game_window.py</code>：窗口与帧循环</h3>
+  <pre><code>from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
+
+
+class GameWindow(QDialog):
+    def __init__(self, *, on_finish, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("桌宠小游戏")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.resize(520, 420)
+        self._on_finish = on_finish
+        self._score = 0
+
+        layout = QVBoxLayout(self)
+        self.score_label = QLabel("0", self)
+        layout.addWidget(self.score_label)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)          # 回合制可以完全不启动它
+        self._timer.timeout.connect(self._tick)
+        self.finished.connect(self._report)
+
+    def start(self):
+        self._score = 0
+        self._timer.start()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _tick(self):
+        if not self.isVisible():
+            self._timer.stop()
+            return
+        self._score += 1
+        self.score_label.setText(str(self._score))
+
+    def _report(self, _code=0):
+        self._timer.stop()
+        self._on_finish(self._score)
+
+    def closeEvent(self, event):
+        self._timer.stop()
+        super().closeEvent(event)</code></pre>
+
+  <h3><code>host/store.py</code>：原子存档</h3>
+  <pre><code>import json
+import os
+import tempfile
+from pathlib import Path
+
+SCHEMA = 1
+
+
+def load(path: Path) -&gt; dict:
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {"schema_version": SCHEMA}
+    if data.get("schema_version") != SCHEMA:
+        return {"schema_version": SCHEMA}
+    return data
+
+
+def save(path: Path, data: dict) -&gt; None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle_fd, temp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)</code></pre>
+
+  <h3><code>host/settings_page.py</code>：规则与清档</h3>
+  <pre><code>from petcore.ui.settings.base import SettingsPage, make_spin
+
+
+class GameSettingsPage(SettingsPage):
+    title = "桌宠小游戏"
+
+    def __init__(self, host, parent=None, *, runtime=None):
+        super().__init__(host, parent)
+        self.runtime = runtime
+        self.group_heading("桌宠小游戏")
+        card = self.section("玩法", level=3)
+        self.rounds = make_spin(self)
+        self.rounds.setRange(1, 99)
+        card.add_row("每局回合数", self.rounds, "只影响新开的局。", expand=True)
+        self.rounds.setValue(int(host.config.get("game_board_rounds", 10)))
+        self.rounds.valueChanged.connect(self._changed)
+
+    def _changed(self, value):
+        self.host.config.set("game_board_rounds", int(value))
+        self.changed.emit()
+
+    def keywords(self):
+        return ["小游戏", "回合", "难度", "game board"]</code></pre>
+
+  <div class="callout ok">
+    <b>这条链路是实测过的</b>
+    <code>docs/PETCORE-MOD-DEVELOPMENT.md</code> §3 的五文件骨架被脚本从文档里抽出来，真实跑过
+    <code>validate → install → CoreHost 加载 → 右键菜单可见 → runtime.commands</code>。
+    你只需要把它替换成游戏窗口与存档。
+  </div>
+</section>
+
+<!-- ================= 10. 坑与验收 ================= -->
+<section id="pitfalls" class="anchor">
+  <div class="sec-head"><span class="sec-num">10</span><h2>已知坑与交付清单</h2></div>
+  <p class="sec-sub">这些不是理论风险，是官方样板与审计里已经踩过的。</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>现象</th><th>原因</th><th>修法</th></tr></thead>
+      <tbody>
+        <tr><td>窗口一闪就没 / 被压住</td><td>没有持住引用，或只 <code>show()</code> 没抬升</td><td>模块级或 runtime 持引用；<code>show()</code> 后 <code>raise_()</code> / <code>activateWindow()</code></td></tr>
+        <tr><td>关掉窗口后游戏还在跑</td><td>定时器没停，或用了全局 <code>on_tick</code></td><td><code>closeEvent/hideEvent</code> 停表；<code>runtime.stop()</code> 兜底</td></tr>
+        <tr><td>重新加载扩展后一次点击触发两次</td><td>旧 runtime 的订阅没注销</td><td><code>stop()</code> 里调用于 <code>on_click/on_drop/on_tick</code> 返回的注销函数</td></tr>
+        <tr><td>设置页里塞棋盘变成一条缝</td><td>页面内容在 <code>QScrollArea</code>，默认阅读宽 860</td><td>棋盘/画布自建窗口；设置页只放规则与按钮</td></tr>
+        <tr><td>浏览器/网页控件 ImportError</td><td>冻结包只带特定 Qt 模块</td><td><code>importlib.util.find_spec</code> 先探测；不可用就不声明该功能</td></tr>
+        <tr><td>后台线程里弹窗后整个应用卡死</td><td>worker 线程直接碰了 Qt</td><td>结果经 <code>scheduler.call_later</code> 回 GUI；窗口只在 GUI 线程建</td></tr>
+        <tr><td>桌宠掉帧</td><td>游戏窗口的绘制/解码占了 GUI 线程</td><td>重活下后台；降低刷新率；不可见就停表</td></tr>
+        <tr><td>安装后菜单里没有</td><td>没开 <code>allow_feature_mods</code>、装错目录、或包被停用</td><td>装到数据目录；设置 → 扩展管理勾选；<code>mods list</code> 看诊断</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>协作者的交付清单</h3>
+  <ol class="small">
+    <li><code>mods validate ./game.board</code> 干净；<code>mods install</code> 后 <code>mods list</code> 是 enabled 且没有 <code>!</code> 诊断。</li>
+    <li>菜单能开窗；窗口关闭后定时器/线程都停；再开一次不会出现两个窗口。</li>
+    <li>设置页能存能取消；<code>dirty()</code> 改过为真、保存后归零。</li>
+    <li>存档在 <code>feature-data/game.board/</code>；杀进程重开后能读回；损坏文件不覆盖。</li>
+    <li>运行时代码没有 <code>PySide6</code>、没有 <code>petcore.net/api/account/platform</code>、没有 <code>petcore.ui.*</code>（设置页除外）。</li>
+    <li>所有定时器走 <code>scheduler</code> 或自己的窗口，<code>stop()</code> 能全部取消。</li>
+    <li>打包：ZIP 只留一层 wrapper 目录；不勾选安装器任务时不写盘。</li>
+  </ol>
+
+  <div class="callout no">
+    <b>不要把「capabilities 写了」当成安全边界</b>
+    它只是给人看、给市场看的声明。真正阻止一个恶意 mod 的，是用户有没有把它装进来、有没有打开功能扩展开关。
+    分发第三方游戏包时请如实告诉用户这一点。
+  </div>
+</section>
+
+<!-- ================= 11. 证据 ================= -->
+<section id="evidence" class="anchor">
+  <div class="sec-head"><span class="sec-num">11</span><h2>证据索引</h2></div>
+  <p class="sec-sub">本文的每条硬结论都能在这里找到出处。行号以 2026-11-01 工作区为准。</p>
+
+  <ul class="evidence">
+    <li><code>petcore/__init__.py:3</code> — 版本 <code>0.5.0</code>。</li>
+    <li><code>docs/PETCORE-ARCHITECTURE.md</code> §2 — 分层、依赖约束、四条守卫。</li>
+    <li><code>docs/PETCORE-ARCHITECTURE.md</code> 启动路径图 — <code>cli → Config → QApplication → CoreHost → PetWindow → Tray → exec</code>。</li>
+    <li><code>docs/PETCORE-ARCHITECTURE.md</code> §5 — 数据目录与 mods / feature-data 落点。</li>
+    <li><code>petcore/contracts/host.py:289</code> — <code>HostPorts</code> 的 27 个字段。</li>
+    <li><code>petcore/ui/ports.py:981</code> — <code>build_ports()</code> 实际注入的 22 个端口。</li>
+    <li><code>petcore/ui/ports.py:560</code> — <code>interaction.on_tick</code> 的实现（scheduler.call_every + 注销函数）。</li>
+    <li><code>petcore/contracts/contributions.py:6</code> — 10 个 contribution kind 白名单。</li>
+    <li><code>docs/PETCORE-MOD-DEVELOPMENT.md</code> §4 — 真正被消费的只有 menu / settings_page / chat_view。</li>
+    <li><code>petcore/mods/loader.py:93</code>、<code>:159</code> — 扫描顺序与 <code>feature mods disabled</code> 闸门。</li>
+    <li><code>petcore/mods/feature.py:143</code> — <code>FeatureManager.load()</code> 的 import → create_host → runtime.start 链路。</li>
+    <li><code>petcore/mods/feature.py:222</code> / <code>:268</code> / <code>:294</code> — chat_view / settings_page / host_page 的收集。</li>
+    <li><code>petcore/mods/feature.py:349</code> — <code>stop_owner()</code> 先撤 speech/reminders/interaction 再 stop。</li>
+    <li><code>petcore/mods/manifest.py:247</code> / <code>:281</code> — content 包禁可执行文件、api_version 校验。</li>
+    <li><code>petcore/config.py:671</code> / <code>:690</code> — <code>extra</code> 区块与键名/体积/密钥样式校验。</li>
+    <li><code>petcore/paths.py:199</code> — <code>feature-data/&lt;owner&gt;</code> 的落点。</li>
+    <li><code>petcore/ui/app.py:806</code> — <code>run_feature_command()</code> 与 <code>slot</code> 派发。</li>
+    <li><code>petcore/ui/app.py:398</code> — <code>CoreHost</code> 的进程级服务清单。</li>
+    <li><code>examples/petcore-mods/fun.divination/host/runtime.py:173</code> — 命令里惰性导入并 <code>show()</code> 一个 <code>QDialog</code>。</li>
+    <li><code>docs/PETCORE-MOD-DEVELOPMENT.md</code> §4.1 — 窗口不是端口，但事实上能造；Qt 模块取决于打包。</li>
+    <li><code>docs/PETCORE-MOD-DEVELOPMENT.md</code> §4.2 — <code>chat_view</code> 的四个可选生命周期方法。</li>
+    <li><code>docs/PETCORE-MOD-DEVELOPMENT.md</code> §5 — 线程铁律与 <code>Runtime.close()</code> 不会被调用。</li>
+    <li><code>docs/PETCORE-MOD-DEVELOPMENT.md</code> §10 — 内容块当前没有运行期消费方。</li>
+    <li><code>scripts/slim_bundle.py:93</code> — 冻结包显式保留 QtCore/Gui/Widgets/Network/Multimedia/Svg + QtWebView；没有 QtWebEngine。</li>
+    <li><code>tests/test_petcore_architecture.py:175</code> — mod 不得 import <code>petcore.net/api/account/platform</code>，<code>petcore.ui</code> 仅设置页例外。</li>
+    <li><code>tests/test_petcore_docs.py</code> — 文档与 LNNN 日志索引的一致性守卫。</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="pill">petcore 0.5.0</div><div class="pill">api_version 1</div><div class="pill">schema 1</div>
+    <div class="pill">工作区实测 2026-11-01</div>
+    <p style="margin-top:10px">
+      本页是架构说明，不替代 <a href="PETCORE-ARCHITECTURE.md">PETCORE-ARCHITECTURE.md</a>（分层与契约）、
+      <a href="PETCORE-MOD-FORMAT.md">PETCORE-MOD-FORMAT.md</a>（字段级参考）与
+      <a href="PETCORE-MOD-DEVELOPMENT.md">PETCORE-MOD-DEVELOPMENT.md</a>（动手做 mod）。
+      字段、端口、报错原文以这三份为准；本页只负责把它们串成一张能看懂的地图。
+    </p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var button = document.getElementById('themeBtn');
+  var saved = null;
+  try { saved = localStorage.getItem('petcore-map-theme'); } catch (e) { saved = null; }
+  if (saved === 'dark') { root.setAttribute('data-theme', 'dark'); }
+  function syncLabel() {
+    button.textContent = root.getAttribute('data-theme') === 'dark' ? '浅色' : '深色';
+  }
+  syncLabel();
+  button.addEventListener('click', function () {
+    var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('petcore-map-theme', next); } catch (e) { /* file:// 下可能被禁 */ }
+    syncLabel();
+  });
+
+  // 端口表筛选
+  var filters = document.querySelectorAll('#portFilters .filter');
+  var rows = document.querySelectorAll('#portsTable tbody tr');
+  filters.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      filters.forEach(function (other) { other.classList.remove('on'); });
+      btn.classList.add('on');
+      var mode = btn.getAttribute('data-filter');
+      rows.forEach(function (row) {
+        var state = row.getAttribute('data-state');
+        row.classList.toggle('hidden', mode !== 'all' && state !== mode);
+      });
+    });
+  });
+
+  // 当前章节高亮
+  var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+  var sections = links.map(function (link) {
+    return document.querySelector(link.getAttribute('href'));
+  }).filter(Boolean);
+  if ('IntersectionObserver' in window) {
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) { return; }
+        links.forEach(function (link) {
+          link.style.color = link.getAttribute('href') === '#' + entry.target.id ? 'var(--accent)' : '';
+          link.style.fontWeight = link.getAttribute('href') === '#' + entry.target.id ? '700' : '';
+        });
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    sections.forEach(function (section) { observer.observe(section); });
+  }
+})();
+</script>
+</body>
+</html>

@@ -36,7 +36,7 @@ mods/<id>/
 }
 ```
 
-feature 包额外字段：
+feature 包额外字段（`requires` 只校验格式，不做依赖解析/自动安装）：
 
 ```json
 {
@@ -53,21 +53,23 @@ feature 包额外字段：
 | 字段 | 必需 | 规则 |
 |---|---|---|
 | `schema` | 是 | 必须为 `1` |
-| `id` | 是 | `^[a-z0-9][a-z0-9._-]{0,127}$`，全局唯一 |
+| `id` | 是 | `^[a-z0-9][a-z0-9._-]{0,127}$`，全局唯一；不能是 `con/prn/aux/nul/com1..9/lpt1..9` |
 | `kind` | 是 | `content` 或 `feature` |
-| `name` | 是 | 展示名（英文/原名） |
-| `name_zh` | 否 | 中文展示名（≤128；缺失/非法回退 `name`） |
+| `name` | 是 | 展示名（英文/原名）；缺失时回退 id 并 warning |
+| `name_zh` | 否 | 中文展示名（>128 会截断并 warning；非法回退 `name`） |
+| `summary` / `summary_zh` | 否 | 简介，市场展示用；不影响加载 |
 | `version` | 是 | `X.Y.Z` |
-| `api_version` | 是 | 首版只接受 `"1"` |
-| `core_requires` | 否 | 逗号分隔的 `>=`/`<=`/`>`/`<`/`==` 约束 |
+| `api_version` | 是 | 只接受 `"1"`；不匹配整包不加载 |
+| `core_requires` | 否 | 逗号分隔的 `>=`/`<=`/`>`/`<`/`==` 约束；不满足整包不加载 |
 | `author` | 否 | 文本 |
-| `execution` | feature 必需 | `host-only` 或 `worker` |
+| `execution` | feature 必需 | `host-only` 或 `worker`；**`worker` 目前不会被加载**（见 §7） |
 | `entrypoint` | feature 必需 | 包内相对路径 `path.py:function`；也支持包入口 `host/__init__.py:create_host`（loader 以包方式加载，允许相对 import） |
-| `capabilities` | 否 | 必须属于 `contracts/capabilities.py` 的清单 |
+| `capabilities` | 否 | 必须属于 `contracts/capabilities.py` 的清单；只是声明，不是沙箱 |
+| `requires` | 否 | mod id 列表；只校验格式，**不解析依赖** |
 | `character` | content 可选 | 角色块，见 `PETCORE-CHARACTER-PACKS.md` |
-| `sounds`/`themes`/`phrases`/`seasonal` | 否 | `{id: 相对路径}` 的内容贡献 |
+| `sounds`/`themes`/`phrases`/`seasonal` | 否 | `{id: 相对路径}` 的内容贡献；**运行期只消费 `character`** |
 
-未知顶层字段产生诊断但不阻断加载。
+未知顶层字段产生 warning，但不阻断加载。
 
 ## 3. 校验
 
@@ -103,13 +105,15 @@ content 贡献类型：`character`、`sound`、`theme`、`phrases`、`seasonal`�
 feature 包通过 `Contribution(kind="menu")` 注册菜单项，`data` 支持：
 
 ```json
-{"label": "打个招呼", "command": "hello", "section": "extensions", "order": 55, "icon": "chat"}
+{"label": "打个招呼", "command": "hello", "order": 55, "icon": "chat"}
 ```
 
 - 动作 id 在 Core 内统一为 `<owner>:<contribution>`，避免跨包冲突。
 - 未在用户菜单布局中出现的贡献项会**自动进入「扩展」子菜单**；用户可在设置 →「菜单」里把它拖到根或其它子菜单、改名、换图标、隐藏。
 - 卸载后该项从菜单消失但布局节点保留为未知；重装即可恢复，编辑器也提供清理入口。
 - `command` 必须存在于该包 runtime 的 `commands` 字典；缺失时点击只记诊断，不影响菜单构建。
+- `data` 真正生效的键是 `label` / `command` / `order` / `icon` / `checked`；
+  `checked` 是回调（不是 JSON 值），`section` **不生效**。
 
 ### 5.2 对话窗视图：`chat_view`（API 1，2026-11-01 起）
 
@@ -199,11 +203,11 @@ python -m petcore mods doctor
 
 ## 7. 能力与边界
 
-能力是**声明 + 用户授权**，不是沙箱。首版不提供：
+能力是**声明**，不是沙箱；用户授权的是整个功能扩展包（`allow_feature_mods` / `.trusted`），不是逐能力授权。首版不提供：
 
 - 第三方代码的默认执行；
 - Python 模块热卸载；
-- worker 监管（协议已定义，实现留给 P1/P3）；
+- worker 执行（manifest 接受 `execution: "worker"`，但启动时会被跳过并记 `worker feature is not supported yet`）；
 - 签名与沙箱；在线更新与多源下载见 [`PETCORE-MARKET.md`](PETCORE-MARKET.md)。
 
 2026-10-27 实测补充（`tool.ai-browser` 探针，详见
@@ -219,7 +223,7 @@ python -m petcore mods doctor
   扩展必须自检并降级；`importlib.util.find_spec` 是约定写法。
 - **端口并非都可用**（2026-11-01 核对 `petcore/ui/ports.py` 的 `build_ports`）：
   `presentation / scheduler / audio / credentials / storage / resources / config /
-  pets / interaction / quiet / api / worker / chat / quick_chat / screen / screen_ask /
+  pets / interaction / quiet / reminders / api / worker / chat / quick_chat / screen / screen_ask /
   system / http / speech / memory / webhook` 有实现；
   **`windows / menu / commands / input / capabilities` 运行时恒为 `None`**——
   `HostPorts` 里声明了它们，但没有人注入。别照着 dataclass 写代码。
@@ -230,7 +234,7 @@ python -m petcore mods doctor
 
 - 内置包位于 `petcore/builtin/features/<id>/`，格式与用户 feature 包相同；由 `FeatureManager.load_builtin_features()` 扫描加载，**受信任**，不要求 `allow_feature_mods`。
 - 内置包只保留与 core 交互强相关的 7 个：`fun.self-talk`、`fun.click-talk`、`tool.quick-launch`、`tool.quiet-mode`、`tool.links`、`tool.memory-trim`、`tool.network-info`。P8 起这 7 个是 **Core 内置特性**（`CORE_FEATURE_IDS`，group=`core`）：无条件加载，不参与安装/停用/卸载，设置页按 `host_page` 内嵌到 Core 页，不再出现在扩展管理导航。
-- 其余 `fun.divination`、`fun.festival`、`reminder.todo`、`voice.chime`、`media.music` 是**可导入样板**，位于 `examples/petcore-mods/`；用 `petcore mods install <目录>` 安装到用户数据目录，并开启 `allow_feature_mods`。安装后由 `FeatureManager` 从用户 mods 目录加载，菜单贡献默认进入「扩展」子菜单。Windows 安装向导勾选安装时落 `{app}\mods\<id>`，归「加装扩展」。
+- 另有 12 个**可导入样板**位于 `examples/petcore-mods/`（抽签、节日、待办、报时、音乐、AI 对话、OCR、天气、文件解读、网页 AI、Agent 联动、QQ 互通）；用 `petcore mods install <目录>` 安装到用户数据目录，并开启 `allow_feature_mods`。安装后菜单贡献默认进入「扩展」子菜单；Windows 安装向导勾选安装时落 `{app}\mods\<id>`，归「加装扩展」。
 - 设置页不再各自占侧边栏：第三方 mod 的 `settings_page` 进入「扩展管理」页内导航；Core 内置特性用 `Contribution.data["host_page"]` 声明归属（`interaction` / `menu` / `about`），由对应 Core 页内嵌，见 §9。
 - `HostPorts` 新增：
   - `pets`：只读宠物句柄（body_rect / velocity / move_by / show / hide / say / play_animation / play_event）；
@@ -243,7 +247,7 @@ python -m petcore mods doctor
 - `FeatureContext.host` 暴露宿主对象，mod 可读取共享配置；跨域仍走端口/事件，不直接 import `pet.*`。
 - 每个有菜单贡献的内置 mod 必须提供 `settings_page`；`tests/test_petcore_builtin_mods.py` 守住。
 - 内置包当前清单：`fun.self-talk`、`fun.click-talk`、`tool.quick-launch`、`tool.quiet-mode`、`tool.links`、`tool.memory-trim`、`tool.network-info`。
-- 示例可导入包：`examples/petcore-mods/{fun.divination,fun.festival,reminder.todo,voice.chime,media.music,tool.weather,tool.file-reader}`；`examples/petcore-mods/README.md` 是安装与端口样板说明。
+- 示例可导入包：`examples/petcore-mods/{fun.divination,fun.festival,reminder.todo,voice.chime,media.music,ai.chat,tool.ocr,tool.weather,tool.file-reader,tool.ai-browser,ai.agent,im.qq}`；`examples/petcore-mods/README.md` 是安装、端口与样板说明。
 
 ### 8.1 设置搜索注册（2026-10-31）
 

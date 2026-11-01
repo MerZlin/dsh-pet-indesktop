@@ -63,6 +63,7 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "market_index_url",
         "market_download_connections",
         "market_download_sources",
+        "pack_mirror_policy",
         # 音频输出是进程级硬件事实：所有桌宠共用一只设备。
         "audio_output_device",
         "audio_output_device_name",
@@ -260,6 +261,9 @@ DEFAULTS: dict[str, Any] = {
     # 素材/mod 下载：连接数 1 = 旧单流；源策略 auto/ordered/race。
     "market_download_connections": 4,
     "market_download_sources": "auto",
+    #: 素材包下载用哪套源：auto=索引顺序（GitHub 单文件优先，失败换分片镜像）、
+    #: mirror=优先国内镜像分片、github=只用 GitHub 单文件。
+    "pack_mirror_policy": "auto",
     # 联网检索：多引擎扇出、来源数、单页正文上限。
     "ai_web_search_engines": ["baidu", "duckduckgo"],
     "ai_web_search_max_sources": 4,
@@ -1293,6 +1297,10 @@ class Config:
         sources = str(normalized.get("market_download_sources") or "auto").strip().lower()
         normalized["market_download_sources"] = (
             sources if sources in {"auto", "ordered", "race"} else "auto"
+        )
+        policy = str(normalized.get("pack_mirror_policy") or "auto").strip().lower()
+        normalized["pack_mirror_policy"] = (
+            policy if policy in {"auto", "mirror", "github"} else "auto"
         )
         normalized["ui_font_size"] = int(
             round(_number(normalized.get("ui_font_size"), 13.0, 10.0, 18.0))

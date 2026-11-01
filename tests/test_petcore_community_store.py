@@ -53,8 +53,9 @@ def test_parse_credits_falls_back_to_default_static_entries() -> None:
         "@快乐小咸鱼a",
         "@張墨林",
         "@MerZlin",
+        "@炎圣人但丁",
     ]
-    assert len(credits.special_thanks) == 4
+    assert len(credits.special_thanks) == 11
 
 
 def test_merge_credits_prefers_newer_dynamic_entries() -> None:

@@ -306,7 +306,7 @@ petcore/
 - **单进程多宠**：`PetManager` 管理 slot 0 主宠与 slot 1–15 子宠；每宠独立 `config-pet-N.json`；生成/收回/重启恢复；宠物间椭圆近似碰撞与 Q 弹；设置页「多宠」。
 - **交互 Core**：点击 Q 弹（220ms，旋转/探头叠加、命中逆变换）、拖动物理（弹簧/抛掷/碰边）、弹弓、黄金回旋、探头击飞旋转、拖文件投喂、碰撞；菜单「播放动画」「播放速率」「拖动物理」「不自动移动」「黄金回旋」「生小肥鱼」「退出子肥鱼」。
 - **内置 mod**：`fun.self-talk`、`fun.click-talk`、`tool.quick-launch`、`tool.quiet-mode`、`tool.links`、`tool.memory-trim`、`tool.network-info`；受信任内置包随 core 加载，第三方 feature 仍需 `allow_feature_mods`。`fun.divination`、`fun.festival`、`reminder.todo`、`voice.chime`、`media.music` 是 `examples/petcore-mods/` 的可导入样板，不再内置。
-- **设置聚合**：所有 mod `settings_page` 进入「扩展管理」页内标签（`SettingsTabContainer`）；P6 起侧边栏 8 页（新增「API 与账户」）；2026-10-27 起 9 页（新增「语音」，排在「互动与物理」之后）。
+- **设置聚合**：所有 mod `settings_page` 进入「扩展管理」页内标签（`SettingsTabContainer`）；P6 起侧边栏 8 页（新增「API 与账户」）；2026-10-27 起 9 页（新增「语音」，排在「互动与物理」之后）；2026-11-01 起 10 页（致谢从「关于与诊断」的页内标签提升为独立页，排在最后）。
 - **移动同步**：朝向由移动方向决定；窗口位置由 clip 帧号 + `move_curves` 推进，静态帧不位移，末拍精确到位。
 
 - **打包**：PyInstaller 6.22.3 装入 `.venv`；Inno Setup 6.7.3 便携安装到 `tools/InnoSetup`；`scripts/build_petcore.ps1 -Clean -Installer` 实际产出 onedir 与安装包，`--check --out` 取证。
@@ -364,7 +364,7 @@ petcore/
 - **气泡**：跟随桌宠移动与缩放；支持图片内容（彩蛋默认进气泡），可切独立窗口。
 - **彩蛋菜单行**：头像 + 标题 + 「请点击」的整行控件，点击在菜单关闭后打开。
 - **设置 IA**：「互动与物理」拆成 8 个页内分页；「菜单」拆菜单编排/快捷启动；
-  「关于与诊断」拆版本诊断/致谢/链接/网络/回收内存；新增侧边栏「语音」。
+  「关于与诊断」拆版本诊断/链接/网络/回收内存；「致谢」独立成侧边栏末页；新增侧边栏「语音」。
 - **Core 内置特性**：7 个原内置 feature 并入 Core，设置页按 `host_page` 内嵌；
   扩展管理只保留「扩展管理 + 基础扩展 + 加装扩展」，组头可折叠。
 - **安装向导**：目录页每次显示，已装过时预选上次安装路径。
@@ -1131,3 +1131,31 @@ PrintWindow/BitBlt 非黑占比，不写标题正文。
   回复模式 off/notify/ai；默认关闭、安装器默认不勾选。真机未验证。
 - **联网工具**：多引擎扇出 + URL 去重、article/main 正文抽取、标题/描述/发布时间、
   `ai_web_search_engines/max_sources/page_chars`；引用编号沿用 `format_results` 的 `[n]`。
+
+## 30. 存储位置与素材包下载（2026-11-01）
+
+- **两个根**：数据根（配置/会话/记忆/feature-data/社区缓存/日志/市场索引与暂存）与缓存根
+  （`cache/tts`、`market/downloads`、`updates/`、`packs/`）。缓存根缺省 = 数据根，
+  此时所有路径与拆分前逐字节一致。
+- **引导指针 `location.json`**：常规安装 `%APPDATA%\dsh-pet-core\location.json`，
+  绿色版 `<exe 目录>\location.json`，内容 `{"schema":1,"data_root":…,"cache_root":…}`。
+  **必须放在默认根之外**——指针跟着根一起搬走，下次启动就只剩一个空默认根。
+  优先级 `--root` > 指针 > 默认根；`--instance` 一律走默认根；坏指针回落默认根且不覆盖原文件。
+- **搬迁 = 复制 → 校验 → 写指针 → 重启 → 下次启动删旧根**：校验（文件数 + 字节）不通过不写指针；
+  旧根删除放在下一次启动，删树前先保存并回写旧根里的指针文件。搬迁期间设置页两行禁用，
+  文案写「完成后需要重启」「搬迁期间请不要改其它设置」。
+- **素材包**：`petcore/net/packs.py` 解析索引（schema=1、id 正则、filename 白名单、https + 主机
+  白名单、64 位 sha256），`download_pack` 主路走 `net/market.download_segmented`（4 连接），
+  `RangesUnsupported` 时同一地址回退 `net/stream_download.py` 单流一次；摘要不符删产物并换镜像。
+- **进度显示**：`petcore/ui/download_progress.py`（SpeedMeter 2 秒滑窗 + `describe_progress`
+  + DownloadPanel）由市场页与素材包行共用；文案 `已下载 / 总量 · 速度 · 剩余 · 续传 · 连接数`。
+- **落地与安装**：默认 `<桌宠目录>/tmp`（不可写回落 `<数据目录>/tmp`）；下载完成只出现
+  「导入这个素材包」，走 `content.importer.install_character_source`（不覆盖已有角色）。
+- **仓库**：素材包放 `MerZlin/Animations`（索引 + Release 资产），主仓库只保留打包/发布脚本
+  `scripts/make_animation_pack.py`、`scripts/publish_animation_pack.ps1` 与压测
+  `scripts/bench_pack_download.py`。
+
+- **素材包镜像策略**：全局 `pack_mirror_policy`（`auto|mirror|github`，默认 `auto`）只决定
+  **先试哪套源**：`auto` 按索引意图（GitHub 单文件优先）、`mirror` 先分片镜像、`github`
+  只用单文件；任何一套失败都会自动换另一套，所以三个取值都不会让下载彻底不可用。
+  下载完成行会写出实际来源主机（`来自 release-assets.githubusercontent.com`）。

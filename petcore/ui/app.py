@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import logging
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -13,6 +14,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPalette
 from PySide6.QtWidgets import QApplication
 
 from .. import paths
+from ..storage import roots as storage_roots
 from ..api.credentials import KeyringCredentials
 from ..api.store import ApiStore
 from ..account.presenter import BalancePresenter
@@ -1770,8 +1772,19 @@ def _wire_screens(app: QApplication, manager) -> None:
     app.primaryScreenChanged.connect(refresh)
 
 
-def run(config: Config, *, root: Path, mod_dirs, instance: str | None = None) -> int:
+def run(
+    config: Config,
+    *,
+    root: Path,
+    mod_dirs,
+    instance: str | None = None,
+    cache_root: Path | None = None,
+) -> int:
     setup_logging(paths.logs_dir(root))
+    if cache_root is not None:
+        paths.set_cache_root(cache_root, data_root=root)
+    elif paths.cache_root() is None:
+        paths.set_cache_root(root, data_root=root)
     started = time.perf_counter()
     stages: list[tuple[str, float]] = []
 
@@ -1801,6 +1814,15 @@ def run(config: Config, *, root: Path, mod_dirs, instance: str | None = None) ->
         logger.warning("another petcore instance is already running")
         return 0
     mark("lock")
+
+    # 上次搬迁留下的旧目录：启动已经成功，后台删掉即可（失败只记日志、下次再试）。
+    if storage_roots.read_journal(root) is not None:
+        threading.Thread(
+            target=storage_roots.cleanup_moved_source,
+            args=(root,),
+            name="petcore-root-cleanup",
+            daemon=True,
+        ).start()
 
     host = CoreHost(app, config, root, mod_dirs)
     mark("host")

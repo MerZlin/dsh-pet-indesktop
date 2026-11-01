@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 
 from ..contracts.speech import SpeechError
+from .. import paths
 
 
 class SpeechCache:
@@ -24,7 +25,7 @@ class SpeechCache:
 
     # ------------------------------------------------------------ 路径
     def directory(self) -> Path:
-        path = self.root / "cache" / "tts"
+        path = paths.cache_dir(self.root, "cache", "tts")
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -37,7 +38,7 @@ class SpeechCache:
     ) -> Path:
         extension = str(suffix or "mp3").lstrip(".").lower()
         name = f"{self.key(provider, flavor, text)}.{extension}"
-        return self.root / "cache" / "tts" / name
+        return paths.cache_dir(self.root, "cache", "tts") / name
 
     def temp_path(self, destination: Path) -> Path:
         """同一目录下的临时名：``os.replace`` 才是原子的（跨盘 rename 不是）。"""

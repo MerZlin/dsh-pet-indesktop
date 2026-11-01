@@ -17,7 +17,6 @@ from .base import (
     make_button,
     value_field,
 )
-from .page_about_thanks import ThanksPanel
 
 #: 内嵌进「关于与诊断」的 Core 特性页，按这个顺序排（order 只决定注册序）。
 ABOUT_HOST_PAGES = ("tool.links", "tool.network-info", "tool.memory-trim")
@@ -30,21 +29,14 @@ class AboutPage(SettingsPage):
         super().__init__(host, parent)
         self._root = Path(str(getattr(host, "root", Path.cwd())))
         self._log_path = self._root / "logs" / "petcore.log"
-        self._disposed = False
 
         embedded = self._embedded_specs(host)
         with self.tab("about", "版本与诊断"):
             self._build_about_section()
-        with self.tab("thanks", "致谢"):
-            self._build_thanks_section()
         for spec, page in embedded:
             self.embed_page(page, str(spec.id), str(spec.title))
 
         self._refresh()
-
-    def _build_thanks_section(self) -> None:
-        self.thanks_panel = ThanksPanel(self.host, self)
-        self._append_section_widget(self.thanks_panel)
 
     @staticmethod
     def _embedded_specs(host) -> list[tuple[object, SettingsPage]]:
@@ -274,18 +266,12 @@ class AboutPage(SettingsPage):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._refresh()
-        panel = getattr(self, "thanks_panel", None)
-        if panel is not None:
-            panel.refresh_if_stale()
 
     def _reload(self) -> None:
         reload_mods = getattr(self.host, "reload_mods", None)
         if callable(reload_mods):
             reload_mods()
         self._refresh()
-        panel = getattr(self, "thanks_panel", None)
-        if panel is not None:
-            panel.reload()
 
     def dirty(self) -> bool:
         return self._embedded_dirty()
@@ -297,10 +283,6 @@ class AboutPage(SettingsPage):
         self._embedded_discard()
 
     def dispose(self) -> None:
-        self._disposed = True
-        panel = getattr(self, "thanks_panel", None)
-        if panel is not None:
-            panel.dispose()
         super().dispose()
 
     def keywords(self) -> list[str]:
@@ -329,16 +311,5 @@ class AboutPage(SettingsPage):
             "安装更新",
             "取消下载",
             "update",
-            "致谢",
-            "贡献者",
-            "特别鸣谢",
-            "粉丝",
-            "签名",
-            "作者",
-            "鸣谢",
-            "contributors",
-            "thanks",
-            "fans",
-            "signature",
             *self._embedded_keywords(),
         ]

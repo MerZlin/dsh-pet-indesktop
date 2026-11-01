@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 import threading
 from contextlib import ExitStack
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QUrl, Signal
+from PySide6.QtCore import (
+    QCoreApplication,
+    QObject,
+    QProcess,
+    QRunnable,
+
+    QThreadPool,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -18,9 +29,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ... import paths
 from ...engine.geometry import DEFAULT_SCALE, SCALE_MAX, SCALE_MIN, SCALE_STEPS
 from ...platform import autostart, hotkey_spec, screens
-from ..external_links import CHARACTER_PACKS_URL, QUARK_URL
+from ...storage import roots as storage_roots
+from ..download_progress import DownloadPanel, format_bytes
+from ..external_links import (
+    CHARACTER_PACKS_URL,
+    PACK_INDEX_FALLBACKS,
+    PACK_INDEX_URL,
+    QUARK_URL,
+)
 from ..rename_dialog import alias_bubble_text, prompt_alias
 from .base import (
     SettingsPage,
@@ -31,6 +50,8 @@ from .base import (
     make_slider,
     make_spin,
 )
+from .pack_download import PackRow, PackTarget
+from .roots_job import RootsMoveJob
 
 
 class _DshInstallSignals(QObject):
@@ -150,9 +171,53 @@ class GeneralPage(SettingsPage):
         )
 
         data_card = self.section("数据")
-        open_button = make_button("打开数据目录", self)
-        open_button.clicked.connect(self._open_data_dir)
-        data_card.add_row("数据目录", open_button, "打开保存配置、日志和扩展的目录。")
+        self._data_root = Path(str(getattr(self.host, "root", "") or Path.cwd()))
+        self._cache_root = paths.cache_root() or self._data_root
+        self._pointer_path = paths.pointer_path()
+        self._roots_job: RootsMoveJob | None = None
+
+        self.data_dir_label = self._path_label(self._data_root, data_card)
+        self.data_change_button = make_button("更改位置…", self)
+        self.data_change_button.clicked.connect(lambda: self._change_root("data"))
+        self.data_open_button = make_button("打开", self)
+        self.data_open_button.clicked.connect(self._open_data_dir)
+        data_card.add_row(
+            "数据目录",
+            self._path_row(
+                self.data_dir_label, self.data_change_button, self.data_open_button
+            ),
+            "配置、会话、记忆、日志与扩展都保存在这里。改位置会把现有内容复制到新目录，"
+            "完成后需要重启；搬迁期间请不要改其它设置。",
+            search_keys=("数据目录", "数据位置", "搬迁", "移动", "更改"),
+            expand=True,
+        )
+
+        self.cache_dir_label = self._path_label(self._cache_root, data_card)
+        self.cache_change_button = make_button("更改位置…", self)
+        self.cache_change_button.clicked.connect(lambda: self._change_root("cache"))
+        self.cache_open_button = make_button("打开", self)
+        self.cache_open_button.clicked.connect(self._open_cache_dir)
+        self.cache_clear_button = make_button("清空缓存", self)
+        self.cache_clear_button.clicked.connect(self._clear_cache)
+        data_card.add_row(
+            "缓存目录",
+            self._path_row(
+                self.cache_dir_label,
+                self.cache_change_button,
+                self.cache_open_button,
+                self.cache_clear_button,
+            ),
+            "语音合成、市场下载包与更新包这类可重建的数据放这里；放到大盘可省下 C 盘空间，"
+            "清空只删这些缓存，不动会话与配置。",
+            search_keys=("缓存目录", "缓存位置", "清空缓存", "搬迁", "移动", "C 盘"),
+            expand=True,
+        )
+
+        self.roots_panel = DownloadPanel(
+            self, with_cancel=True, object_name="rootsProgress", accessible_name="目录搬迁进度"
+        )
+        self.roots_panel.cancel_requested.connect(self._cancel_root_move)
+        data_card.add_widget(self.roots_panel)
 
         import_button = make_button("导入角色目录", self)
         import_button.clicked.connect(self._import_character)
@@ -173,20 +238,58 @@ class GeneralPage(SettingsPage):
             "选择角色目录或 ZIP 后生成并安装 content mod；不会覆盖已有角色。",
         )
         data_card.add_widget(self.import_status)
-        data_card.add_row(
-            "完整角色素材包",
-            self._pack_links_row(
-                (("GitHub 下载", CHARACTER_PACKS_URL), ("夸克网盘", QUARK_URL))
+        self.pack_rows: dict[str, PackRow] = {}
+        self.pack_rows["full"] = PackRow(
+            self,
+            target=PackTarget(
+                pack_id="shenshen",
+                index_url=PACK_INDEX_URL,
+                index_fallbacks=PACK_INDEX_FALLBACKS,
+                links={"github": CHARACTER_PACKS_URL, "quark": QUARK_URL},
             ),
-            "在浏览器打开素材包下载页（GitHub / 夸克网盘）；下载后用上面的「导入角色目录 / 导入角色 ZIP」安装。"
-            "装好后可在「互动与物理 → 动画 → 动画清单」把整类设为「仅手动」，不参与随机自播。",
+            parent=self,
         )
         data_card.add_row(
-            "高清完整角色素材包",
-            self._pack_links_row(
-                (("GitHub 下载", CHARACTER_PACKS_URL), ("夸克网盘", QUARK_URL))
+            "完整角色素材包",
+            self.pack_rows["full"],
+            "「GitHub 下载」在设置页内下载并显示进度与实时网速（支持分段时多连接加速），"
+            "完成后点「导入这个素材包」安装；「打开 GitHub / 夸克网盘」仍用浏览器。",
+            search_keys=("素材包", "下载进度", "网速", "加速", "动画包"),
+            expand=True,
+        )
+        self.pack_rows["hd"] = PackRow(
+            self,
+            target=PackTarget(
+                pack_id="shenshen",
+                index_url=PACK_INDEX_URL,
+                index_fallbacks=PACK_INDEX_FALLBACKS,
+                links={"github": CHARACTER_PACKS_URL, "quark": QUARK_URL},
             ),
-            "高清素材体积更大、首次加载更慢；安装方式同上，同样可在动画清单里设为仅手动。",
+            parent=self,
+        )
+        self.mirror_combo = QComboBox(self)
+        self.mirror_combo.addItem("自动（GitHub 优先，失败自动换镜像）", "auto")
+        self.mirror_combo.addItem("优先国内镜像（jsDelivr 分片，慢但更稳）", "mirror")
+        self.mirror_combo.addItem("只用 GitHub（不走镜像）", "github")
+        self._initial_mirror = str(self.config().get("pack_mirror_policy") or "auto")
+        self.mirror_combo.setCurrentIndex(
+            max(0, self.mirror_combo.findData(self._initial_mirror))
+        )
+        self.mirror_combo.currentIndexChanged.connect(self._on_mirror_changed)
+        data_card.add_row(
+            "下载镜像",
+            self.mirror_combo,
+            "素材包有两套源：GitHub 单文件（快但会抖）与 jsDelivr 分片镜像（慢但通）。"
+            "自动模式先走 GitHub，失败或超时自动切换到镜像。",
+            search_keys=("下载镜像", "镜像", "mirror", "jsdelivr", "加速", "源"),
+        )
+
+        data_card.add_row(
+            "高清完整角色素材包",
+            self.pack_rows["hd"],
+            "高清素材体积更大、首次加载更慢；安装方式同上（当前测试版两个入口指向同一个素材包）。",
+            search_keys=("高清", "素材包", "下载进度", "网速"),
+            expand=True,
         )
 
         dsh_card = self.section("DSH 连接")
@@ -220,19 +323,207 @@ class GeneralPage(SettingsPage):
     def config(self):
         return self.host.config
 
-    def _pack_links_row(self, pairs) -> QWidget:
-        """素材包的横排外链条：每项一个按钮，点了只交给系统浏览器。"""
+    # ------------------------------------------------------------ 存储位置
+    def _path_label(self, path: Path, parent) -> QLineEdit:
+        """只读路径框：可选中复制、不会把整行撑宽（QLabel 的长路径没有断点）。"""
+        field = QLineEdit(str(path), parent)
+        field.setObjectName("settingHint")
+        field.setReadOnly(True)
+        field.setMinimumWidth(160)
+        field.setToolTip(str(path))
+        field.setCursorPosition(0)
+        return field
+
+    def _path_row(self, label: QWidget, *buttons) -> QWidget:
         row = QWidget(self)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        for text, url in pairs:
-            button = make_button(text, self)
-            button.clicked.connect(
-                lambda _checked=False, target=url: QDesktopServices.openUrl(QUrl(target))
-            )
+        layout.addWidget(label, 1)
+        for button in buttons:
             layout.addWidget(button)
         return row
+
+    def _open_cache_dir(self) -> None:
+        self._cache_root.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._cache_root)))
+
+    def pack_download_dir(self) -> Path:
+        """素材包默认落地目录：桌宠目录下的 ``tmp``，不可写才退到数据目录。"""
+        candidates = [paths.install_root() / "tmp", self._data_root / "tmp"]
+        for candidate in candidates:
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                probe = candidate / f".write-{os.getpid()}"
+                probe.write_bytes(b"")
+                probe.unlink()
+                return candidate
+            except OSError:
+                continue
+        return self._data_root / "tmp"
+
+    def _set_roots_busy(self, busy: bool) -> None:
+        for widget in (
+            self.data_change_button,
+            self.data_open_button,
+            self.cache_change_button,
+            self.cache_open_button,
+            self.cache_clear_button,
+        ):
+            widget.setEnabled(not busy)
+
+    def _change_root(self, kind: str) -> None:
+        if self._roots_job is not None and self._roots_job.is_running():
+            QMessageBox.information(
+                self, "搬迁中", "上一次搬家还在进行，请等它结束或先点进度条下面的「取消」。"
+            )
+            return
+        current = self._data_root if kind == "data" else self._cache_root
+        title = "数据目录" if kind == "data" else "缓存目录"
+        chosen = QFileDialog.getExistingDirectory(self, f"选择新的{title}", str(current.parent))
+        if not chosen:
+            return
+        target = Path(chosen)
+        problem = storage_roots.validate_target(current, target)
+        if problem:
+            QMessageBox.warning(self, title, f"这个位置不能用：{problem}")
+            return
+        include = None if kind == "data" else storage_roots.CACHE_PARTS
+        plan = storage_roots.plan_move(current, include=include)
+        if not plan.items:
+            QMessageBox.information(self, title, "这里没有需要搬迁的文件。")
+            return
+        answer = QMessageBox.question(
+            self,
+            f"搬迁{title}",
+            f"将把 {plan.files} 个文件（{format_bytes(plan.total_bytes)}）复制到\n{target}\n\n"
+            "复制完成后需要重启才生效；搬迁期间请不要改其它设置。继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        pointer = storage_roots.read_pointer(self._pointer_path) or storage_roots.Pointer()
+        if kind == "data":
+            pointer = storage_roots.Pointer(data_root=target, cache_root=pointer.cache_root)
+        else:
+            pointer = storage_roots.Pointer(data_root=pointer.data_root, cache_root=target)
+        job = RootsMoveJob(
+            source=current,
+            target=target,
+            pointer_path=self._pointer_path,
+            pointer_after=pointer,
+            kind=kind,
+            include=include,
+        )
+        job.progress.connect(self.roots_panel.update_progress)
+        job.done.connect(self._on_root_moved)
+        job.failed.connect(self._on_root_failed)
+        job.cancelled.connect(self._on_root_cancelled)
+        self._roots_job = job
+        self._set_roots_busy(True)
+        self.roots_panel.begin(plan.total_bytes, show_connections=False)
+        self.roots_panel.set_status(f"正在复制到 {target}…")
+        job.start()
+
+    def _cancel_root_move(self) -> None:
+        if self._roots_job is None:
+            return
+        self._roots_job.cancel()
+        self._roots_job = None
+        self._set_roots_busy(False)
+        self.roots_panel.fail("已取消；已复制的文件留在新目录里，可以重新点「更改位置…」继续。")
+
+    def _on_root_moved(self, outcome) -> None:
+        self._roots_job = None
+        self._set_roots_busy(False)
+        if outcome.kind == "data":
+            self._data_root = Path(outcome.target)
+            self.data_dir_label.setText(str(self._data_root))
+            label = "数据目录"
+        else:
+            self._cache_root = Path(outcome.target)
+            self.cache_dir_label.setText(str(self._cache_root))
+            label = "缓存目录"
+        self.roots_panel.finish(
+            f"已复制 {outcome.files} 个文件（{format_bytes(outcome.bytes)}），重启后生效。"
+        )
+        box = QMessageBox(self)
+        box.setWindowTitle(f"{label}已搬迁")
+        box.setText(
+            f"{label}已复制到：\n{outcome.target}\n\n重启后生效；重启时会自动清理旧目录。"
+        )
+        restart = box.addButton("立即重启", QMessageBox.ButtonRole.AcceptRole)
+        later = box.addButton("稍后", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(later)
+        box.exec()
+        if box.clickedButton() is restart:
+            self._restart_app()
+
+    def _on_root_failed(self, message: str) -> None:
+        self._roots_job = None
+        self._set_roots_busy(False)
+        self.roots_panel.fail(f"搬迁失败：{message}（旧目录没有被改动）")
+
+    def _on_root_cancelled(self) -> None:
+        self._roots_job = None
+        self._set_roots_busy(False)
+        self.roots_panel.fail("已取消；已复制的文件留在新目录里。")
+
+    def _restart_app(self) -> None:
+        QProcess.startDetached(sys.executable, list(sys.argv[1:]))
+        app = QCoreApplication.instance()
+        if app is not None:
+            app.quit()
+
+    def _clear_cache(self) -> None:
+        targets = [
+            paths.cache_dir(self._data_root, *part.split("/"))
+            for part in storage_roots.CACHE_PARTS
+        ]
+        existing = [path for path in targets if path.is_dir()]
+        if not existing:
+            QMessageBox.information(self, "清空缓存", "缓存目录已经是空的。")
+            return
+        total = 0
+        for path in existing:
+            for current, _dirs, files in os.walk(path):
+                for name in files:
+                    try:
+                        total += (Path(current) / name).stat().st_size
+                    except OSError:
+                        continue
+        answer = QMessageBox.question(
+            self,
+            "清空缓存",
+            f"将删除语音缓存、市场下载包与更新包（约 {format_bytes(total)}），"
+            "会话、记忆与配置不受影响。继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        removed = 0
+        for path in existing:
+            try:
+                shutil.rmtree(path)
+                removed += 1
+            except OSError:
+                continue
+        for path in existing:
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                continue
+        QMessageBox.information(self, "清空缓存", f"已清空 {removed} 个缓存目录。")
+
+    def dispose(self) -> None:
+        job = self._roots_job
+        self._roots_job = None
+        if job is not None:
+            job.cancel()
+        for row in getattr(self, "pack_rows", {}).values():
+            row.dispose()
 
     def _refresh_dsh_status(self) -> None:
         from ...platform import dsh_install
@@ -438,6 +729,12 @@ class GeneralPage(SettingsPage):
         data = self.character_combo.currentData()
         return str(data) if data is not None else None
 
+    def _on_mirror_changed(self, _index: int) -> None:
+        """下载镜像偏好即时生效（下一次下载用新策略），取消时回滚。"""
+        value = str(self.mirror_combo.currentData() or "auto")
+        self.config().set("pack_mirror_policy", value)
+        self.changed.emit()
+
     def _on_auto_hide_changed(self, checked: bool) -> None:
         """勾选即时写配置并作用到宿主（与「直播捕获兼容」同一套实时语义）。"""
         self.config().set("auto_hide_fullscreen", bool(checked))
@@ -501,6 +798,12 @@ class GeneralPage(SettingsPage):
         self.config().set("character_aliases", dict(self._initial_aliases))
         self._fill_character_combo(self._initial_character or "")
         self.autostart_check.setChecked(self._autostart_initial)
+        self.config().set("pack_mirror_policy", self._initial_mirror)
+        self.mirror_combo.blockSignals(True)
+        self.mirror_combo.setCurrentIndex(
+            max(0, self.mirror_combo.findData(self._initial_mirror))
+        )
+        self.mirror_combo.blockSignals(False)
         # 勾选是实时生效的，取消必须把配置与宿主状态一起回滚（同 stream_capture）。
         self.config().set("auto_hide_fullscreen", self._initial_auto_hide_fullscreen)
         self.auto_hide_fullscreen_check.blockSignals(True)
@@ -523,9 +826,21 @@ class GeneralPage(SettingsPage):
             "游戏",
             "视频",
             "数据目录",
+            "数据位置",
+            "缓存目录",
+            "缓存位置",
+            "清空缓存",
+            "搬迁",
+            "移动位置",
             "角色资源包",
             "素材包",
             "下载",
+            "下载进度",
+            "下载镜像",
+            "镜像",
+            "mirror",
+            "jsdelivr",
+            "网速",
             "高清",
             "网盘",
             "github",

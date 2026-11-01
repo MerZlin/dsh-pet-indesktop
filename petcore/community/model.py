@@ -82,6 +82,7 @@ DEFAULT_AUTHOR_ACCOUNTS: tuple[AuthorAccount, ...] = (
     AuthorAccount("BiliBili", "@快乐小咸鱼a"),
     AuthorAccount("抖音", "@張墨林"),
     AuthorAccount("GitHub", "@MerZlin", "https://github.com/MerZlin"),
+    AuthorAccount("BiliBili", "@炎圣人但丁"),
 )
 
 DEFAULT_SPECIAL_THANKS: tuple[SpecialThanks, ...] = (
@@ -94,6 +95,18 @@ DEFAULT_SPECIAL_THANKS: tuple[SpecialThanks, ...] = (
     SpecialThanks("bilibili", "@这个刀子真甜", "", "桌宠形象来源"),
     SpecialThanks("bilibili", "@上善无形", "", "桌宠形象来源"),
     SpecialThanks("bilibili", "@ZipZipPipe", "", "桌宠形象来源"),
+    SpecialThanks("bilibili", "@浩瀚星空2005", "", "参考项目作者、初始动画素材来源"),
+    SpecialThanks("bilibili", "@邦多利素世", "", "冬装大肥鱼形象作者"),
+    SpecialThanks("bilibili", "@炎圣人但丁", "", "新动画素材制作者"),
+    SpecialThanks("bilibili", "@玄秋沐雨", "", "手机版大肥鱼作者"),
+    SpecialThanks("bilibili", "@咕噜千鹤子", "", "项目参与、部分功能开发"),
+    SpecialThanks("bilibili", "@月匠", "", "余额部分功能的参考实现"),
+    SpecialThanks(
+        "company",
+        "深度求索 DeepSeek",
+        "https://www.deepseek.com/",
+        "提供 DeepSeek 模型与 DeepSeek Harness，以及开源精神",
+    ),
 )
 
 
