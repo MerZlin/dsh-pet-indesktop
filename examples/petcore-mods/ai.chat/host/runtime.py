@@ -16,7 +16,6 @@ from __future__ import annotations
 import base64
 import logging
 import random
-import re
 import threading
 import time
 from pathlib import Path
@@ -28,6 +27,8 @@ from .animation_semantics import choose_animation, choose_thinking
 from .constants import LOOK_SCREEN_COOLDOWN_S, MAX_HISTORY, OWNER, QUICK_HISTORY
 from .memory import MemoryStore, extract_memory, format_context
 from .persona_presets import load_presets, resolve_prompt
+from .relay_store import append_fact, read_identity_text, recall_facts
+from .reply_voice import ReplyVoicePlayer
 from .proactive import PRE_CUE_MS, PRE_CUE_TEXT, ProactiveWatcher
 from .prompts import (
     ask_messages,
@@ -232,12 +233,61 @@ class AiChatRuntime:
         return presets
 
     def _prompt(self) -> str:
-        return resolve_prompt(
+        base = resolve_prompt(
             self._config_value("ai_persona", ""),
             self._config_value("ai_system_prompt", ""),
             self._character_name(),
             self._persona_presets(),
         )
+        if not self._relay_enabled() or not bool(
+            self._config_value("ai_memory_relay_persona", True)
+        ):
+            return base
+        blocks = self._relay_identity()
+        if not blocks:
+            return base
+        return base.rstrip() + "\n\n" + "\n\n".join(blocks)
+
+    def _relay_identity(self) -> list[str]:
+        """persona.md / handover.md（与 DSH 身份接力同一份）；按 mtime 缓存。"""
+        try:
+            relay_dir = self._relay_dir()
+            persona_path = relay_dir / "persona.md"
+            handover_path = relay_dir / "handover.md"
+            key = (
+                str(relay_dir),
+                float(persona_path.stat().st_mtime) if persona_path.is_file() else 0.0,
+                float(handover_path.stat().st_mtime) if handover_path.is_file() else 0.0,
+            )
+        except OSError:
+            key = ("", 0.0, 0.0)
+        if (
+            getattr(self, "_relay_identity_cache_key", None) == key
+            and getattr(self, "_relay_identity_cache", None) is not None
+        ):
+            return self._relay_identity_cache
+        blocks: list[str] = []
+        try:
+            persona = read_identity_text(relay_dir, "persona.md")
+            handover = read_identity_text(relay_dir, "handover.md")
+            if persona:
+                blocks.append(persona)
+            if handover:
+                blocks.append("【交接书（最近进度，供参考）】\n" + handover)
+        except OSError:  # noqa: BLE001 - 读不到人格卡就退回人设提示词
+            blocks = []
+        self._relay_identity_cache_key = key
+        self._relay_identity_cache = blocks
+        return blocks
+
+    @staticmethod
+    def _relay_context(entries) -> str:
+        lines = ["长期记忆（与 DSH 共用；供参考，不要逐条复述，除非与问题直接相关）："]
+        for item in entries:
+            content = str(item.get("content") or "").strip()
+            if content:
+                lines.append(f"- {content}")
+        return "\n".join(lines)[:2200]
 
     def _vision_enabled(self) -> bool:
         return bool(self._config_value("ai_vision_enabled", True))
@@ -420,36 +470,81 @@ class AiChatRuntime:
                     return content[:2000]
         return ""
 
-    @staticmethod
-    def _speech_text(text: str) -> str:
-        value = str(text or "")
-        value = re.sub(r"```.*?```", " ", value, flags=re.S)
-        value = re.sub(r"`([^`]*)`", r"\1", value)
-        value = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", value)
-        value = re.sub(r"[*_#>~]+", "", value)
-        return " ".join(value.split())[:500]
-
+    # ---------------------------------------------------------------- 回复朗读
     def _speak_reply(self, text: str) -> None:
+        """按句滴灌 + 预合成（见 ``reply_voice.py`` 的设计说明）。"""
         if not bool(self._config_value("ai_voice_reply", False)):
             return
         speech = getattr(self.context.ports, "speech", None)
+        if speech is None:
+            return
+        player = getattr(self, "_reply_voice", None)
+        if player is None:
+            player = ReplyVoicePlayer(
+                speak=lambda sentence, on_finished, on_error: self._voice_speak(
+                    speech, sentence, on_finished, on_error
+                ),
+                precache=lambda sentence: self._voice_precache(speech, sentence),
+                enabled=lambda: bool(self._config_value("ai_voice_reply", False)),
+                cancel=lambda: self._voice_cancel(speech),
+            )
+            self._reply_voice = player
+        player.play(text)
+
+    @staticmethod
+    def _voice_speak(speech, sentence, on_finished, on_error) -> None:
+        """送一句进共享语音通道；``owner=OWNER`` 让新回复能整链打断。"""
         speaker = getattr(speech, "speak", None)
         if not callable(speaker):
             return
-        clean = self._speech_text(text)
-        if not clean:
+        speaker(
+            SpeechRequest(text=sentence),
+            on_finished=on_finished,
+            on_error=on_error,
+            owner=OWNER,
+        )
+
+    @staticmethod
+    def _voice_precache(speech, sentence) -> None:
+        """把下一句提前合进缓存（``synthesize`` 阻塞，放后台线程）；失败静默退化。"""
+        synthesizer = getattr(speech, "synthesize", None)
+        if not callable(synthesizer):
             return
 
-        def on_error(error) -> None:
-            reason = str(getattr(error, "reason", "") or "speech")
-            logger.info("ai voice reply failed: reason=%s", reason)
+        def run() -> None:
+            try:
+                synthesizer(SpeechRequest(text=sentence))
+            except Exception as exc:  # noqa: BLE001 - 轮到时在线合成兜底
+                logger.info(
+                    "ai voice reply precache failed: type=%s", type(exc).__name__
+                )
 
+        threading.Thread(target=run, name="ai-voice-precache", daemon=True).start()
+
+    @staticmethod
+    def _voice_cancel(speech) -> None:
+        """打断上一轮还在播/排队的朗读（新回复覆盖旧回复）。"""
+        cancel = getattr(speech, "cancel_owner", None)
+        if not callable(cancel):
+            return
         try:
-            speaker(SpeechRequest(text=clean), on_error=on_error)
-        except Exception:  # noqa: BLE001 - 朗读失败不影响文字回答
-            logger.info("ai voice reply failed: reason=internal")
+            cancel(OWNER)
+        except Exception:  # noqa: BLE001 - 打断失败不影响新回复开念
+            logger.info("ai voice reply cancel failed")
 
     # ---------------------------------------------------------------- 长期记忆
+    def _relay_enabled(self) -> bool:
+        """身份接力后端：与 DSH 共用 facts.jsonl。总开关与接力开关同时开才生效。"""
+        return bool(self._config_value("ai_memory_enabled", True)) and bool(
+            self._config_value("ai_memory_relay_enabled", False)
+        )
+
+    def _relay_dir(self) -> Path:
+        configured = str(self._config_value("ai_memory_relay_dir", "") or "").strip()
+        if configured:
+            return Path(configured).expanduser()
+        return Path.home() / ".dsh" / "identity-memory"
+
     def _memory_store(self):
         ports = getattr(self.context, "ports", None)
         storage = getattr(ports, "storage", None)
@@ -473,6 +568,18 @@ class AiChatRuntime:
     def _memory_context(self, text: str, slot: int | None = None) -> str:
         if not bool(self._config_value("ai_memory_enabled", True)):
             return ""
+        if self._relay_enabled():
+            try:
+                limit = int(self._config_value("ai_memory_inject", 3) or 3)
+            except (TypeError, ValueError):
+                limit = 3
+            try:
+                entries = recall_facts(
+                    self._relay_dir(), text, limit=max(1, min(8, limit))
+                )
+            except Exception:  # noqa: BLE001 - 坏记忆不该让对话失败
+                return ""
+            return self._relay_context(entries) if entries else ""
         ports = getattr(self.context, "ports", None)
         port = getattr(ports, "memory", None)
         render = getattr(port, "render_prompt", None)
@@ -511,6 +618,14 @@ class AiChatRuntime:
             return
         content = extract_memory(text)
         if not content:
+            return
+        if self._relay_enabled():
+            # 身份接力后端：写进与 DSH 共用的 facts.jsonl。内容是主人的原话，
+            # 来源记 owner（与 DSH 侧「主人说的」同一可信度档位）。
+            try:
+                append_fact(self._relay_dir(), content, source="owner")
+            except OSError:
+                logger.warning("relay memory write failed")
             return
         ports = getattr(self.context, "ports", None)
         port = getattr(ports, "memory", None)
@@ -1139,6 +1254,9 @@ class AiChatRuntime:
             except Exception:
                 pass
         self._unsubs = []
+        player = getattr(self, "_reply_voice", None)
+        if player is not None:
+            player.stop()
 
     def _say(self, text: str, *, duration_ms: int = 6000) -> None:
         presentation = getattr(self.context.ports, "presentation", None)

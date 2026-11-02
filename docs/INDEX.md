@@ -144,6 +144,8 @@
 
 ## PR 报告存档
 
+- [petcore ai.chat 回复朗读流水线 + 身份接力记忆后端（2026-11-02）](PR-REPORT-PETCORE-AI-CHAT-VOICE-RELAY-2026-11-02.md)：①把主分支已实测的「回复朗读按句滴灌 + 预合成前锋」移植进 petcore `ai.chat`（`ReplyVoicePlayer` 链式交棒 + `SpeechPort.synthesize` 预热缓存 + `cancel_owner` 打断，默认关）；②新增「身份接力记忆」可选后端（facts.jsonl 与 DSH 版 store.mjs 逐字段对齐：同键新压旧/作废盖章/来源优先/密钥拒写），「记住…」写共享库、recall 注入、persona.md/handover.md 注入，三个设置行默认关。**改 ai.chat 朗读链路、长期记忆后端或接力目录口径前必读**；真库只读对账 89/81/8，petcore 朗读听感未实机验收（SAC 拦打包），如实登记见报告末节。
+
 - [DSH v2 真机联调（2026-10-31）](PR-REPORT-DSH-REAL-MACHINE-2026-10-31.md)：在真实 DSH 44.7.0 上补齐 v1→v2 迁移（旧 junction / patch `insert` / 旧 channel 链接三处）、历史只回放 `source.kind=user`（实测注入 10,292 字符）、审批指纹忽略 `description`（修重复弹卡）、`pet_control` 改标准 JSON Schema 并如实报 `commands`、`/pet/new` 清旧审批。**改 DSH 安装器、审批闸、历史过滤或 `pet_control` 前必读**；未验证项见报告末节。
 - [聊天/DSH 稳定性与启动/静息 CPU（2026-11-01）](PR-REPORT-CHAT-FIX-CPU-2026-11-01.md)：最大化按钮归位；ChatPort/PresentationPort 后台线程调用收口 GUI（旧 `dsh.channel` 审批 AppHang：旧包第 1 次采样必挂、新代码 90 次采样全响应）；DSH 历史 20 条/批重放 + 400ms 合并落盘；首跑供给等系统空闲 60s（2 clip 实测 63.5s/67.2 CPU-s/平均 6.62%）；闲置降帧默认开（受控待机 1.736%→0.873%）。**改聊天端口线程模型、DSH 审批/落盘、首跑供给或待机帧率前必读**。
 - [视图回切 / 数据与缓存目录可搬 / 致谢独立页 / 素材包仓库与应用内下载（2026-11-01）](PR-REPORT-STORAGE-THANKS-PACKS-2026-11-01.md)：再点当前视图按钮回 AI 对话；`location.json` 引导指针 + 数据/缓存目录搬迁（复制→校验→写指针→重启→删旧根，缓存根绑定数据根）；致谢升为侧边栏第 10 页并补 7 条鸣谢；`MerZlin/Animations` 仓库 + 应用内分段下载（进度/网速/取消/导入）。**改数据根解析、设置页「数据」卡片、致谢页或素材包下载链路前必读**。

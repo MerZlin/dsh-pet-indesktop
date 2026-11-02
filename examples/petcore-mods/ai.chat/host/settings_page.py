@@ -64,6 +64,9 @@ class AiChatPage(SettingsPage):
         "ai_memory_enabled",
         "ai_memory_inject",
         "ai_memory_max_entries",
+        "ai_memory_relay_enabled",
+        "ai_memory_relay_dir",
+        "ai_memory_relay_persona",
         "ai_web_search",
         "ai_web_engine",
         "ai_web_results",
@@ -273,7 +276,8 @@ class AiChatPage(SettingsPage):
         card_anim.add_row(
             "朗读回复",
             self.voice_reply_check,
-            "回复完成后用「语音 → 主后端」朗读（去 Markdown、最多 500 字）。",
+            "回复完成后用「语音 → 主后端」按句朗读；上一句播放时预合成下一句，"
+            "句间不停顿。朗读失败不影响文字回答。",
         )
 
         card_mem = self.section("长期记忆", level=3)
@@ -308,6 +312,41 @@ class AiChatPage(SettingsPage):
             "每域上限",
             self.memory_max,
             "超出后按创建时间淘汰最旧条目；全局与当前角色各一份。",
+        )
+
+        self.relay_check = make_checkbox(self)
+        self.relay_check.setChecked(
+            bool(self._initial.get("ai_memory_relay_enabled", False))
+        )
+        self.relay_check.toggled.connect(self._on_changed)
+        card_mem.add_row(
+            "身份接力记忆（与 DSH 共用）",
+            self.relay_check,
+            "开启后「记住…」写入身份接力的 facts.jsonl（与 DSH 同一份）："
+            "同键新压旧、作废盖章不删行、内容完全相同才去重。"
+            "开启时不再写入上面的本机 JSONL，也不再区分全局/角色。",
+        )
+
+        self.relay_dir_edit = QLineEdit(self)
+        self.relay_dir_edit.setPlaceholderText("默认 ~/.dsh/identity-memory")
+        self.relay_dir_edit.setText(str(self._initial.get("ai_memory_relay_dir") or ""))
+        self.relay_dir_edit.editingFinished.connect(self._on_changed)
+        card_mem.add_row(
+            "接力记忆目录",
+            self.relay_dir_edit,
+            "留空用默认目录；必须是 DSH 身份接力（dsh-identity-relay）的目录。",
+        )
+
+        self.relay_persona_check = make_checkbox(self)
+        self.relay_persona_check.setChecked(
+            bool(self._initial.get("ai_memory_relay_persona", True))
+        )
+        self.relay_persona_check.toggled.connect(self._on_changed)
+        card_mem.add_row(
+            "注入人格卡与交接书",
+            self.relay_persona_check,
+            "把接力目录里的 persona.md / handover.md 追加进每轮 system 提示词；"
+            "关闭后只用这里选的人设。",
         )
         memory_buttons = [
             make_button("打开记忆目录", self),
@@ -963,6 +1002,11 @@ class AiChatPage(SettingsPage):
         config.set("ai_memory_enabled", bool(self.memory_check.isChecked()))
         config.set("ai_memory_inject", int(self.memory_inject.value()))
         config.set("ai_memory_max_entries", int(self.memory_max.value()))
+        config.set("ai_memory_relay_enabled", bool(self.relay_check.isChecked()))
+        config.set("ai_memory_relay_dir", self.relay_dir_edit.text().strip())
+        config.set(
+            "ai_memory_relay_persona", bool(self.relay_persona_check.isChecked())
+        )
         config.set("ai_web_search", bool(self.web_check.isChecked()))
         config.set("ai_web_engine", str(self.engine_combo.currentData() or "baidu"))
         config.set("ai_web_results", int(self.web_results_spin.value()))
@@ -1296,6 +1340,25 @@ class AiChatPage(SettingsPage):
         return paths.feature_data_dir(Path(root), "ai.chat") / "memory"
 
     def _refresh_memory_status(self) -> None:
+        if bool(self.config().get("ai_memory_relay_enabled", False)):
+            from .relay_store import store_stats
+
+            try:
+                directory = str(self.config().get("ai_memory_relay_dir") or "").strip()
+                target = (
+                    Path(directory).expanduser()
+                    if directory
+                    else Path.home() / ".dsh" / "identity-memory"
+                )
+                stats = store_stats(target)
+                self.memory_status.setText(
+                    f"接力记忆 {stats['activeCount']} 条 active · "
+                    f"已作废 {stats['supersededCount']} · 归档 {stats['archivedCount']}"
+                )
+                return
+            except Exception:  # noqa: BLE001 - 读不到只显示"读不到"
+                self.memory_status.setText("接力记忆目录读不到")
+                return
         service = getattr(self.host, "memory", None)
         if service is not None:
             try:
@@ -1373,6 +1436,19 @@ class AiChatPage(SettingsPage):
             widget.blockSignals(True)
             widget.setValue(value)
             widget.blockSignals(False)
+        self.relay_check.blockSignals(True)
+        self.relay_check.setChecked(
+            bool(config.get("ai_memory_relay_enabled", False))
+        )
+        self.relay_check.blockSignals(False)
+        self.relay_dir_edit.blockSignals(True)
+        self.relay_dir_edit.setText(str(config.get("ai_memory_relay_dir") or ""))
+        self.relay_dir_edit.blockSignals(False)
+        self.relay_persona_check.blockSignals(True)
+        self.relay_persona_check.setChecked(
+            bool(config.get("ai_memory_relay_persona", True))
+        )
+        self.relay_persona_check.blockSignals(False)
         self._refresh_memory_status()
 
     def _sync_font_rows(self, *_args) -> None:
