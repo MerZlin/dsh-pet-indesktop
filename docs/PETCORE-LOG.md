@@ -6017,3 +6017,96 @@ petcore 的 `ai.agent` mod；完成后提交并本地构建 setup。
   逐个启动真实 Agent 采样。OpenCode SQLite 路径按主分支口径
   `~/.local/share/opencode/opencode.db`，Windows 实际安装位置若不同需后续调整。
 - 构建使用当前工作区（包含上一提交的存储/下载批次），setup 不是只含本次差异。
+
+## L158 — 2026-11-02 — AI 对话气泡宽度 + 跨会话记忆召回
+
+**背景**：截图里的用户气泡被压到 144px（正文 120px = 最小宽），一行只显示十来个字；
+真实卡里已有「我星期三不上课，改为星期四上课了」，但 `ai_memory_inject=3` + 固定分区优先级
+让普通用户事实（重要度 58，落在「桌宠」区）永远进不了前 3 条；DSH 路径不传 limit，所以
+看起来「DSH 记得、AI 不记得」；AI/DSH 还默认互不可见。
+
+**改动**
+
+- `petcore/ui/chat/widgets.py`：新增 `MessageBubble.preferred_width()`（QFontMetrics 量最长行，
+  短句紧凑、长句铺到上限），用户正文最小宽 120→0。
+- `petcore/ui/chat/window.py`：消息/输入区边距 76→44（紧凑 12）、user 上限 66%→86%、
+  `_update_bubble_widths` 改 `setFixedWidth(preferred_width)`。
+- `petcore/interop/memory.py`：`render/recall` 改相关度优先（bigram + 30 天半衰 + 重要度 +
+  pin/first + 召回次数），`limit` = top-K；新增 `_visible_scopes`（pet↔dsh 互见、qq 隔离）、
+  问句降权、`kind=reply`/`superseded_by` 排除、`first` 在 K≥2 保底、预算按最低分裁。
+- `petcore/ui/memory_service.py`：assistant 消息写 `kind=reply`；`render_prompt/recall` 读
+  `ai_memory_share_channels`。
+- `petcore/config.py` + `settings_page.py`：新增 `ai_memory_share_channels`（默认 True）；
+  修正「800 字」「按创建时间淘汰」两条过期文案。
+- 测试：`test_petcore_interop_memory.py` 新增真实卡形状/可见性/回复排除；
+  `test_petcore_chat_ui.py` 新增气泡宽度与 chat_view slot 注入；`test_petcore_ai_memory.py`
+  覆盖新开关。
+
+**验证**
+
+- `pytest -q tests/test_petcore_interop_memory.py tests/test_petcore_memory_service.py
+  tests/test_petcore_ai_memory.py tests/test_petcore_chat_ui.py`：70 passed。
+- 真实卡（只读副本）：`render("pet", query="我星期几上课啊", max_entries=3)` 修改前只有
+  「我喜欢鲸鱼/千早爱音」，修改后第 1 条为「我星期三不上课，改为星期四上课了」。
+- 真机截图：`docs/screenshots/ai-chat-memory-2026-11-02/bubble-1180.png`（user 气泡 1 行，
+  修改前 3 行）、`bubble-640.png`。
+- 全量 petcore：`2984 passed, 1 skipped in 355.33s`。
+- `ruff check` 全部改动文件通过。
+
+**未验证 / 边界**
+
+- 未连接真实 API 跑一轮对话；用真实卡离线渲染验证。
+- 问句降权是启发式（问号/疑问词），极端短句仍可能进 top-K。
+
+## L159 — 2026-11-02 — 记忆管理页 + 只增不改修复 + DSH 外部记忆只读镜像
+
+**背景**：core 记忆没有单条编辑/删除；助手回复也被当记忆写入；「改为星期四」不会覆盖旧的
+「我星期三上课」；同义事实跨天重复追加。用户目录里的第三方 `dsh.memory` 扩展有
+`facts.jsonl`（姓名/喜好），`dsh-memory-semantic` 的上游 meow-memory 用
+`.dsh-meow/memory.db`；本次只读接入两者，不改第三方扩展。
+
+**改动**
+
+- `petcore/interop/memory.py`：`MemoryEntry` 增 `updated_at/superseded_by/origin`；RLock
+  （写串行，读不阻塞）；新增 `entries/find_entry/update_entry/delete_entry/restore_entry/
+  mark_replies/tidy/apply_external/mute_external`；`ingest` 重复合并 + 更正覆盖
+  （最长公共子串 ≥4 且覆盖旧文本 60%）；删除/覆盖只写 `superseded_by` 并留归档、可恢复；
+  `normalize_text` 改 `str.translate`。
+- `petcore/ui/memory_service.py`：外部同步单线程 worker（启动 +3s / 每 10 分钟）、
+  `ai_memory_import_dsh`、`entries/update_entry/delete_entry/restore_entry/tidy/
+  sync_external/external_status`；apply 在工作线程，GUI 只写幂等 marker。
+- `petcore/interop/external_memory.py`（新）：`dsh.memory` 的
+  `<data_root>/memory/facts.jsonl` 与 meow-memory 的 `<workspace>/.dsh-meow/memory.db`
+  只读读取；SQLite `mode=ro` + `query_only=ON`；`assistant_texts()` 扫描会话原文。
+- `petcore/contracts/host.py`：`MemoryPort` 增量方法；`remember(..., pinned=False)`。
+- `examples/petcore-mods/ai.chat/host/memory_view.py`（新）：记忆页（列表/搜索/范围/新增/
+  编辑/置顶/删除/恢复/整理/同步/打开目录/注入预览/外部只读徽标）。
+- `examples/petcore-mods/ai.chat/host/__init__.py`：注册 `chat_view`；
+  `settings_page.py`：两个开关的唯一所有权行 + 「管理记忆…」。
+- `petcore/ui/chat/window.py` / `controller.py`：`ChatWindow(pet_slot=)` +
+  `set_pet_slot` 注入视图；`styles.py`：记忆页浅/深 QSS。
+- 测试：`test_petcore_external_memory.py` 5、`test_petcore_memory_view.py` 4、
+  `test_petcore_interop_memory.py` +5、`test_petcore_chat_ui.py` +1、
+  `test_petcore_ai_mod.py` 更新贡献列表。
+
+**验证**
+
+- 聚焦：`tests/test_petcore_interop_memory.py`、`test_petcore_external_memory.py`、
+  `test_petcore_memory_service.py`、`test_petcore_memory_view.py` → 29 passed。
+- 真实 `dsh.memory` facts：`read_dsh_facts(%APPDATA%/dsh-pet-core)` → 2 条
+  （「用户叫张**」「主人喜欢鲸鱼」），临时镜像 `render("pet")` 可见。
+- 真实卡副本（29 条）`tidy()`：`merged 1 / superseded 1`；「我星期三上课」被
+  「我星期三不上课，改为星期四上课了」覆盖；`render(..., max_entries=3)` 第 1 条为修正事实。
+- 性能（本机，Windows 11 / Python 3.12）：500 条 render 12.6ms（旧 9.7ms，+31%）；
+  29 条 render 2.4ms；500 条 ingest 35.8ms（旧 30.4ms）；meow 2000 行 read 11ms /
+  apply 364ms（在 worker 内，GUI 只受 RLock 短暂影响）；明细见 PR 报告。
+- 截图：`docs/screenshots/ai-chat-memory-2026-11-02/memory-page-1000.png`、`-620.png`。
+- 全量 petcore：`2984 passed, 1 skipped in 355.33s`。
+- `ruff check` 全部改动文件通过。
+
+**未验证 / 边界**
+
+- 本机没有 `.dsh-meow/memory.db`，meow-memory 只做合成库单测；真实 DSH 安装后需复核。
+- 第三方 `dsh.memory` 扩展本身不修改，只读 `facts.jsonl`。
+- 记忆页未在安装包内跑（源码树 + 临时数据根）；`tidy` 的更正启发式可能误合并，
+  被覆盖条目可在「已更新」恢复。

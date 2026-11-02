@@ -121,10 +121,16 @@ def test_settings_page_memory_switches(qt_app, tmp_path: Path) -> None:
     page = definition.settings_factory(host)
     try:
         assert page.memory_check.isChecked() is True
+        assert page.memory_share_check.isChecked() is True
+        assert page.memory_import_check.isChecked() is True
         page.memory_check.setChecked(False)
+        page.memory_share_check.setChecked(False)
+        page.memory_import_check.setChecked(False)
         page.memory_inject.setValue(5)
         page.memory_max.setValue(800)
         assert host.config.get("ai_memory_enabled") is False
+        assert host.config.get("ai_memory_share_channels") is False
+        assert host.config.get("ai_memory_import_dsh") is False
         assert host.config.get("ai_memory_inject") == 5
         assert host.config.get("ai_memory_max_entries") == 800
     finally:

@@ -86,19 +86,33 @@ im.qq mod（examples/petcore-mods/im.qq，Qt-free runtime + 设置页）
 ```
 <data_root>/interop/memory/<character>/
   inbox.jsonl        只追加；AI/DSH/QQ 消息与显式「记住」都写这里
-  card.json          单写者（MemoryService）；重要度/情绪/清晰度/pin/召回次数
-  archive.jsonl      压缩时被淘汰的条目（只追加，永不进提示词）
+  card.json          单写者（MemoryService）；重要度/情绪/清晰度/pin/召回次数/superseded_by/origin
+  archive.jsonl      压缩/删除/静音/外部移除的条目（只追加，永不进提示词）
   seen.json          去重键（日期+发送者+文本）
+  external.json      外部镜像来源、最后同步时间、静音 origin
   prompt-<scope>.md  渲染块：pet 2200 / dsh 2600 / qq 2000 字
+  migration-replies.json / tidy-v2.json  一次性整理标记
 ```
 
-- 写入：`append_inbox` → `ingest()`（单写者）→ 评分/去重/首次 → 卡；`maintain()` 启动 + 每 10 分钟。
+- 写入：`append_inbox` → `ingest()`（单写者）→ 评分/去重/更正覆盖 → 卡；`maintain()` 启动 + 每 10 分钟。
+  用户显式新增/编辑/删除/恢复也经 core `MemoryService`（同一个单写者）；删除保留归档，可恢复。
+- 去重与更正：同一规范化文本跨天不再追加（touch `recall_count`、取更高 importance）；带
+  `改成/改为/更正/记错/不再/不是…而是` 且**最长公共子串 ≥4 且覆盖旧文本 60%** 时把旧条目
+  标为 `superseded_by=新条目`；`tidy()` 只做这两类保守操作，不物理删除，可在「记忆」页恢复。
+- 助手回复：`kind="reply"` 只留档、不进提示词；旧数据用会话原文一次性标记（`migration-replies.json`）。
 - 评分（纯函数）：基础 8；主人私聊 +42 / 群里 +32；直接对她说 +8；情绪 0–24；第一次/最早 +30
   （`importance=max(100)` 且 pin）；约定 +16；矛盾/道歉 +14；关于自己 +5；<6 字 −12；夹 1–100。
 - 衰减：7 天未召回开始降清晰度（vivid→clear→fuzzy→trace），pin 不衰减；容量 1000 默认，超限按
   `(pin, importance, last_seen)` 保留，淘汰项进 `archive.jsonl`。
-- 渲染：`最初/锚点/和主人/桌宠/DSH/QQ/最近/模糊` 分区，每区条数上限，超预算从低优先级裁；
-  全量卡（`archive.jsonl`）永不进提示词。
+- 渲染：候选先按「bigram 相关度 + 30 天半衰新近度 + 重要度 + pin/first + 召回次数」打分，
+  `limit` 是**按分数取 top-K**（不再按分区优先级截断），选完再按
+  `最初/锚点/和主人/桌宠/DSH/QQ/最近/模糊` 排版；超预算先丢最低分的已输出条目。
+- 可见性：`shared` 永远可见；AI 的 `pet` 与 DSH 的 `dsh` 默认互见
+  （`ai_memory_share_channels=True`，关掉退回严格 scope）；`qq` 只与 `shared` 互通。
+- 外部只读镜像：`petcore/interop/external_memory.py` 读 `dsh.memory` 的
+  `<data_root>/memory/facts.jsonl` 与 meow-memory 的 `<workspace>/.dsh-meow/memory.db`；
+  `MemoryService` 启动后 3 秒、之后每 10 分钟在单线程 worker 同步（`ai_memory_import_dsh`）。
+  外部条目带 `origin`、`scope=dsh`，在「记忆」页显示只读徽标；删除=加入静音表，绝不写回源。
 - 迁移：旧 `feature-data/ai.chat/memory/global.jsonl` 与 `<character>.jsonl` 一次性导入
   `source=legacy`，旧文件原样保留，标记 `interop/memory/migration-ai-chat-<character>.json` 幂等。
 - 人格层：`petcore/interop/persona.py` 提供核心/场景/日常组合 + 预算裁剪；`ai.chat` 的设置页
@@ -119,7 +133,7 @@ im.qq mod（examples/petcore-mods/im.qq，Qt-free runtime + 设置页）
 | 会话库、DSH 客户端/视图、记忆服务 | core | 窗口与 Qt 只能在 core |
 | DSH 状态→动画/气泡 | `ai.agent` mod | 只读 JSONL + `PresentationPort` |
 | QQ 入站/出站/策略 | `im.qq` mod | 无 socket；WebhookPort + HttpPort |
-| 记忆卡维护 | core `MemoryService` | 单写者；mod 只 append |
+| 记忆卡维护 | core `MemoryService` | 单写者；mod 只 append / 只读端口；外部源（dsh.memory、meow-memory）只读镜像 |
 | 设置键 | core `DEFAULTS`（音频/DSH/联网）或 `config.extra`（QQ） | 全局键进 `GLOBAL_CONFIG_KEYS` |
 | 凭据 | 钥匙串 | `speech.*`、`core.websearch`、`im.qq/access_token`、`im.qq/webhook_token` |
 
@@ -137,5 +151,7 @@ im.qq mod（examples/petcore-mods/im.qq，Qt-free runtime + 设置页）
 
 未验证（必须由用户真机复核）：
 - DSH 桌面端真实 `sessionQuery.observeSession` / 审批 / `/pet/new` / 记忆 context 注入；
+- meow-memory 真机：本机没有 `.dsh-meow/memory.db`，只做合成库单测；`dsh.memory` 的
+  `facts.jsonl` 只读镜像在本机验证，第三方扩展本身不改；
 - QQ 网关（NapCat/Lagrange）真实登录、收发、群白名单、CQ 解析；
 - 多角色/多宠的 DSH 会话隔离（当前 DSH lane 以进程为主，QQ 会话按 conversation_id 分）。

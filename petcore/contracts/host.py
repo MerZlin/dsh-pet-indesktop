@@ -258,6 +258,7 @@ class MemoryPort(Protocol):
         kind: str = "",
         importance: int | None = None,
         pet_slot: int | None = None,
+        pinned: bool = False,
     ) -> bool: ...
 
     def recall(
@@ -280,6 +281,39 @@ class MemoryPort(Protocol):
     ) -> str: ...
 
     def stats(self, *, pet_slot: int | None = None) -> dict: ...
+
+    def entries(
+        self,
+        *,
+        scope: str = "",
+        limit: int = 0,
+        include_superseded: bool = False,
+        include_replies: bool = False,
+        pet_slot: int | None = None,
+    ) -> list[dict]: ...
+
+    def update_entry(
+        self,
+        entry_id: str,
+        *,
+        text: str | None = None,
+        importance: int | None = None,
+        pinned: bool | None = None,
+        scope: str | None = None,
+        pet_slot: int | None = None,
+    ) -> bool: ...
+
+    def delete_entry(self, entry_id: str, *, pet_slot: int | None = None) -> bool: ...
+
+    def restore_entry(self, entry_id: str, *, pet_slot: int | None = None) -> bool: ...
+
+    def tidy(self, *, pet_slot: int | None = None) -> dict: ...
+
+    def sync_external(
+        self, *, pet_slot: int | None = None, force: bool = False
+    ) -> bool: ...
+
+    def external_status(self, *, pet_slot: int | None = None) -> dict: ...
 
     def clear(self, scope: str = "", *, pet_slot: int | None = None) -> int: ...
 

@@ -116,9 +116,11 @@ class ChatWindow(QDialog):
         follow_pet: bool = False,
         views=(),
         dark: bool = False,
+        pet_slot: int = 0,
     ) -> None:
         super().__init__(parent)
         self.character_id = str(character_id or "default")
+        self._pet_slot = max(0, int(pet_slot or 0))
         self._font_size = clamp_font_size(font_size)
         self._font_family = str(font_family or "").strip()
         self._dsh_client = dsh
@@ -840,7 +842,7 @@ class ChatWindow(QDialog):
         self.timeline_host = QWidget()
         self.timeline_host.setObjectName("message-timeline")
         self.message_host_layout = QVBoxLayout(self.timeline_host)
-        self.message_horizontal_margin = 76
+        self.message_horizontal_margin = 44
         self.message_host_layout.setContentsMargins(
             self.message_horizontal_margin, 30, self.message_horizontal_margin, 30
         )
@@ -875,7 +877,7 @@ class ChatWindow(QDialog):
         )
         composer_card_layout = QVBoxLayout(self.composer_card)
         self.composer_card_layout = composer_card_layout
-        composer_card_layout.setContentsMargins(76, 8, 76, 20)
+        composer_card_layout.setContentsMargins(44, 8, 44, 20)
         self.composer = ChatComposer(self.composer_card)
         self.composer.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
@@ -1004,6 +1006,15 @@ class ChatWindow(QDialog):
             widget = spec.factory()
         except Exception:  # noqa: BLE001 - 扩展崩溃隔离在这一个槽位里
             logger.warning("chat view %s factory failed", view_id, exc_info=True)
+        if isinstance(widget, QWidget):
+            setter = getattr(widget, "set_pet_slot", None)
+            if callable(setter):
+                try:
+                    setter(int(self._pet_slot))
+                except Exception:  # noqa: BLE001 - 槽位注入失败不影响视图加载
+                    logger.warning(
+                        "chat view %s set_pet_slot failed", view_id, exc_info=True
+                    )
         if not isinstance(widget, QWidget):
             if widget is not None:
                 logger.warning(
@@ -1712,13 +1723,12 @@ class ChatWindow(QDialog):
             320,
             self.scroll.viewport().width() - 2 * self.message_horizontal_margin,
         )
+        user_cap = max(240, int(available * 0.86))
         for bubble in self._bubbles:
             if bubble.role == "assistant":
-                bubble.setMinimumWidth(available)
-                bubble.setMaximumWidth(available)
+                bubble.setFixedWidth(available)
             else:
-                bubble.setMinimumWidth(0)
-                bubble.setMaximumWidth(max(220, int(available * 0.66)))
+                bubble.setFixedWidth(bubble.preferred_width(user_cap))
 
     # ---------------------------------------------------------------- 滚动
     def _is_near_bottom(self, threshold: int = 24) -> bool:
@@ -1774,11 +1784,11 @@ class ChatWindow(QDialog):
         if not hasattr(self, "composer_card_layout"):
             return
         self._update_responsive_layout()
-        margin = 20 if self._compact_layout else 76
+        margin = 12 if self._compact_layout else 44
         self.composer_card_layout.setContentsMargins(
             margin, 7, margin, 14 if self._compact_layout else 20
         )
-        self.message_horizontal_margin = 22 if self._compact_layout else 76
+        self.message_horizontal_margin = 12 if self._compact_layout else 44
         self.message_host_layout.setContentsMargins(
             self.message_horizontal_margin, 24, self.message_horizontal_margin, 24
         )

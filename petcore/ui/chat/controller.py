@@ -839,6 +839,7 @@ class ChatController(QObject):
             follow_pet=bool(self._config_get("chat_follow_pet", False)),
             views=self._chat_views(),
             dark=bool(self._config_get("chat_dark_mode", False)),
+            pet_slot=state.slot,
         )
         window.submitted.connect(lambda text, s=key: self._on_submit(s, text))
         window.stop_requested.connect(lambda s=key: self._on_stop(s))

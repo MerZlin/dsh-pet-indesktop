@@ -367,6 +367,7 @@ def test_definition_exposes_three_commands_and_a_settings_page(tmp_path: Path) -
     assert definition.owner == "ai.chat"
     assert [item.kind for item in definition.contributions] == [
         "settings_page",
+        "chat_view",
         "menu",
         "menu",
         "menu",

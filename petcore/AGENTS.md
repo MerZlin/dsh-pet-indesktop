@@ -773,9 +773,25 @@
   AI/DSH/QQ 三组 + 日期分节渲染；`ai` 通道继续走 `on_submit(owner,cb)`，`dsh/qq` 走
   `register_channel`，不要为 DSH/QQ 在 UI 里写死分支。
 - **记忆单写者**：所有通道只 append `interop/memory/<character>/inbox.jsonl`；只有
-  `MemoryStore.ingest/maintain` 改 `card.json`；全量 `archive.jsonl` 永不进提示词；旧
-  `feature-data/ai.chat/memory` 只做一次性导入（标记幂等），旧文件不删不改。记忆渲染必须
-  按分区 priority + 字数预算裁剪。
+  `MemoryStore.ingest/maintain`、用户显式编辑/删除/整理、外部镜像 `apply_external` 改
+  `card.json`，且后三者都经 core `MemoryService`（同一把 RLock）。全量 `archive.jsonl`
+  永不进提示词；删除/覆盖只写 `superseded_by` 并留归档，可恢复。旧
+  `feature-data/ai.chat/memory` 只做一次性导入（标记幂等），旧文件不删不改。
+- **记忆渲染按相关度，不按分区优先级截断**：候选分数 = bigram 相关度 + 30 天半衰新近度 +
+  重要度 + pin/first + 召回次数；`limit` 是 top-K 条数（`ai_memory_inject`），选完才按
+  `最初/锚点/和主人/桌宠/DSH/QQ/最近/模糊` 排版，超预算先丢最低分。问句降权，
+  `kind="reply"`（助手自述）与 `superseded_by` 非空条目永不进提示词。
+- **记忆可见性矩阵**：`shared` 永远可见；`ai_memory_share_channels=True`（默认）时
+  `pet`（AI）与 `dsh`（DSH）互见，`qq` 仍只与 `shared` 互通；关掉退回严格 scope。
+  不要再用 `{shared, scope}` 的旧两元组。
+- **外部记忆只读**：`petcore/interop/external_memory.py` 只读
+  `<data_root>/memory/facts.jsonl`（dsh.memory）与 `<workspace>/.dsh-meow/memory.db`
+  （meow-memory）；`MemoryService` 在单线程 worker 同步（`ai_memory_import_dsh`），
+  绝不写回源文件/DB，删除镜像=静音 origin。外部条目带 `origin`、`scope=dsh`，记忆页只读。
+- **记忆页是 chat_view**：`ai.chat` 的 `memory` 视图经 `Contribution(kind="chat_view")` +
+  `view_factories` 注册；`ChatWindow` 把 `pet_slot` 通过 `set_pet_slot` 注入视图，禁止
+  视图自己猜主宠。设置页只保留两个开关的**唯一所有权行**（`ai_memory_share_channels` /
+  `ai_memory_import_dsh`），记忆页只显示状态与执行命令。
 - **DSH v2 单插件**：`integrations/dsh-pet-bridge` 同时写状态 JSONL 与 HTTP+SSE；不要恢复
   `dsh-pet-channel`。SSE 必须给 `id:/since/Last-Event-ID` 重放、`bootId`、`turnId/step/toolCallId`；
   **历史只放行 `source.kind=user`**（DSH 每轮注入 `runtime-context`/`skill-catalog`/

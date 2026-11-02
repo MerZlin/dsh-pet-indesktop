@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 
 from petcore.interop.memory import (
+    MemoryCard,
+    MemoryEntry,
     MemoryStore,
     extract_emotion,
     redact,
@@ -153,3 +155,253 @@ def test_shared_scope_is_visible_from_all_channels(tmp_path: Path) -> None:
     store.ingest()
     assert "主人喜欢鲸鱼" in store.render("pet", max_chars=2000)
     assert "主人喜欢鲸鱼" in store.render("qq", max_chars=2000)
+
+
+def _remember(
+    store: MemoryStore,
+    text: str,
+    *,
+    scope: str = "pet",
+    platform: str = "pet",
+    importance: int | None = None,
+    kind: str | None = None,
+    at: float | None = None,
+) -> None:
+    record = {
+        "at": float(at if at is not None else time.time()),
+        "platform": platform,
+        "scope": scope,
+        "sender": "主人",
+        "sender_id": "owner",
+        "text": text,
+        "is_owner": True,
+        "direct": True,
+    }
+    if importance is not None:
+        record["importance"] = importance
+    if kind is not None:
+        record["kind"] = kind
+    store.append_inbox(record)
+
+
+def test_render_uses_query_relevance_within_top_k(tmp_path: Path) -> None:
+    """真实卡形状：旧的高重要度事实不能把「星期四上课」挤出 top-3。"""
+    store = MemoryStore(tmp_path, "m")
+    now = time.time()
+    for index in range(8):
+        _remember(
+            store,
+            f"主人喜欢第{index}种收藏品",
+            importance=90,
+            at=now - 60 * 86400,
+        )
+    _remember(store, "我喜欢鲸鱼", importance=85, at=now - 2 * 86400)
+    _remember(store, "我星期三不上课，改为星期四上课了", importance=58, at=now)
+    store.ingest()
+    card = store.load_card()
+    for entry in card.entries:
+        if entry.text == "我喜欢鲸鱼":
+            entry.pinned = True
+    store.save_card(card)
+
+    text = store.render("pet", query="我星期几上课啊", max_chars=2200, max_entries=3)
+    assert "星期四上课" in text
+    assert len([line for line in text.splitlines() if line.startswith("- ")]) <= 3
+
+
+def test_render_shares_owner_channels_but_keeps_qq_isolated(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path, "m")
+    _remember(store, "AI 里说的事实", scope="pet", platform="pet", importance=80)
+    _remember(store, "DSH 里说的事实", scope="dsh", platform="dsh", importance=80)
+    _remember(store, "QQ 群里说的事实", scope="qq", platform="qq", importance=80)
+    _remember(store, "全局事实", scope="shared", platform="pet", importance=80)
+    store.ingest()
+
+    pet = store.render("pet", max_chars=2000)
+    assert "AI 里说的事实" in pet
+    assert "DSH 里说的事实" in pet
+    assert "全局事实" in pet
+    assert "QQ 群里说的事实" not in pet
+
+    dsh = store.render("dsh", max_chars=2000)
+    assert "DSH 里说的事实" in dsh
+    assert "AI 里说的事实" in dsh
+    assert "QQ 群里说的事实" not in dsh
+
+    qq = store.render("qq", max_chars=2000)
+    assert "QQ 群里说的事实" in qq
+    assert "全局事实" in qq
+    assert "AI 里说的事实" not in qq
+    assert "DSH 里说的事实" not in qq
+
+    strict = store.render("pet", max_chars=2000, share_channels=False)
+    assert "AI 里说的事实" in strict
+    assert "DSH 里说的事实" not in strict
+
+
+def test_render_skips_assistant_replies_and_superseded_entries(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path, "m")
+    _remember(store, "主人喜欢红茶", importance=80)
+    _remember(store, "我记住啦，主人喜欢红茶喵。", kind="reply", importance=100)
+    store.ingest()
+    card = store.load_card()
+    for entry in card.entries:
+        if entry.text.startswith("我记住啦"):
+            entry.kind = "reply"
+        elif entry.text == "主人喜欢红茶":
+            entry.superseded_by = "newer"
+    store.save_card(card)
+
+    text = store.render("pet", max_chars=2000)
+    assert "主人喜欢红茶" not in text
+    assert "我记住啦" not in text
+
+
+def test_duplicate_fact_across_days_merges_instead_of_appending(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path, "m")
+    day = 86400.0
+    _remember(store, "我喜欢红茶", importance=70, at=time.time() - day)
+    store.ingest()
+    _remember(store, "我喜欢红茶", importance=80, at=time.time())
+    added = store.ingest()
+    assert added == 0
+    entries = store.entries()
+    assert len(entries) == 1
+    assert entries[0].importance == 80
+    assert entries[0].recall_count >= 1
+
+
+def test_correction_supersedes_the_old_fact(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path, "m")
+    now = time.time()
+    _remember(store, "我星期三上课", importance=58, at=now - 60)
+    store.ingest()
+    _remember(store, "我星期三不上课，改为星期四上课了", importance=58, at=now)
+    store.ingest()
+
+    active = store.entries()
+    assert [item.text for item in active] == ["我星期三不上课，改为星期四上课了"]
+    superseded = store.entries(include_superseded=True)
+    old = next(item for item in superseded if item.text == "我星期三上课")
+    assert old.superseded_by
+    text = store.render("pet", query="我星期几上课", max_chars=2000, max_entries=3)
+    assert "星期四上课" in text
+    assert "\n- 我星期三上课\n" not in text
+
+
+def test_edit_delete_restore_round_trip(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path, "m")
+    _remember(store, "我喜欢红茶", importance=60)
+    store.ingest()
+    entry = store.entries()[0]
+
+    assert store.update_entry(
+        entry.id, text="我喜欢乌龙茶", importance=90, pinned=True, scope="shared"
+    )
+    updated = store.find_entry(entry.id)
+    assert updated is not None
+    assert updated.text == "我喜欢乌龙茶"
+    assert updated.importance == 90
+    assert updated.pinned is True
+    assert updated.scope == "shared"
+    assert "乌龙茶" in store.render("pet", max_chars=2000)
+
+    assert store.delete_entry(entry.id) is True
+    assert store.entries() == []
+    deleted = store.find_entry(entry.id)
+    assert deleted is not None and deleted.superseded_by == "deleted"
+    assert store.entries(include_superseded=True)
+
+    assert store.restore_entry(entry.id) is True
+    restored = store.find_entry(entry.id)
+    assert restored is not None and restored.superseded_by == ""
+    assert "乌龙茶" in store.render("pet", max_chars=2000)
+
+
+def test_tidy_merges_duplicates_and_is_idempotent(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path, "m")
+    now = time.time()
+    card = MemoryCard(
+        entries=[
+            MemoryEntry(
+                id="old",
+                text="我星期三上课",
+                importance=58,
+                created_at=now - 120,
+            ),
+            MemoryEntry(
+                id="new",
+                text="我星期三不上课，改为星期四上课了",
+                importance=58,
+                created_at=now - 60,
+            ),
+            MemoryEntry(
+                id="dup-a",
+                text="主人喜欢红茶",
+                importance=70,
+                created_at=now - 30,
+            ),
+            MemoryEntry(
+                id="dup-b",
+                text="主人喜欢红茶",
+                importance=80,
+                created_at=now - 10,
+            ),
+        ]
+    )
+    store.save_card(card)
+
+    result = store.tidy()
+    assert result["superseded"] == 1
+    assert result["merged"] == 1
+    assert store.find_entry("old").superseded_by == "new"
+    assert store.find_entry("dup-a").superseded_by == "dup-b"
+    assert store.tidy()["merged"] == 0
+    assert store.tidy()["superseded"] == 0
+
+
+def test_remember_can_add_a_pinned_entry(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path, "m")
+    store.append_inbox(
+        {
+            "at": time.time(),
+            "platform": "pet",
+            "sender": "主人",
+            "text": "这是置顶事实",
+            "is_owner": True,
+            "pinned": True,
+            "importance": 90,
+        }
+    )
+    store.ingest()
+    entry = store.entries()[0]
+    assert entry.pinned is True
+    assert "这是置顶事实" in store.render("pet", max_chars=2000, max_entries=1)
+
+
+def test_tidy_does_not_merge_template_facts_with_correction_words(
+    tmp_path: Path,
+) -> None:
+    """模板相同、只有编号不同的事实不能因为「改成」被误合并。"""
+    store = MemoryStore(tmp_path, "m")
+    now = time.time()
+    store.save_card(
+        MemoryCard(
+            entries=[
+                MemoryEntry(
+                    id="a",
+                    text="第2条：主人喜欢第2种收藏品，改成星期四了",
+                    created_at=now - 10,
+                ),
+                MemoryEntry(
+                    id="b",
+                    text="第3条：主人喜欢第3种收藏品，改成星期四了",
+                    created_at=now,
+                ),
+            ]
+        )
+    )
+    result = store.tidy()
+    assert result["superseded"] == 0
+    assert store.find_entry("a").superseded_by == ""
+    assert store.find_entry("b").superseded_by == ""

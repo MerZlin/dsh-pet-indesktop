@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from petcore.chat.session_store import ChatSession
 from petcore.config import Config
+from petcore.contracts.contributions import ChatViewSpec
 from petcore.ui.chat import ChatController, themes
 from petcore.ui.chat.window import ChatWindow, FOLLOW_GAP, GROUP_ROLE
 
@@ -940,3 +941,74 @@ def test_open_from_worker_thread_defers_to_the_gui_thread(app, controller) -> No
     window = controller.window_for("ai.chat")
     assert window is not None
     assert window.isVisible() is True
+
+
+def _settle(app) -> None:
+    for _ in range(4):
+        app.processEvents()
+
+
+def test_user_bubble_uses_the_wide_column_for_long_messages(app) -> None:
+    window = ChatWindow(title="bubble", character_id="shenshen")
+    window.resize(1180, 700)
+    window.show()
+    _settle(app)
+    try:
+        text = "我在其他几个对话说了啊，不记得我什么时候上课了吗？" * 3
+        bubble = window._add_bubble("user", text)
+        _settle(app)
+        available = window.scroll.viewport().width() - 2 * window.message_horizontal_margin
+        cap = max(240, int(available * 0.86))
+        assert bubble.width() >= cap - 4
+        assert bubble.body.width() >= cap - 30
+        # 同样的文字在旧实现里只剩约 120px 的正文宽（一行十来个字）。
+        assert bubble.body.width() > 400
+    finally:
+        window.close()
+        _settle(app)
+
+
+def test_short_user_bubble_stays_compact_and_assistant_fills_the_column(app) -> None:
+    window = ChatWindow(title="bubble", character_id="shenshen")
+    window.resize(1180, 700)
+    window.show()
+    _settle(app)
+    try:
+        short = window._add_bubble("user", "好")
+        assistant = window._add_bubble("assistant", "很长的回复" * 30)
+        _settle(app)
+        available = window.scroll.viewport().width() - 2 * window.message_horizontal_margin
+        assert short.width() < available * 0.5
+        assert assistant.width() >= available - 4
+    finally:
+        window.close()
+        _settle(app)
+
+
+def test_chat_view_receives_the_window_pet_slot(app) -> None:
+    class Probe(QWidget):
+        def __init__(self) -> None:
+            super().__init__()
+            self.slot = None
+
+        def set_pet_slot(self, slot) -> None:
+            self.slot = int(slot)
+
+    probe = Probe()
+    spec = ChatViewSpec(
+        id="ai.chat:memory",
+        owner="ai.chat",
+        view_id="memory",
+        label="记忆",
+        factory=lambda: probe,
+    )
+    window = ChatWindow(title="views", views=[spec], pet_slot=2)
+    window.show()
+    _settle(app)
+    try:
+        assert window.show_view("ai.chat:memory") is True
+        _settle(app)
+        assert probe.slot == 2
+    finally:
+        window.close()
+        _settle(app)

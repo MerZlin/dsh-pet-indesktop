@@ -13,11 +13,13 @@
 from __future__ import annotations
 
 import datetime as _dt
+import functools
 import hashlib
 import json
 import os
 import re
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +60,20 @@ _FIRST_WORDS = ("第一次", "最初", "最早", "刚开始", "初次")
 _PROMISE_WORDS = ("答应", "约定", "说好", "保证", "下次", "以后")
 _CONFLICT_WORDS = ("对不起", "抱歉", "吵架", "冲突", "误会", "冷战")
 _SELF_WORDS = ("你", "桌宠", "鲸鱼", "小家伙")
+_QUESTION_WORDS = (
+    "吗",
+    "呢",
+    "几",
+    "什么",
+    "谁",
+    "哪",
+    "怎么",
+    "为什么",
+    "多少",
+    "多久",
+    "是不是",
+    "有没有",
+)
 
 
 @dataclass
@@ -75,9 +91,12 @@ class MemoryEntry:
     clarity: str = "vivid"
     created_at: float = 0.0
     last_seen_at: float = 0.0
+    updated_at: float = 0.0
     decay_steps: int = 0
     recall_count: int = 0
     first: bool = False
+    superseded_by: str = ""
+    origin: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -94,9 +113,12 @@ class MemoryEntry:
             "clarity": self.clarity if self.clarity in CLARITY_LEVELS else "vivid",
             "created_at": float(self.created_at or 0.0),
             "last_seen_at": float(self.last_seen_at or 0.0),
+            "updated_at": float(self.updated_at or 0.0),
             "decay_steps": int(self.decay_steps or 0),
             "recall_count": int(self.recall_count or 0),
             "first": bool(self.first),
+            "superseded_by": str(self.superseded_by or ""),
+            "origin": str(self.origin or ""),
         }
 
     @classmethod
@@ -121,9 +143,12 @@ class MemoryEntry:
             clarity=clarity if clarity in CLARITY_LEVELS else "vivid",
             created_at=float(raw.get("created_at") or 0.0),
             last_seen_at=float(raw.get("last_seen_at") or 0.0),
+            updated_at=float(raw.get("updated_at") or 0.0),
             decay_steps=int(raw.get("decay_steps") or 0),
             recall_count=int(raw.get("recall_count") or 0),
             first=bool(raw.get("first")),
+            superseded_by=str(raw.get("superseded_by") or "")[:64],
+            origin=str(raw.get("origin") or "")[:200],
         )
 
 
@@ -256,6 +281,76 @@ def _day_of(timestamp: float) -> str:
     return _dt.datetime.fromtimestamp(float(timestamp or time.time())).date().isoformat()
 
 
+def _locked(method):
+    """把读写卡的方法串行化：GUI 召回、ingest、后台外部同步共用一把 RLock。"""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
+_NORMALIZE_DROP = (
+    " \t\r\n\u3000，。！？；：、,.!?;:'\"“”‘’（）()【】[]{}<>…—-_/\\|+*="
+)
+_NORMALIZE_TABLE = str.maketrans("", "", _NORMALIZE_DROP)
+
+
+def normalize_text(text: object) -> str:
+    """去空白/标点/大小写，用于重复与更正判定（不是写盘格式）。
+
+    用 ``str.translate`` 而不是正则：这条路径在每轮 ingest 里会对整张卡
+    跑一遍，C 级查表比 500 条 × ``re.sub`` 快一个量级。
+    """
+    return str(text or "").lower().translate(_NORMALIZE_TABLE)
+
+
+_CORRECTION_RE = re.compile(
+    r"(改(?:成|为|到)|换(?:成|为)|更正|记错|说错|不再|取消|以后不|现在起|更新一下)"
+)
+
+
+def _is_correction(text: object) -> bool:
+    return bool(_CORRECTION_RE.search(str(text or "")))
+
+
+def _longest_common_substring(left: str, right: str) -> int:
+    if not left or not right:
+        return 0
+    previous = [0] * (len(right) + 1)
+    best = 0
+    for char in left:
+        current = [0] * (len(right) + 1)
+        for index, other in enumerate(right, 1):
+            if char == other:
+                length = previous[index - 1] + 1
+                current[index] = length
+                if length > best:
+                    best = length
+        previous = current
+    return best
+
+
+def _correction_matches(old_text: object, new_text: object) -> bool:
+    """更正只覆盖「明显是同一件事」的旧条目。
+
+    只用 Dice 相似度会把模板相同的不同事实误合并（实测 500 条合成卡会误标 449 条）；
+    这里要求新旧文本的最长公共子串 ≥ 4 且覆盖旧文本的 60%：
+    「我星期三上课」→「我星期三不上课，改为星期四上课了」命中；「第2条…」→「第3条…」不命中。
+    只比较前 80 个规范化字符，避免长文本的 O(n×m) 退化成每轮几百万次比较。
+    """
+    old_norm = normalize_text(old_text)[:80]
+    new_norm = normalize_text(new_text)[:80]
+    if len(old_norm) < 4 or not new_norm:
+        return False
+    if old_norm in new_norm:
+        return True
+    common = _longest_common_substring(old_norm, new_norm)
+    return common >= 4 and common / len(old_norm) >= 0.6
+
+
 class MemoryStore:
     """单个角色的记忆卡；所有写操作都经过本对象（单写者）。"""
 
@@ -268,7 +363,9 @@ class MemoryStore:
         self.card_path = self.directory / "card.json"
         self.archive_path = self.directory / "archive.jsonl"
         self.seen_path = self.directory / "seen.json"
+        self.external_path = self.directory / "external.json"
         self.max_entries = max(50, int(max_entries))
+        self._lock = threading.RLock()
 
     # ---------------------------------------------------------------- 卡
 
@@ -279,6 +376,7 @@ class MemoryStore:
             return MemoryCard(character=self.character)
         return MemoryCard.from_dict(raw, character=self.character)
 
+    @_locked
     def save_card(self, card: MemoryCard) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
         card.character = self.character
@@ -300,6 +398,7 @@ class MemoryStore:
 
     # ---------------------------------------------------------------- inbox
 
+    @_locked
     def append_inbox(self, record: dict) -> None:
         """跨进程唯一写入口：只追加一行，不做读改写。"""
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -318,6 +417,7 @@ class MemoryStore:
             "importance": record.get("importance"),
             "source": str(record.get("source") or "")[:32],
             "scope": str(record.get("scope") or "")[:16],
+            "pinned": bool(record.get("pinned")),
         }
         if not payload["text"]:
             return
@@ -390,6 +490,7 @@ class MemoryStore:
         lines = chunk.decode("utf-8", errors="replace").splitlines()
         return lines, offset + len(chunk)
 
+    @_locked
     def ingest(self, *, now: float | None = None) -> int:
         """把 inbox 的新行并入卡；返回新增条数。"""
         card = self.load_card()
@@ -397,6 +498,7 @@ class MemoryStore:
             return 0
         seen = self._load_seen()
         added = 0
+        changed = 0
         try:
             lines, next_offset = self._read_new_lines()
         except OSError:
@@ -430,6 +532,53 @@ class MemoryStore:
             except (TypeError, ValueError):
                 pass
             platform = str(record.get("platform") or "pet")
+            created_at = float(record.get("at") or time.time())
+            normalized = normalize_text(text)
+            duplicate = next(
+                (
+                    item
+                    for item in card.entries
+                    if not item.superseded_by
+                    and item.kind != "reply"
+                    and not item.origin
+                    and normalize_text(item.text) == normalized
+                ),
+                None,
+            )
+            if duplicate is not None:
+                duplicate.last_seen_at = float(now or time.time())
+                duplicate.recall_count = int(duplicate.recall_count) + 1
+                duplicate.importance = max(int(duplicate.importance), score)
+                duplicate.updated_at = float(now or time.time())
+                if bool(record.get("pinned")):
+                    duplicate.pinned = True
+                if str(record.get("scope") or "") == "shared":
+                    duplicate.scope = "shared"
+                if len(text) > len(duplicate.text):
+                    duplicate.text = text
+                    duplicate.title = text[:MAX_TITLE]
+                changed += 1
+                continue
+            is_reply = str(record.get("kind") or "") == "reply"
+            if (
+                not is_reply
+                and bool(record.get("is_owner"))
+                and not _looks_like_question(text)
+                and _is_correction(text)
+            ):
+                for old in card.entries:
+                    if (
+                        old.id == key
+                        or old.superseded_by
+                        or old.kind == "reply"
+                        or old.origin
+                        or not old.text
+                    ):
+                        continue
+                    if _correction_matches(old.text, text):
+                        old.superseded_by = key
+                        old.updated_at = float(now or time.time())
+                        changed += 1
             entry = MemoryEntry(
                 id=key,
                 source=str(record.get("source") or platform),
@@ -444,10 +593,11 @@ class MemoryStore:
                 text=text,
                 importance=score,
                 emotional=extract_emotion(text),
-                pinned=first,
+                pinned=first or bool(record.get("pinned")),
                 clarity="vivid",
-                created_at=float(record.get("at") or time.time()),
+                created_at=created_at,
                 last_seen_at=float(now or time.time()),
+                updated_at=created_at,
                 first=first,
             )
             card.entries.append(entry)
@@ -458,9 +608,10 @@ class MemoryStore:
                     "entry_id": entry.id,
                 }
             added += 1
-        if added:
+        if added or changed:
             self._compact(card)
             self.save_card(card)
+        if lines:
             self._save_seen(seen)
         self._save_offset(next_offset)
         return added
@@ -486,6 +637,7 @@ class MemoryStore:
                     stream.write(json.dumps(item.as_dict(), ensure_ascii=False) + "\n")
         card.entries = keep
 
+    @_locked
     def apply_decay(self, *, days: int = 1, now: float | None = None) -> int:
         card = self.load_card()
         current = float(now or time.time())
@@ -509,6 +661,7 @@ class MemoryStore:
             self.save_card(card)
         return changed
 
+    @_locked
     def maintain(self) -> dict:
         added = self.ingest()
         decayed = self.apply_decay()
@@ -521,19 +674,30 @@ class MemoryStore:
 
     # ---------------------------------------------------------------- 查询/渲染
 
-    def recall(self, query: str = "", *, scope: str = "pet", limit: int = 3) -> list[MemoryEntry]:
+    @_locked
+    def recall(
+        self,
+        query: str = "",
+        *,
+        scope: str = "pet",
+        limit: int = 3,
+        share_channels: bool = True,
+    ) -> list[MemoryEntry]:
         card = self.load_card()
-        allowed = {"shared", scope if scope in SCOPES else "pet"}
-        entries = [item for item in card.entries if item.scope in allowed]
+        allowed = _visible_scopes(scope, share_channels=share_channels)
+        entries = [
+            item
+            for item in card.entries
+            if item.scope in allowed
+            and not item.superseded_by
+            and item.kind != "reply"
+        ]
         terms = _terms(query)
+        now = time.time()
+
         def rank(item: MemoryEntry):
-            overlap = sum(1 for term in terms if term and term in item.text)
-            return (
-                overlap * 20
-                + (60 if item.first else 0)
-                + int(item.importance)
-                + min(12, int(item.recall_count) * 2)
-            )
+            return _entry_score(item, terms, query, now)
+
         entries.sort(key=rank, reverse=True)
         result = entries[: max(1, int(limit))]
         for item in result:
@@ -550,51 +714,24 @@ class MemoryStore:
         query: str = "",
         max_chars: int = 2200,
         max_entries: int = 0,
+        share_channels: bool = True,
     ) -> str:
         card = self.load_card()
-        allowed = {"shared", scope if scope in SCOPES else "pet"}
-        entries = [item for item in card.entries if item.scope in allowed]
+        allowed = _visible_scopes(scope, share_channels=share_channels)
+        now = time.time()
         terms = _terms(query)
-        if terms:
-            entries.sort(
-                key=lambda item: sum(1 for term in terms if term in item.text),
-                reverse=True,
-            )
-        sections = _sections(entries)
-        lines: list[str] = []
-        header = "长期记忆（供参考；不要逐条复述，除非与问题直接相关）："
-        budget = max(400, int(max_chars))
-        used = len(header)
-        used_ids: set[str] = set()
-        total_chosen = 0
-        # 低优先级先裁：先按 section 顺序尝试，放不下就跳过。
-        for title, items, per_section in sections:
-            if max_entries and total_chosen >= int(max_entries):
-                break
-            items = [item for item in items if item.id not in used_ids]
-            if not items:
-                continue
-            chosen: list[str] = []
-            for item in items:
-                if item.id in used_ids:
-                    continue
-                if max_entries and total_chosen >= int(max_entries):
-                    break
-                line = f"- {item.text}"
-                if used + len(line) + 1 > budget:
-                    break
-                chosen.append(line)
-                used_ids.add(item.id)
-                used += len(line) + 1
-                total_chosen += 1
-                if len(chosen) >= per_section:
-                    break
-            if chosen:
-                block = f"\n【{title}】\n" + "\n".join(chosen)
-                if used + len(block) <= budget:
-                    lines.append(block)
-                    used += len(block)
-        text = header + "".join(lines) if lines else ""
+        candidates = [
+            item
+            for item in card.entries
+            if item.scope in allowed
+            and not item.superseded_by
+            and item.kind != "reply"
+        ]
+        scored = [(item, _entry_score(item, terms, query, now)) for item in candidates]
+        scored.sort(key=lambda pair: pair[1], reverse=True)
+        scores = {item.id: score for item, score in scored}
+        selected = _select_for_render([item for item, _ in scored], max_entries)
+        text = _compose_render(selected, scores, max_chars)
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             (self.directory / f"prompt-{scope}.md").write_text(text + "\n", encoding="utf-8")
@@ -610,12 +747,17 @@ class MemoryStore:
         return {
             "character": self.character,
             "entries": len(card.entries),
+            "active": sum(1 for item in card.entries if not item.superseded_by),
             "pinned": sum(1 for item in card.entries if item.pinned),
+            "superseded": sum(1 for item in card.entries if item.superseded_by),
+            "replies": sum(1 for item in card.entries if item.kind == "reply"),
+            "external": sum(1 for item in card.entries if item.origin),
             "first_met": bool(card.first_met),
             "clarity": counts,
             "path": str(self.directory),
         }
 
+    @_locked
     def clear(self, scope: str = "") -> int:
         card = self.load_card()
         before = len(card.entries)
@@ -630,8 +772,365 @@ class MemoryStore:
     def export(self) -> str:
         return json.dumps(self.load_card().as_dict(), ensure_ascii=False, indent=2)
 
+    # ---------------------------------------------------------------- 用户编辑
+
+    def _archive_entry(self, entry: MemoryEntry, reason: str) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        payload = entry.as_dict()
+        payload["reason"] = str(reason)
+        payload["archived_at"] = time.time()
+        try:
+            with self.archive_path.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+    def entries(
+        self,
+        *,
+        scope: str = "",
+        limit: int = 0,
+        include_superseded: bool = False,
+        include_replies: bool = False,
+    ) -> list[MemoryEntry]:
+        card = self.load_card()
+        items = list(card.entries)
+        if scope:
+            items = [item for item in items if item.scope == scope]
+        if not include_superseded:
+            items = [item for item in items if not item.superseded_by]
+        if not include_replies:
+            items = [item for item in items if item.kind != "reply"]
+        items.sort(
+            key=lambda item: (
+                bool(item.pinned),
+                int(item.importance),
+                float(item.updated_at or item.created_at or 0.0),
+            ),
+            reverse=True,
+        )
+        if limit:
+            items = items[: max(1, int(limit))]
+        return items
+
+    def find_entry(self, entry_id: str) -> MemoryEntry | None:
+        wanted = str(entry_id or "")
+        if not wanted:
+            return None
+        return next(
+            (item for item in self.load_card().entries if item.id == wanted), None
+        )
+
+    @_locked
+    def update_entry(
+        self,
+        entry_id: str,
+        *,
+        text: str | None = None,
+        importance: int | None = None,
+        pinned: bool | None = None,
+        scope: str | None = None,
+    ) -> bool:
+        card = self.load_card()
+        entry = next((item for item in card.entries if item.id == str(entry_id)), None)
+        if entry is None or entry.origin:
+            return False
+        changed = False
+        if text is not None:
+            value = redact(text)
+            if not value:
+                return False
+            if value != entry.text:
+                entry.text = value
+                entry.title = value[:MAX_TITLE]
+                changed = True
+        if importance is not None:
+            value = _clamp(int(importance), 1, 100)
+            if value != entry.importance:
+                entry.importance = value
+                changed = True
+        if pinned is not None and bool(pinned) != entry.pinned:
+            entry.pinned = bool(pinned)
+            changed = True
+        if scope is not None and scope in SCOPES and scope != entry.scope:
+            entry.scope = scope
+            changed = True
+        if not changed:
+            return True
+        entry.updated_at = time.time()
+        self.save_card(card)
+        return True
+
+    @_locked
+    def delete_entry(self, entry_id: str) -> bool:
+        card = self.load_card()
+        entry = next((item for item in card.entries if item.id == str(entry_id)), None)
+        if entry is None or entry.origin:
+            return False
+        if entry.superseded_by == "deleted":
+            return True
+        self._archive_entry(entry, "deleted")
+        entry.superseded_by = "deleted"
+        entry.updated_at = time.time()
+        self.save_card(card)
+        return True
+
+    @_locked
+    def restore_entry(self, entry_id: str) -> bool:
+        card = self.load_card()
+        entry = next((item for item in card.entries if item.id == str(entry_id)), None)
+        if entry is None or entry.origin:
+            return False
+        if not entry.superseded_by and entry.kind != "reply":
+            return True
+        entry.superseded_by = ""
+        if entry.kind == "reply":
+            entry.kind = "event"
+        entry.updated_at = time.time()
+        self.save_card(card)
+        return True
+
+    @_locked
+    def mark_replies(self, normalized_texts: set[str]) -> int:
+        if not normalized_texts:
+            return 0
+        card = self.load_card()
+        changed = 0
+        now = time.time()
+        for entry in card.entries:
+            if entry.kind == "reply" or entry.origin:
+                continue
+            if normalize_text(entry.text) in normalized_texts:
+                entry.kind = "reply"
+                entry.updated_at = now
+                changed += 1
+        if changed:
+            self.save_card(card)
+        return changed
+
+    @_locked
+    def tidy(self) -> dict:
+        """保守整理：合并重复、用更正覆盖旧事实；只标记不删除，可恢复。"""
+        card = self.load_card()
+        active: list[tuple[MemoryEntry, str]] = []
+        for item in card.entries:
+            if item.superseded_by or item.kind == "reply" or item.origin:
+                continue
+            normalized = normalize_text(item.text)
+            if normalized:
+                active.append((item, normalized))
+        active.sort(
+            key=lambda pair: (float(pair[0].created_at), float(pair[0].updated_at))
+        )
+        merged = 0
+        superseded = 0
+        for index, (new, new_norm) in enumerate(active):
+            if new.superseded_by:
+                continue
+            for old, old_norm in active[:index]:
+                if old.superseded_by or old.id == new.id:
+                    continue
+                if old_norm == new_norm:
+                    old.superseded_by = new.id
+                    merged += 1
+                    continue
+                if len(old_norm) >= 10 and old_norm in new_norm:
+                    old.superseded_by = new.id
+                    merged += 1
+                    continue
+                if _is_correction(new.text) and _correction_matches(
+                    old.text, new.text
+                ):
+                    old.superseded_by = new.id
+                    superseded += 1
+        if merged or superseded:
+            card.updated_at = time.time()
+            self.save_card(card)
+        return {
+            "merged": merged,
+            "superseded": superseded,
+            "entries": len(card.entries),
+        }
+
+    # ---------------------------------------------------------------- 外部镜像
+
+    def _load_external(self) -> dict:
+        try:
+            raw = json.loads(self.external_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        sources = raw.get("sources")
+        muted = raw.get("muted")
+        return {
+            "sources": sources if isinstance(sources, dict) else {},
+            "muted": (
+                [str(item) for item in muted if str(item)]
+                if isinstance(muted, list)
+                else []
+            ),
+        }
+
+    def _save_external(self, state: dict) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(state, ensure_ascii=False, indent=2) + "\n"
+        handle, temp_name = tempfile.mkstemp(
+            prefix="external.", suffix=".tmp", dir=str(self.directory)
+        )
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
+                stream.write(payload)
+            os.replace(temp_name, self.external_path)
+        except BaseException:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+            raise
+
+    def external_status(self) -> dict:
+        state = self._load_external()
+        card = self.load_card()
+        sources: list[dict] = []
+        for key, info in state["sources"].items():
+            if not isinstance(info, dict):
+                continue
+            prefix = f"{key}:"
+            count = sum(
+                1 for item in card.entries if item.origin.startswith(prefix)
+            )
+            sources.append(
+                {
+                    "key": str(key),
+                    "label": str(info.get("label") or key),
+                    "path": str(info.get("path") or ""),
+                    "status": str(info.get("status") or "unknown"),
+                    "reason": str(info.get("reason") or ""),
+                    "count": count,
+                    "last_sync": float(info.get("last_sync") or 0.0),
+                }
+            )
+        sources.sort(key=lambda item: item["label"])
+        return {"sources": sources, "muted": len(state["muted"])}
+
+    @_locked
+    def apply_external(
+        self,
+        source_key: str,
+        records: list[dict],
+        *,
+        status: str = "ok",
+        label: str = "",
+        path: str = "",
+        reason: str = "",
+    ) -> dict:
+        state = self._load_external()
+        muted = set(state["muted"])
+        card = self.load_card()
+        existing = {
+            item.origin: item for item in card.entries if item.origin
+        }
+        seen: set[str] = set()
+        added = updated = removed = 0
+        now = time.time()
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            origin = str(record.get("origin") or "")
+            text = redact(record.get("text") or "")
+            if not origin or not text:
+                continue
+            seen.add(origin)
+            if origin in muted:
+                continue
+            entry = existing.get(origin)
+            if entry is not None:
+                if entry.text != text:
+                    entry.text = text
+                    entry.title = text[:MAX_TITLE]
+                    entry.updated_at = now
+                    updated += 1
+                continue
+            normalized = normalize_text(text)
+            duplicate = next(
+                (
+                    item
+                    for item in card.entries
+                    if not item.origin
+                    and item.kind != "reply"
+                    and normalize_text(item.text) == normalized
+                ),
+                None,
+            )
+            if duplicate is not None:
+                continue
+            entry = MemoryEntry(
+                id=f"ext-{hashlib.sha1(origin.encode('utf-8')).hexdigest()[:16]}",
+                source=str(record.get("source") or source_key)[:32],
+                platform=str(record.get("platform") or "dsh")[:16],
+                scope=str(record.get("scope") or "dsh")[:16],
+                kind=str(record.get("kind") or "external")[:24],
+                title=text[:MAX_TITLE],
+                text=text,
+                importance=_clamp(int(record.get("importance") or 70), 1, 100),
+                clarity="vivid",
+                created_at=float(record.get("created_at") or now),
+                last_seen_at=now,
+                updated_at=now,
+                origin=origin,
+            )
+            card.entries.append(entry)
+            existing[origin] = entry
+            added += 1
+        if status == "ok":
+            prefix = f"{source_key}:"
+            keep: list[MemoryEntry] = []
+            for entry in card.entries:
+                if entry.origin.startswith(prefix) and entry.origin not in seen:
+                    self._archive_entry(entry, "external-removed")
+                    removed += 1
+                    continue
+                keep.append(entry)
+            card.entries = keep
+        info = state["sources"].get(source_key)
+        if not isinstance(info, dict):
+            info = {}
+        info.update(
+            {
+                "label": label or info.get("label") or source_key,
+                "path": path or info.get("path") or "",
+                "status": status,
+                "reason": reason,
+                "last_sync": now,
+            }
+        )
+        state["sources"][source_key] = info
+        if added or updated or removed:
+            self._compact(card)
+            self.save_card(card)
+        self._save_external(state)
+        return {"added": added, "updated": updated, "removed": removed, "count": len(seen)}
+
+    @_locked
+    def mute_external(self, entry_id: str) -> bool:
+        card = self.load_card()
+        entry = next((item for item in card.entries if item.id == str(entry_id)), None)
+        if entry is None or not entry.origin:
+            return False
+        state = self._load_external()
+        muted = set(state["muted"])
+        muted.add(entry.origin)
+        state["muted"] = sorted(muted)
+        self._archive_entry(entry, "muted")
+        card.entries = [item for item in card.entries if item.id != entry.id]
+        self.save_card(card)
+        self._save_external(state)
+        return True
+
     # ---------------------------------------------------------------- 迁移
 
+    @_locked
     def migrate_legacy(self, paths: list[Path], *, marker: Path) -> int:
         """把旧 AI 记忆 JSONL 导入；marker 存在则不再重复导入。"""
         if marker.is_file():
@@ -700,11 +1199,9 @@ def _terms(query: str) -> list[str]:
 
 
 def _sections(entries: list[MemoryEntry]):
-    """分区顺序 = 优先级从高到低；每区条数上限。"""
+    """分区顺序 = 排版顺序；条目顺序由调用方按相关度排好，这里不再重排。"""
     def pick(predicate):
-        items = [item for item in entries if predicate(item)]
-        items.sort(key=lambda item: (item.pinned, item.importance, item.last_seen_at), reverse=True)
-        return items
+        return [item for item in entries if predicate(item)]
     return [
         ("最初", pick(lambda item: item.first or item.kind == "first"), 1),
         ("锚点", pick(lambda item: item.pinned and not (item.first or item.kind == "first")), 5),
@@ -715,3 +1212,144 @@ def _sections(entries: list[MemoryEntry]):
         ("最近", pick(lambda item: not item.first and not item.pinned), 8),
         ("模糊", pick(lambda item: item.clarity in {"fuzzy", "trace"}), 4),
     ]
+
+
+def _visible_scopes(scope: str, *, share_channels: bool = True) -> set[str]:
+    """通道可见性矩阵。
+
+    - ``shared`` 永远可见；
+    - 主人私聊通道（AI / DSH）默认互见，避免「在 DSH 记得、在 AI 对话不记得」；
+    - ``qq`` 仍只与 ``shared`` 互通，不把私聊事实带进群。
+    """
+    base = scope if scope in SCOPES else "pet"
+    if base == "shared":
+        return {"shared"}
+    if not share_channels:
+        return {"shared", base}
+    if base in {"pet", "dsh"}:
+        return {"shared", "pet", "dsh"}
+    return {"shared", "qq"}
+
+
+def _looks_like_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if value.endswith(("？", "?")):
+        return True
+    return len(value) <= 40 and any(word in value for word in _QUESTION_WORDS)
+
+
+def _entry_score(
+    entry: MemoryEntry,
+    terms: list[str],
+    query: str,
+    now: float,
+) -> float:
+    """相关度优先的混合打分：字面 + 新近 + 重要度 + 置顶/首次 + 召回次数。
+
+    旧实现按固定分区选前 N 条，普通用户事实（重要度 58，落在「桌宠」区）
+    永远输给置顶/高重要度旧条目；这里让查询相关度真正参与选择。
+    """
+    text = entry.text
+    relevance = 0.0
+    if terms:
+        hits = sum(1 for term in terms if term and term in text)
+        relevance = hits / max(1, len(terms))
+        if query and query in text:
+            relevance = min(1.0, relevance + 0.25)
+    # 问句不是事实：它和当前问题字面最像，却会把「星期四上课」挤掉。
+    if _looks_like_question(text):
+        relevance *= 0.35
+    age_days = max(0.0, (now - float(entry.created_at or now)) / 86400.0)
+    recency = 0.5 ** (age_days / 30.0)
+    importance = max(0, min(100, int(entry.importance))) / 100.0
+    return (
+        2.2 * relevance
+        + 0.9 * recency
+        + 0.7 * importance
+        + (0.25 if entry.pinned else 0.0)
+        + (0.35 if (entry.first or entry.kind == "first") else 0.0)
+        + min(5, int(entry.recall_count)) * 0.03
+    )
+
+
+def _select_for_render(ordered: list[MemoryEntry], max_entries: int) -> list[MemoryEntry]:
+    """按分数取 top-K；``first`` 在 K≥2 时保底一条，其余全部让位给相关度。"""
+    limit = int(max_entries or 0)
+    if limit <= 0:
+        return list(ordered)
+    chosen: list[MemoryEntry] = []
+    chosen_ids: set[str] = set()
+    first = next((item for item in ordered if item.first or item.kind == "first"), None)
+    if first is not None and limit >= 2:
+        chosen.append(first)
+        chosen_ids.add(first.id)
+    for item in ordered:
+        if len(chosen) >= limit:
+            break
+        if item.id in chosen_ids:
+            continue
+        chosen.append(item)
+        chosen_ids.add(item.id)
+    return chosen
+
+
+_MEMORY_HEADER = (
+    "长期记忆（供参考；不要逐条复述，除非与问题直接相关；"
+    "若与当前对话冲突，以当前说法为准）："
+)
+
+
+def _compose_render(
+    selected: list[MemoryEntry],
+    scores: dict[str, float],
+    max_chars: int,
+) -> str:
+    """按分区排版；超预算时先丢最低分的已输出条目，再重排。"""
+    budget = max(400, int(max_chars))
+    items = list(selected)
+    while items:
+        text, emitted = _render_sections(items, budget)
+        if len(text) <= budget:
+            return text
+        if not emitted:
+            return ""
+        drop = min(emitted, key=lambda item: scores.get(item.id, 0.0))
+        items = [item for item in items if item.id != drop.id]
+    return ""
+
+
+def _render_sections(
+    items: list[MemoryEntry], budget: int
+) -> tuple[str, list[MemoryEntry]]:
+    used = len(_MEMORY_HEADER) + 1
+    lines: list[str] = []
+    used_ids: set[str] = set()
+    emitted: list[MemoryEntry] = []
+    for title, group, per_section in _sections(items):
+        chosen_items: list[MemoryEntry] = []
+        chosen_lines: list[str] = []
+        for item in group:
+            if item.id in used_ids:
+                continue
+            line = f"- {item.text}"
+            if used + len(line) + 1 > budget:
+                break
+            chosen_items.append(item)
+            chosen_lines.append(line)
+            if len(chosen_items) >= per_section:
+                break
+        while chosen_lines:
+            block = f"\n【{title}】\n" + "\n".join(chosen_lines)
+            if used + len(block) <= budget:
+                lines.append(block)
+                used += len(block)
+                for item in chosen_items:
+                    used_ids.add(item.id)
+                    emitted.append(item)
+                break
+            chosen_lines.pop()
+            chosen_items.pop()
+    text = _MEMORY_HEADER + "".join(lines) if lines else ""
+    return text, emitted

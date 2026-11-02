@@ -111,6 +111,8 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "ai_memory_enabled",
         "ai_memory_inject",
         "ai_memory_max_entries",
+        "ai_memory_share_channels",
+        "ai_memory_import_dsh",
         "ai_web_search",
         "ai_web_engine",
         "ai_web_results",
@@ -312,6 +314,8 @@ DEFAULTS: dict[str, Any] = {
     "ai_memory_enabled": True,
     "ai_memory_inject": 3,
     "ai_memory_max_entries": 500,
+    "ai_memory_share_channels": True,
+    "ai_memory_import_dsh": True,
     "ai_web_search": False,
     "ai_web_engine": "baidu",
     "ai_web_results": 5,
@@ -1729,6 +1733,12 @@ class Config:
         )
         normalized["ai_memory_max_entries"] = int(
             round(_number(normalized.get("ai_memory_max_entries"), 500.0, 50.0, 2000.0))
+        )
+        normalized["ai_memory_share_channels"] = _bool(
+            normalized.get("ai_memory_share_channels"), True
+        )
+        normalized["ai_memory_import_dsh"] = _bool(
+            normalized.get("ai_memory_import_dsh"), True
         )
         normalized["ai_web_search"] = _bool(normalized.get("ai_web_search"), False)
         engine = str(normalized.get("ai_web_engine") or "baidu")

@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from petcore.ui.chat.themes import theme_names
 from petcore.ui.settings.base import SettingsPage, make_button, make_checkbox
 
+from .constants import OWNER
 from .persona_presets import (
     CUSTOM_PERSONA,
     DEFAULT_PERSONA,
@@ -64,6 +65,8 @@ class AiChatPage(SettingsPage):
         "ai_memory_enabled",
         "ai_memory_inject",
         "ai_memory_max_entries",
+        "ai_memory_share_channels",
+        "ai_memory_import_dsh",
         "ai_web_search",
         "ai_web_engine",
         "ai_web_results",
@@ -287,6 +290,26 @@ class AiChatPage(SettingsPage):
             self.memory_check,
             "用户说「记住…」时写入本机；每轮按问题检索 top-K 注入 system。",
         )
+        self.memory_share_check = make_checkbox(self)
+        self.memory_share_check.setChecked(
+            bool(self._initial.get("ai_memory_share_channels", True))
+        )
+        self.memory_share_check.toggled.connect(self._on_changed)
+        card_mem.add_row(
+            "AI 与 DSH 共享记忆",
+            self.memory_share_check,
+            "AI 对话和 DSH 对话互相可见对方记住的事；QQ 群聊仍隔离。",
+        )
+        self.memory_import_check = make_checkbox(self)
+        self.memory_import_check.setChecked(
+            bool(self._initial.get("ai_memory_import_dsh", True))
+        )
+        self.memory_import_check.toggled.connect(self._on_changed)
+        card_mem.add_row(
+            "同步 DSH 记忆",
+            self.memory_import_check,
+            "只读本机 dsh.memory 的事实与 meow-memory 的 .dsh-meow/memory.db；不会写回对方。",
+        )
         self.memory_inject = QSpinBox(self)
         self.memory_inject.setRange(1, 8)
         self.memory_inject.setSuffix(" 条")
@@ -295,7 +318,7 @@ class AiChatPage(SettingsPage):
         card_mem.add_row(
             "每轮注入",
             self.memory_inject,
-            "最多注入几条相关记忆；总预算 800 字。",
+            "最多注入几条相关记忆（按问题相关度挑选）；总预算 2200 字。",
         )
         self.memory_max = QSpinBox(self)
         self.memory_max.setRange(50, 2000)
@@ -307,14 +330,16 @@ class AiChatPage(SettingsPage):
         card_mem.add_row(
             "每域上限",
             self.memory_max,
-            "超出后按创建时间淘汰最旧条目；全局与当前角色各一份。",
+            "超出后按置顶 → 重要度 → 最近使用淘汰；每个角色一份。",
         )
         memory_buttons = [
+            make_button("管理记忆…", self),
             make_button("打开记忆目录", self),
             make_button("清空当前角色记忆", self),
         ]
-        memory_buttons[0].clicked.connect(self._open_memory_dir)
-        memory_buttons[1].clicked.connect(self._clear_memory)
+        memory_buttons[0].clicked.connect(self._open_memory_view)
+        memory_buttons[1].clicked.connect(self._open_memory_dir)
+        memory_buttons[2].clicked.connect(self._clear_memory)
         card_mem.add_buttons(memory_buttons)
         self.memory_status = QLabel("", self)
         self.memory_status.setObjectName("settingHint")
@@ -961,6 +986,12 @@ class AiChatPage(SettingsPage):
         config.set("ai_animation_min_seconds", float(self.anim_min_spin.value()))
         config.set("ai_voice_reply", bool(self.voice_reply_check.isChecked()))
         config.set("ai_memory_enabled", bool(self.memory_check.isChecked()))
+        config.set(
+            "ai_memory_share_channels", bool(self.memory_share_check.isChecked())
+        )
+        config.set(
+            "ai_memory_import_dsh", bool(self.memory_import_check.isChecked())
+        )
         config.set("ai_memory_inject", int(self.memory_inject.value()))
         config.set("ai_memory_max_entries", int(self.memory_max.value()))
         config.set("ai_web_search", bool(self.web_check.isChecked()))
@@ -1336,6 +1367,23 @@ class AiChatPage(SettingsPage):
         except OSError:
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
+
+    def _open_memory_view(self) -> None:
+        """从设置页跳到对话窗的「记忆」页；没有 host.chat 的环境静默跳过。"""
+        chat = getattr(self.host, "chat", None)
+        if chat is None:
+            return
+        opener = getattr(chat, "show_view", None)
+        fallback = getattr(chat, "open", None)
+        try:
+            if callable(opener) and opener(OWNER, "memory"):
+                return
+            if callable(fallback):
+                fallback(OWNER, pet_slot=0)
+            if callable(opener):
+                opener(OWNER, "memory")
+        except Exception:  # noqa: BLE001 - 设置页不该因打开窗口失败而报错
+            pass
 
     def _clear_memory(self) -> None:
         service = getattr(self.host, "memory", None)

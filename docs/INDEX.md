@@ -144,6 +144,8 @@
 
 ## PR 报告存档
 
+- [AI 对话：用户气泡宽度与跨会话记忆召回（2026-11-02）](PR-REPORT-AI-CHAT-MEMORY-RECALL-2026-11-02.md)：用户气泡从「只设 maxWidth 被压到 120px」改成按 `QFontMetrics` 显式定宽（66%→86%、边距 76→44）；记忆渲染改相关度优先 top-K（不再被固定分区截断）、问句降权、reply/superseded 排除、AI↔DSH 互见 + QQ 隔离；真实卡 `max_entries=3` 能取到「星期四上课」。**改 `petcore/ui/chat/` 气泡布局或 `interop/memory.py` 渲染前必读**。
+- [AI 对话：记忆管理页、只增不改修复与 DSH 外部记忆互通（2026-11-02）](PR-REPORT-AI-CHAT-MEMORY-MANAGER-2026-11-02.md)：`MemoryEntry` 增 `superseded_by/origin`、RLock、单条编辑/删除/恢复/整理；重复合并 + 更正覆盖；助手回复标 `reply`；新增对话窗「记忆」页与 `ai_memory_import_dsh`；只读 dsh.memory facts + meow-memory `.dsh-meow/memory.db`（SQLite `mode=ro`），worker 同步不阻塞 GUI。**改记忆单写者、记忆页、外部记忆同步或 DSH 记忆互通前必读**；meow-memory 真机未验证。
 - [DSH v2 真机联调（2026-10-31）](PR-REPORT-DSH-REAL-MACHINE-2026-10-31.md)：在真实 DSH 44.7.0 上补齐 v1→v2 迁移（旧 junction / patch `insert` / 旧 channel 链接三处）、历史只回放 `source.kind=user`（实测注入 10,292 字符）、审批指纹忽略 `description`（修重复弹卡）、`pet_control` 改标准 JSON Schema 并如实报 `commands`、`/pet/new` 清旧审批。**改 DSH 安装器、审批闸、历史过滤或 `pet_control` 前必读**；未验证项见报告末节。
 - [聊天/DSH 稳定性与启动/静息 CPU（2026-11-01）](PR-REPORT-CHAT-FIX-CPU-2026-11-01.md)：最大化按钮归位；ChatPort/PresentationPort 后台线程调用收口 GUI（旧 `dsh.channel` 审批 AppHang：旧包第 1 次采样必挂、新代码 90 次采样全响应）；DSH 历史 20 条/批重放 + 400ms 合并落盘；首跑供给等系统空闲 60s（2 clip 实测 63.5s/67.2 CPU-s/平均 6.62%）；闲置降帧默认开（受控待机 1.736%→0.873%）。**改聊天端口线程模型、DSH 审批/落盘、首跑供给或待机帧率前必读**。
 - [视图回切 / 数据与缓存目录可搬 / 致谢独立页 / 素材包仓库与应用内下载（2026-11-01）](PR-REPORT-STORAGE-THANKS-PACKS-2026-11-01.md)：再点当前视图按钮回 AI 对话；`location.json` 引导指针 + 数据/缓存目录搬迁（复制→校验→写指针→重启→删旧根，缓存根绑定数据根）；致谢升为侧边栏第 10 页并补 7 条鸣谢；`MerZlin/Animations` 仓库 + 应用内分段下载（进度/网速/取消/导入）。**改数据根解析、设置页「数据」卡片、致谢页或素材包下载链路前必读**。
@@ -416,7 +418,7 @@
 |---|---|---|
 | [`PETCORE-ARCHITECTURE.md`](PETCORE-ARCHITECTURE.md) | `petcore` 的分层、契约、启动路径、数据目录与 VPet 对应关系。 | 改 `petcore/` 任何模块、判断 core 与 mod 边界前必读；**先看架构图** [`PETCORE-ARCHITECTURE-MAP.html`](PETCORE-ARCHITECTURE-MAP.html) 可快速建立全局印象。 |
 | [`PETCORE-ARCHITECTURE-MAP.html`](PETCORE-ARCHITECTURE-MAP.html) | **单页架构地图（离线 HTML）**：分层总图、启动路径、插件流水线、10 个贡献类型的真实消费点、27 个 `HostPorts` 的注入状态、线程模型，以及「小游戏 mod 加新 UI/功能/数据」的可行性、三条 UI 路线、骨架与已知坑。 | 第一次向协作者/新同事解释 core-mod 边界、评估一个新 mod 该用哪种 UI 与数据方案、或需要一张能点开的全局图时打开；字段细节仍以 `PETCORE-MOD-FORMAT.md` 为准。 |
-| [`INTEROP-ARCHITECTURE.md`](INTEROP-ARCHITECTURE.md) | 桌宠 × DSH × QQ 互通的进程拓扑、通道契约、会话 schema 2、分层人格记忆、插件边界与未验证项（2026-10-31 基线）。 | 改 DSH 桥接/通道、QQ 互通、会话存储、记忆服务或 WebhookPort 前必读。 |
+| [`INTEROP-ARCHITECTURE.md`](INTEROP-ARCHITECTURE.md) | 桌宠 × DSH × QQ 互通的进程拓扑、通道契约、会话 schema 2、分层人格记忆（相关度渲染/可见性矩阵/外部只读镜像）、插件边界与未验证项（2026-11-02 基线）。 | 改 DSH 桥接/通道、QQ 互通、会话存储、记忆服务或 WebhookPort 前必读。 |
 | [`PETCORE-MOD-FORMAT.md`](PETCORE-MOD-FORMAT.md) | `mod.json` 字段、校验、发现/启停、安装与能力模型（**字段级参考**）。 | 新增/修改 mod 包、改加载器或安装流程前必读；**动手写一个 mod 先看 [PETCORE-MOD-DEVELOPMENT.md](PETCORE-MOD-DEVELOPMENT.md)**（建包、接线、安装、排错的完整流程）。 |
 | [`PETCORE-MOD-DEVELOPMENT.md`](PETCORE-MOD-DEVELOPMENT.md) | **从零做一个 mod 的动手指南（0.5.0 基线）**：三类产物与今天做不到的事、数据目录/扫描顺序/授信闸门、最小可运行骨架（manifest+factory+runtime+设置页）、真正生效的三个接线点（menu / settings_page / chat_view）及其精确生命周期、22 个已注入端口与 5 个恒为 `None`、线程铁律、配置/数据/原子写、自建窗口与小游戏、本地安装/重载/排错闭环、ZIP 分发与角色包、提交 checklist。 | **第一次写 petcore 扩展、判断「这个功能该做成什么」、排查「装了为什么没生效 / 改代码为什么没更新」时先读这篇**；字段级细节再查 `PETCORE-MOD-FORMAT.md`，角色包规格查 `PETCORE-CHARACTER-PACKS.md`。 |
 | [`PETCORE-MARKET.md`](PETCORE-MARKET.md) | 插件市场 v1：静态索引契约、来源与缓存、下载校验、安装/更新/回滚、生效语义、npm 结论与信任边界。 | 改 `petcore/market/`、市场设置页、索引仓库，或排查「插件装不上 / 更新或回滚失败 / 索引过期」时必读。 |

@@ -337,7 +337,7 @@ class MessageBubble(QFrame):
         self._render_timer.setSingleShot(True)
         self._render_timer.timeout.connect(self._render_body)
         self.set_content(content)
-        self.body.setMinimumWidth(360 if role == "assistant" else 120)
+        self.body.setMinimumWidth(360 if role == "assistant" else 0)
         surface_layout.addWidget(self.body)
         panel.addWidget(self.surface)
 
@@ -393,6 +393,27 @@ class MessageBubble(QFrame):
             self._render_timer.start(int(min(250.0, max(50.0, self._render_cost_ms * 4))))
             return
         self._render_body()
+
+    def preferred_width(self, available: int) -> int:
+        """气泡在给定上限下的期望宽度。
+
+        ``QLabel`` 的 wordWrap sizeHint 在 ``QSizePolicy.Maximum`` 下会被压到
+        ``minimumWidth``（实测只剩 120px），用户消息因此一行只显示十来个字。
+        这里按最长一行显式量宽：短句保持紧凑，长句铺到上限。
+        """
+        cap = max(1, int(available))
+        if self.role == "assistant":
+            return cap
+        text = self._raw_text or ""
+        if not text:
+            return min(cap, 160)
+        metrics = self.body.fontMetrics()
+        natural = max(
+            (metrics.horizontalAdvance(line) for line in text.splitlines()),
+            default=0,
+        )
+        # message-surface 的 QSS padding 是 8px 12px；再加 2px 余量防止刚好折行。
+        return min(cap, max(160, natural + 26))
 
     def _render_body(self) -> None:
         self._render_timer.stop()

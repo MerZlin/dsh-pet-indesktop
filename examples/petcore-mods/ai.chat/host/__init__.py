@@ -23,6 +23,13 @@ def create_host(context):
         except Exception:
             return False
 
+    def memory_view():
+        # 视图模块会 import Qt；延迟到第一次打开「记忆」页，避免 --check /
+        # 无头环境在扩展加载阶段就拉 QtWidgets。
+        from .memory_view import MemoryView
+
+        return MemoryView(context)
+
     return FeatureDefinition(
         owner=OWNER,
         contributions=(
@@ -30,6 +37,11 @@ def create_host(context):
                 kind="settings_page",
                 id="chat",
                 data={"title": "AI 对话", "order": 640, "icon": "chat"},
+            ),
+            Contribution(
+                kind="chat_view",
+                id="memory",
+                data={"label": "记忆", "order": 60},
             ),
             # 这三个以前是 core 写死的菜单项，没装本扩展也会出现（点了才提示
             # 「AI 扩展未安装」）。改成注册项后：没装就没有，装了按默认布局
@@ -74,4 +86,5 @@ def create_host(context):
         ),
         runtime_factory=AiChatRuntime,
         settings_factory=AiChatPage,
+        view_factories={"memory": memory_view},
     )

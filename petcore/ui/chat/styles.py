@@ -231,6 +231,42 @@ QScrollBar:vertical { width: 7px; margin: 3px 1px; background: transparent; }
 QScrollBar::handle:vertical { min-height: 28px; border-radius: 3px; background: #ccd0d7; }
 QScrollBar::handle:vertical:hover { background: #adb3bd; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QWidget#memory-view { background: #ffffff; color: #252a32; }
+QLabel#memory-title { color: #171717; font-size: @F_15@; font-weight: 600; }
+QLabel#memory-summary { color: #777b80; font-size: @F_12@; }
+QLineEdit#memory-search {
+    min-height: 30px; padding: 0 10px; border: 1px solid #e0e4eb;
+    border-radius: 8px; background: #ffffff; color: #252a32;
+}
+QLineEdit#memory-search:focus { border-color: @ACCENT@; }
+QComboBox#memory-scope {
+    min-height: 30px; padding: 0 8px; border: 1px solid #e0e4eb;
+    border-radius: 8px; background: #ffffff; color: #252a32;
+}
+QCheckBox#memory-pinned { color: #5f6673; }
+QTreeWidget#memory-list {
+    border: 1px solid #e6e9ef; border-radius: 10px; background: #ffffff;
+    color: #252a32; outline: none;
+}
+QTreeWidget#memory-list::item { min-height: 30px; padding: 2px 4px; }
+QTreeWidget#memory-list::item:selected { background: #e4ebfc; color: @ACCENT@; }
+QTreeWidget#memory-list::item:hover { background: #f4f5f7; }
+QHeaderView::section {
+    background: #f7f8fa; color: #777b80; border: none;
+    border-bottom: 1px solid #e6e9ef; padding: 6px 8px;
+}
+QPushButton#memory-action {
+    min-height: 26px; padding: 0 10px; border: 1px solid #e0e4eb;
+    border-radius: 7px; background: #ffffff; color: #303640;
+}
+QPushButton#memory-action:hover { background: #f4f6f9; }
+QPushButton#memory-action:disabled { color: #b6bbc4; background: #f7f8fa; }
+QLabel#memory-empty { color: #8b93a1; padding: 18px 8px; }
+QPlainTextEdit#memory-preview {
+    border: 1px solid #e6e9ef; border-radius: 8px; background: #f7f8fa;
+    color: #444b57; padding: 8px;
+}
+QLabel#memory-source { color: #777b80; font-size: @F_12@; }
 """
 
 #: 深色覆盖表：**追加**在 `MODERN_QSS` 之后（同选择器后者胜），所以浅色那条
@@ -328,6 +364,30 @@ QToolButton#composer-attach-button:hover, QToolButton#composer-record-button:hov
 QToolButton#send-button:disabled { background: #33405c; }
 QScrollBar::handle:vertical { background: #3a414f; }
 QScrollBar::handle:vertical:hover { background: #4b5364; }
+QWidget#memory-view { background: #16181d; color: #e6e8ec; }
+QLabel#memory-title { color: #f0f0f5; }
+QLabel#memory-summary, QLabel#memory-source { color: #9aa3b4; }
+QLineEdit#memory-search, QComboBox#memory-scope {
+    background: #1b1f27; color: #e6e8ec; border-color: #333947;
+}
+QCheckBox#memory-pinned { color: #c9d0da; }
+QTreeWidget#memory-list {
+    background: #16181d; color: #e6e8ec; border-color: #333947;
+}
+QTreeWidget#memory-list::item:selected { background: #262b36; color: @ACCENT@; }
+QTreeWidget#memory-list::item:hover { background: #1f242d; }
+QHeaderView::section {
+    background: #1b1f27; color: #9aa3b4; border-bottom-color: #333947;
+}
+QPushButton#memory-action {
+    background: #1b1f27; color: #e6e8ec; border-color: #333947;
+}
+QPushButton#memory-action:hover { background: #262b36; }
+QPushButton#memory-action:disabled { color: #6b7382; background: #171a20; }
+QPlainTextEdit#memory-preview {
+    background: #1b1f27; color: #d7dce6; border-color: #333947;
+}
+QLabel#memory-empty { color: #8b93a1; }
 """
 
 

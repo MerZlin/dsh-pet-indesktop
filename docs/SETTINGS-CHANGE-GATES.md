@@ -948,6 +948,8 @@ C 盘剩余空间显示选项（性能占用要低）」。
 | `chat_dsh_mode` | `False` | 全局 | primary | 聊天窗的 DSH 模式：开=侧栏出现「DSH 对话」分组 + 共享 SSE 常驻（审批在 AI 视图也收得到）；关=分组隐藏、当前会话回落最近 AI 对话 | DSH 模式 / DSH 分组 / 侧栏 |
 | `chat_dark_mode` | `False` | 全局 | primary | 只影响对话窗（侧栏/标题/消息/输入区/DSH 视图）；标题栏月亮按钮与设置页是同一个开关；无持久化失败路径（保存失败只记日志，界面保持当前态） | 深色 / 夜间 / 暗色 / 主题 / 对话窗外观 |
 | `dsh_memory_inject` | `True` | 全局 | primary | 为真时 DSH prompt 带 `context.memory`（内部 system，不进历史） | DSH 记忆 / 互通 |
+| `ai_memory_share_channels` | `True` | 全局 | primary | AI 的 `pet` 与 DSH 的 `dsh` 主人私聊通道互见；关=退回严格 scope（只 `shared` 跨通道）；QQ 始终隔离 | 共享记忆 / 跨通道 / 记忆可见性 |
+| `ai_memory_import_dsh` | `True` | 全局 | primary | 只读 `<data_root>/memory/facts.jsonl`（dsh.memory）与 `<workspace>/.dsh-meow/memory.db`（meow-memory）；关=不新增镜像，已有保留；源缺失只显示「未找到」 | DSH 记忆同步 / meow-memory / 外部记忆 |
 | `dsh_persona_inject` | `True` | 全局 | advanced | 预留给人设注入；当前 DSH 只注入记忆，人设仍由 DSH preset 决定 | DSH 人设 |
 | `dsh_history_limit` | `200` | 全局 | advanced | 20–500；DSH 历史回放条数上限 | DSH 历史 |
 | `im_qq_enabled` | `False`（extra） | 全局 | primary | 默认关；缺 webhook/凭据端口时只通知不启动 | QQ / OneBot |
