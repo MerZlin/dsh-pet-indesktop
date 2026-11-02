@@ -16,7 +16,6 @@ from __future__ import annotations
 import base64
 import logging
 import random
-import re
 import threading
 import time
 from pathlib import Path
@@ -28,6 +27,7 @@ from .animation_semantics import choose_animation, choose_thinking
 from .constants import LOOK_SCREEN_COOLDOWN_S, MAX_HISTORY, OWNER, QUICK_HISTORY
 from .memory import MemoryStore, extract_memory, format_context
 from .persona_presets import load_presets, resolve_prompt
+from .reply_voice import ReplyVoicePlayer
 from .proactive import PRE_CUE_MS, PRE_CUE_TEXT, ProactiveWatcher
 from .prompts import (
     ask_messages,
@@ -420,34 +420,83 @@ class AiChatRuntime:
                     return content[:2000]
         return ""
 
-    @staticmethod
-    def _speech_text(text: str) -> str:
-        value = str(text or "")
-        value = re.sub(r"```.*?```", " ", value, flags=re.S)
-        value = re.sub(r"`([^`]*)`", r"\1", value)
-        value = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", value)
-        value = re.sub(r"[*_#>~]+", "", value)
-        return " ".join(value.split())[:500]
-
+    # ---------------------------------------------------------------- 回复朗读
     def _speak_reply(self, text: str) -> None:
+        """按句滴灌 + 预合成（见 ``reply_voice.py`` 的设计说明）。"""
         if not bool(self._config_value("ai_voice_reply", False)):
             return
         speech = getattr(self.context.ports, "speech", None)
+        if speech is None:
+            return
+        player = getattr(self, "_reply_voice", None)
+        if player is None:
+            player = ReplyVoicePlayer(
+                speak=lambda sentence, on_finished, on_error: self._voice_speak(
+                    speech, sentence, on_finished, on_error, self._active_slot()
+                ),
+                precache=lambda sentence: self._voice_precache(speech, sentence),
+                enabled=lambda: bool(self._config_value("ai_voice_reply", False)),
+                cancel=lambda: self._voice_cancel(speech, self._active_slot()),
+            )
+            self._reply_voice = player
+        player.play(text)
+
+    @staticmethod
+    def _voice_speak(speech, sentence, on_finished, on_error, slot: int | None = None) -> None:
+        """送一句进共享语音通道。
+
+        ``slot`` 让朗读挂到这只宠物自己的槽上：新回复只打断本宠物的朗读，
+        不会像 ``cancel_owner(OWNER)`` 那样一次取消所有宠物的音频。
+        """
         speaker = getattr(speech, "speak", None)
         if not callable(speaker):
             return
-        clean = self._speech_text(text)
-        if not clean:
+        speaker(
+            SpeechRequest(text=sentence),
+            on_finished=on_finished,
+            on_error=on_error,
+            owner=OWNER,
+            slot=slot,
+        )
+
+    @staticmethod
+    def _voice_precache(speech, sentence) -> None:
+        """把下一句提前合进缓存（``synthesize`` 阻塞，放后台线程）；失败静默退化。"""
+        synthesizer = getattr(speech, "synthesize", None)
+        if not callable(synthesizer):
             return
 
-        def on_error(error) -> None:
-            reason = str(getattr(error, "reason", "") or "speech")
-            logger.info("ai voice reply failed: reason=%s", reason)
+        def run() -> None:
+            try:
+                synthesizer(SpeechRequest(text=sentence))
+            except Exception as exc:  # noqa: BLE001 - 轮到时在线合成兜底
+                logger.info(
+                    "ai voice reply precache failed: type=%s", type(exc).__name__
+                )
 
+        threading.Thread(target=run, name="ai-voice-precache", daemon=True).start()
+
+    @staticmethod
+    def _voice_cancel(speech, slot: int | None = None) -> None:
+        """打断上一轮还在播/排队的朗读（新回复覆盖旧回复）。
+
+        优先 ``cancel_slot(slot)``：只停本宠物的朗读。端口没有按槽取消时才退回
+        ``cancel_owner(OWNER)``——那条会把所有宠物的朗读一起取消，是旧行为。
+        """
+        cancel_slot = getattr(speech, "cancel_slot", None)
+        if slot is not None and callable(cancel_slot):
+            try:
+                cancel_slot(slot)
+                return
+            except Exception:  # noqa: BLE001 - 打断失败不影响新回复开念
+                logger.info("ai voice reply cancel_slot failed")
+        cancel = getattr(speech, "cancel_owner", None)
+        if not callable(cancel):
+            return
         try:
-            speaker(SpeechRequest(text=clean), on_error=on_error)
-        except Exception:  # noqa: BLE001 - 朗读失败不影响文字回答
-            logger.info("ai voice reply failed: reason=internal")
+            cancel(OWNER)
+        except Exception:  # noqa: BLE001 - 打断失败不影响新回复开念
+            logger.info("ai voice reply cancel failed")
 
     # ---------------------------------------------------------------- 长期记忆
     def _memory_store(self):
@@ -1123,6 +1172,9 @@ class AiChatRuntime:
         self._proactive.start()
 
     def stop(self) -> None:
+        player = getattr(self, "_reply_voice", None)
+        if player is not None:
+            player.stop()
         self._proactive.stop()
         for cancel in self._vision_cancels:
             cancel.set()
