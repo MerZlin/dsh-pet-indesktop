@@ -6311,3 +6311,43 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
   `--check --strict` 冒烟；未做安装向导/卸载/升级路径实机验收。
 - Smart App Control 的实际拦截行为未单独探针；本构建签名有效，冒烟进程可启动。
 - 旧 `rel-storage-2026-11-02a/dsh-pet-core-setup.exe` 仍在，作为上一版回退包。
+
+## L164 — 2026-11-03 — 每日播放池循环 + 点击台词初始句 + 人设卡扩容与重写
+
+**背景**：用户反馈每天 12 句说完后只剩几条候选台词纯随机，当天 12 句不再出现；
+点击台词/自言自语的初始台词在编辑框里看不到；人设卡 8000 字上限与 7 张角色卡
+（464–589 字）也需要按提供的参考卡重写。
+
+**改动**
+
+- `fun.self-talk/daily_pool.py`：新增 `merge_pool/playback_slot/playback_order/playback_line`。播放池 = 当天 12 句 + `self_talk_texts`，按 `(day, slot,
+  cycle)` 逐轮重洗；`index` 仍只有一个整数，`index < len(daily)` 是每日句阶段。
+- `fun.self-talk/factory.py`：`_speak()` 在每日句后接 `_playback_line()`；
+  champion 不推进游标，配图 caption 按说过推进；设置页编辑框用 `merge_lines`
+  补内置初始句，更新「说完后循环」文案与预览头。
+- `fun.click-talk/factory.py`：编辑框合并内置初始句，新增「恢复内置」按钮。
+- `petcore/config.py`：`click_talk_texts` 1→12 条；`ai_system_prompt`
+  4000→20000；`persona_presets.MAX_PROMPT` 8000→20000。
+- `examples/petcore-mods/ai.chat/persona_presets/`：爱莉希雅 523→6236 字重写；
+  新增波波 7007 字；chizuru/emilia/rem/lin_pianpian/mom/zhuang_fangyi 扩到
+  2975–3072 字；去掉 QQ 群聊/工具调用/字数说明；初始 6 张桌宠卡不动。
+- 测试：播放池纯函数/运行时/设置页合并/20000 上限/人格结构。
+
+**验证**
+
+- 聚焦：78 passed（self-talk daily + self-talk + ai persona + click listeners）；
+  ruff 改动文件 All checks passed。
+- 真实 Qt：自言自语编辑框 8 行（自定义 + 7 内置）、点击台词 13 行、恢复 12 条；
+  elysia prompt 6233 字、bobo 7005 字、custom 12000 字未被截断。
+- 真实进程：`python -m petcore --check --root <temp> --out <temp>` 退出 0，
+  menu_template=json，diagnostics=[]。
+- 性能：`playback_order` cycle0 8.088 µs / cycle10 61.1 µs；`playback_line`
+  64.779 µs；`Config.set` 20000 字 57.267 µs；`PersonaStore.bundled` 14 张
+  1.553 ms（runtime 按 mtime 缓存）；14 张 prompt 总量 4,661→32,564 字。
+- 全量 pytest：petcore 子集 **3047 passed / 1 skipped in 257.31s**；仓库全量在 `test_bundle_slim.py` 因合成 bundle 缺 Qt6WebView/webview2 先红（与本次无关），随后在 legacy `test_proactive.py` 遇 Windows access violation 崩溃；详见 PR 报告。
+
+**未验证 / 风险**
+
+- 未重建安装包；安装器按 `examples/petcore-mods/ai.chat/*` 递归收录，留待下次出包。
+- 播放池只保证相邻不重复，跨轮较远处会再次出现（循环播放的预期行为）。
+- 人设卡未逐张跑真实模型对话，只验证 JSON/`{name}`/结构与长度。

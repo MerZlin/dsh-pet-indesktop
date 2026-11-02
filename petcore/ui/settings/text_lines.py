@@ -20,3 +20,20 @@ def parse_lines(text: str) -> list[str]:
 
 def format_lines(items) -> str:
     return "\n".join(str(item).strip() for item in (items or ()) if str(item).strip())
+
+
+def merge_lines(configured, defaults) -> list[str]:
+    """用户内容在前、内置初始句在后：去空、去重，保留用户自己的顺序。
+
+    设置页用它把「初始台词」显示进编辑框；写回配置仍由页面的保存/取消语义
+    决定，不在打开页面时静默覆盖。
+    """
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in list(configured or ()) + list(defaults or ()):
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        values.append(text)
+    return values

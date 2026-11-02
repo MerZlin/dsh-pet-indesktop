@@ -110,6 +110,70 @@ def test_daily_count_is_clamped() -> None:
     assert daily_pool.clamp_count("oops") == 12
 
 
+def test_playback_slot_maps_index_into_cycles() -> None:
+    assert daily_pool.playback_slot(0, 3, 5) is None
+    assert daily_pool.playback_slot(2, 3, 5) is None
+    assert daily_pool.playback_slot(3, 3, 5) == (0, 0)
+    assert daily_pool.playback_slot(7, 3, 5) == (0, 4)
+    assert daily_pool.playback_slot(8, 3, 5) == (1, 0)
+    assert daily_pool.playback_slot(3, 3, 0) is None
+    assert daily_pool.playback_slot("oops", 3, 5) is None
+
+
+def test_playback_pool_merges_and_dedupes() -> None:
+    assert daily_pool.merge_pool(["甲", "乙"], ["乙", "丙"]) == ("甲", "乙", "丙")
+    assert daily_pool.merge_pool([], ["甲", "  ", "甲"]) == ("甲",)
+    assert daily_pool.merge_pool([], []) == ()
+
+
+def test_playback_order_is_stable_per_cycle_and_avoids_seam() -> None:
+    daily_lines = ["甲", "乙", "丙"]
+    extras = ["丁", "戊"]
+    day = dt.date(2026, 11, 3).toordinal()
+    first = daily_pool.playback_order(
+        daily_lines, extras, day, cycle=0, salt=0, leading="丙"
+    )
+    assert first == daily_pool.playback_order(
+        daily_lines, extras, day, cycle=0, salt=0, leading="丙"
+    )
+    assert len(first) == 5
+    assert set(first) == {"甲", "乙", "丙", "丁", "戊"}
+    second = daily_pool.playback_order(
+        daily_lines, extras, day, cycle=1, salt=0, leading="丙"
+    )
+    assert set(second) == set(first)
+    assert second != first
+    assert second[0] != first[-1], "轮次接缝不能连续重复同一句"
+    assert daily_pool.playback_order(
+        daily_lines, extras, day, cycle=1, salt=1, leading="丙"
+    ) != second
+
+
+def test_playback_line_walks_the_pool_then_cycles() -> None:
+    daily_lines = ["甲", "乙"]
+    extras = ["丙", "丁"]
+    day = dt.date(2026, 11, 3).toordinal()
+    first = [
+        daily_pool.playback_line(daily_lines, extras, day, index, salt=0)
+        for index in range(2, 6)
+    ]
+    assert first == list(
+        daily_pool.playback_order(
+            daily_lines, extras, day, cycle=0, salt=0, leading="乙"
+        )
+    )
+    second = [
+        daily_pool.playback_line(daily_lines, extras, day, index, salt=0)
+        for index in range(6, 10)
+    ]
+    assert second == list(
+        daily_pool.playback_order(
+            daily_lines, extras, day, cycle=1, salt=0, leading="乙"
+        )
+    )
+    assert daily_pool.playback_line(daily_lines, extras, day, 0, salt=0) == ""
+
+
 def test_daily_sets_change_day_to_day_with_the_shipped_pool() -> None:
     pool = daily_pool.load_pool()
     first = dt.date(2026, 10, 31)
@@ -210,7 +274,9 @@ def _daily_config(**overrides) -> _Config:
     return _Config(**values)
 
 
-def test_daily_lines_advance_one_per_tick_then_fall_back(tmp_path: Path) -> None:
+def test_daily_lines_advance_one_per_tick_then_yield_to_playback(
+    tmp_path: Path,
+) -> None:
     runtime = _runtime(tmp_path)
     config = _daily_config()
     presentation = _Presentation()
@@ -222,7 +288,8 @@ def test_daily_lines_advance_one_per_tick_then_fall_back(tmp_path: Path) -> None
     assert runtime._speak_daily(config, presentation, 0, day=day) is True
     assert runtime._speak_daily(config, presentation, 0, day=day) is True
     assert presentation.said == list(expected)
-    # 当天的 2 句说完就回落普通自语（返回 False，让 _speak 继续往下走）。
+    # 当天的 2 句说完，_speak_daily 返回 False；_speak 接下来走播放池，
+    # 不再静默回落到纯随机候选。
     assert runtime._speak_daily(config, presentation, 0, day=day) is False
     assert len(presentation.said) == 2
     state = daily.load_state(tmp_path / "fun.self-talk" / "daily.json")
@@ -261,6 +328,52 @@ def test_each_slot_has_its_own_progress_and_set(tmp_path: Path) -> None:
     assert presentation.said[1] == daily_pool.daily_set(
         ["每日甲", "每日乙", "每日丙"], day, count=3, salt=1
     )[0]
+
+
+def test_playback_line_starts_after_the_daily_set(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    config = _daily_config(
+        self_talk_daily_count=2,
+        self_talk_texts=["候选甲", "候选乙"],
+    )
+    presentation = _Presentation()
+    day = dt.date(2026, 10, 31)
+
+    assert runtime._playback_line(config, 0, day=day) is None
+    assert runtime._speak_daily(config, presentation, 0, day=day) is True
+    assert runtime._speak_daily(config, presentation, 0, day=day) is True
+
+    first = runtime._playback_line(config, 0, day=day)
+    assert first is not None
+    text, index = first
+    assert index == 2
+    daily_lines = daily_pool.daily_set(
+        ["每日甲", "每日乙", "每日丙"], day, count=2, salt=0
+    )
+    order = daily_pool.playback_order(
+        daily_lines,
+        ["候选甲", "候选乙"],
+        day.toordinal(),
+        cycle=0,
+        salt=0,
+        leading=daily_lines[-1],
+    )
+    assert text == order[0]
+
+    runtime._mark_daily(0, index + 1, day)
+    assert runtime._playback_line(config, 0, day=day) == (order[1], 3)
+
+
+def test_playback_line_is_off_when_daily_is_disabled(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    config = _daily_config(
+        self_talk_daily_enabled=False,
+        self_talk_daily_count=1,
+        self_talk_texts=["候选甲"],
+    )
+    day = dt.date(2026, 10, 31)
+
+    assert runtime._playback_line(config, 0, day=day) is None
 
 
 def test_next_day_restarts_the_sets(tmp_path: Path) -> None:

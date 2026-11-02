@@ -1,13 +1,18 @@
 """每日一句的内置池与按日确定性取样（零 Qt，纯函数）。
 
-``daily_lines.json`` 是与 ``host/`` 同级的随包素材（1000+ 句）；本模块只回答
-两件事：池子里有哪些句子、某一天某只宠该拿哪一组。
+``daily_lines.json`` 是与 ``host/`` 同级的随包素材（1000+ 句）；本模块回答
+三件事：池子里有哪些句子、某一天某只宠该拿哪一组、这一组说完之后播放池怎么
+循环。
 
 当天 + slot 先洗成一个固定排列，再取前 ``count`` 句：同一天同一只宠永远拿到
 同一组，换一天整组都换。洗牌参数刻意自带（不 import ``random``）：同一日期在
 任何解释器版本、任何进程上都洗出同一个排列，也不受 ``PYTHONHASHSEED`` 影响。
 做法与 ``examples/petcore-mods/voice.chime`` 的 ``quote_day_order`` 同源，但按
 「mod 之间不互相 import」的约定复制在这里。
+
+播放池 = 当天这一组 + 候选台词，按 ``(day, slot, cycle)`` 逐轮重洗；游标仍只
+存一个 ``index``（见 ``daily.py``），``index < len(daily)`` 是每日句阶段，之后
+用 ``playback_slot`` 换算成第几轮的第几句。
 """
 
 from __future__ import annotations
@@ -115,3 +120,100 @@ def daily_set(
     current = day or _dt.date.today()
     lines = day_order(pool, current.toordinal(), salt=salt)
     return lines[: clamp_count(count)]
+
+
+#: 轮次 salt 的步长：同一 (day, slot) 的第 n 轮必须洗出不同排列，又不与别的
+#: slot 撞车。日轮次远小于这个数（自言自语 20–60 秒一次，一天最多几百轮）。
+_PLAYBACK_SALT_STRIDE = 1 << 20
+
+
+def merge_pool(*pools) -> tuple[str, ...]:
+    """把多段台词合并成一个池：逐条 strip、丢空值、按首次出现去重。"""
+    values: list[str] = []
+    for pool in pools:
+        values.extend(pool or ())
+    return clean_pool(values)
+
+
+def playback_slot(
+    index: int, daily_count: int, pool_size: int
+) -> tuple[int, int] | None:
+    """把「已说几句」换算成播放池的 ``(第几轮, 本轮第几句)``。
+
+    每日句阶段（``index < daily_count``）返回 ``None``；池为空也返回 ``None``。
+    """
+    try:
+        spoken = max(0, int(index))
+        daily = max(0, int(daily_count))
+        size = int(pool_size)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if size <= 0 or spoken < daily:
+        return None
+    return divmod(spoken - daily, size)
+
+
+def playback_order(
+    daily,
+    extras,
+    day_ordinal: int,
+    *,
+    cycle: int = 0,
+    salt: int = 0,
+    leading: str = "",
+) -> tuple[str, ...]:
+    """播放池第 ``cycle`` 轮的排列；``leading`` 是上一句，用来避免接缝重复。
+
+    每一轮用 ``(day, slot, cycle)`` 独立洗牌；若本轮第一个词与上一句相同，与
+    第二个词对调——同一轮内本来就不会有重复词，所以对调整轮仍然保持「每句
+    只出现一次」。
+    """
+    pool = merge_pool(daily, extras)
+    if not pool:
+        return ()
+    before = str(leading or "").strip()
+    order: tuple[str, ...] = ()
+    try:
+        last = max(0, int(cycle))
+    except (TypeError, ValueError, OverflowError):
+        last = 0
+    for current in range(last + 1):
+        items = list(
+            day_order(
+                pool,
+                int(day_ordinal),
+                salt=(int(salt) + 1) * _PLAYBACK_SALT_STRIDE + current,
+            )
+        )
+        if before and len(items) > 1 and items[0] == before:
+            items[0], items[1] = items[1], items[0]
+        order = tuple(items)
+        before = order[-1]
+    return order
+
+
+def playback_line(
+    daily,
+    extras,
+    day_ordinal: int,
+    index: int,
+    *,
+    salt: int = 0,
+) -> str:
+    """播放池里「已说 ``index`` 句」时的下一句；每日阶段或池空返回空串。"""
+    daily_lines = clean_pool(daily)
+    slot = playback_slot(index, len(daily_lines), len(merge_pool(daily_lines, extras)))
+    if slot is None:
+        return ""
+    cycle, offset = slot
+    order = playback_order(
+        daily_lines,
+        extras,
+        day_ordinal,
+        cycle=cycle,
+        salt=salt,
+        leading=daily_lines[-1] if daily_lines else "",
+    )
+    if offset >= len(order):
+        return ""
+    return order[offset]

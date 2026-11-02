@@ -203,11 +203,24 @@ def test_settings_page_creates_renames_and_deletes_a_persona_card(
 CHARACTER_PERSONAS = {
     "mom": "妈妈",
     "elysia": "爱莉希雅",
+    "bobo": "波波",
     "emilia": "艾米莉亚",
     "rem": "蕾姆",
     "chizuru": "水原千鹤",
     "lin_pianpian": "林翩翩",
     "zhuang_fangyi": "庄方宜",
+}
+
+#: 重写后的角色卡最低字数：爱莉/波波 6k+，其余 3k 左右。
+CHARACTER_MIN_LENGTH = {
+    "elysia": 6000,
+    "bobo": 6000,
+    "mom": 2500,
+    "emilia": 2500,
+    "rem": 2500,
+    "chizuru": 2500,
+    "lin_pianpian": 2500,
+    "zhuang_fangyi": 2500,
 }
 
 
@@ -221,10 +234,37 @@ def test_character_persona_cards_are_present_and_rich() -> None:
         assert str(doc.get("name") or "") == expected_name
         prompt = str(doc.get("prompt") or "")
         assert "{name}" in prompt, persona_id
-        assert len(prompt) >= 400, persona_id
+        assert len(prompt) >= CHARACTER_MIN_LENGTH[persona_id], persona_id
         assert "回答长度" in prompt, persona_id
         assert "边界" in prompt, persona_id
-        assert "六到十句" in prompt, persona_id
+        assert "AI 味黑名单" in prompt, persona_id
+        assert "示例对白" in prompt, persona_id
+
+
+def test_persona_prompt_cap_is_20000(tmp_path: Path) -> None:
+    import sys
+
+    ai_mod._create_host(ai_mod._context(tmp_path))
+    personas = sys.modules["petcore_feature_ai_chat.persona_presets"]
+    store = personas.PersonaStore(tmp_path / "personas")
+
+    long_prompt = "你是{name}。" + "字" * 18000
+    saved = store.save(
+        personas.PersonaPreset("user-long", "长卡", "说明", long_prompt)
+    )
+    assert len(saved.prompt) == len(long_prompt)
+
+    with pytest.raises(ValueError):
+        store.save(
+            personas.PersonaPreset("user-too-long", "超长卡", "", "字" * 20001)
+        )
+
+
+def test_custom_persona_prompt_is_not_truncated_at_4000(tmp_path: Path) -> None:
+    config = Config(tmp_path)
+    prompt = "你是{name}。" + "字" * 12000
+    config.set("ai_system_prompt", prompt)
+    assert config.get("ai_system_prompt") == prompt
 
 
 def test_character_persona_keeps_its_identity_when_pet_name_differs(

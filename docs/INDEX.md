@@ -144,6 +144,8 @@
 
 ## PR 报告存档
 
+- [每日播放池循环 / 点击台词初始句 / 人设卡扩容与重写（2026-11-03）](PR-REPORT-PERSONA-PLAYBACK-2026-11-03.md)：每日 12 句说完后与候选台词合并成播放池、按 `(day, slot, cycle)` 逐轮重洗（champion 不推进游标、配图 caption 按说过推进）；自言自语/点击台词编辑框补进内置初始句（保留用户内容，保存才写入），点击台词初始句扩到 12 条并加「恢复内置」；人设卡提示词上限 8000→20000、`ai_system_prompt` 4000→20000；爱莉希雅按两张参考卡重写（去 QQ bot 化）、新增鲸鱼厨娘波波、其余 6 张角色卡扩到 3k 字级。**改每日句/自语播放池、点击台词编辑框或人设卡上限/内容前必读**。
+
 - [AI 对话：联网失败纯 API 兜底 / 记忆页下拉配色 / 7 张角色人设卡（2026-11-02）](PR-REPORT-AI-CHAT-FALLBACK-PERSONAS-2026-11-02.md)：`QComboBox` 弹出列表是独立 `QAbstractItemView`，补 `QComboBox QAbstractItemView` 浅/深色规则（白字白底根因）；planner `_post_json` 改 `pollute=False`，不再污染进程级固定直连；正式回答传输层 `network` 且未吐字时用检索前原始消息 + 网络说明重发纯 API，并让模型说明「网络不可达、未联网核实」；新增妈妈/爱莉希雅/艾米莉亚/蕾姆/水原千鹤/林翩翩/庄方宜 7 张人设卡（默认 6–10 句）。**改对话窗下拉样式、`api/chat.py` 的重试/兜底、或角色人设卡前必读**。
 - [PR #424 审查 / 语音修复 / 身份接力与 feiyu 只读融合（2026-11-02）](PR-REPORT-PR424-REVIEW-AND-MEMORY-FUSION-2026-11-02.md)：PR #424 语音回调 P0（零参数 `finished` 导致只念第一句）、身份接力 mod 直写违反单写者/只读红线、非原子写/读失败当空/字面召回等阻断项；修语音并按 slot 隔离、预合成有界；身份接力与 feiyu 改为 core 只读外部源，跨源同文去重；`os.replace` Windows 竞态退避。**审查/合并记忆 PR 或改外部记忆源前必读**。
 - [AI 对话：用户气泡宽度与跨会话记忆召回（2026-11-02）](PR-REPORT-AI-CHAT-MEMORY-RECALL-2026-11-02.md)：用户气泡从「只设 maxWidth 被压到 120px」改成按 `QFontMetrics` 显式定宽（66%→86%、边距 76→44）；记忆渲染改相关度优先 top-K（不再被固定分区截断）、问句降权、reply/superseded 排除、AI↔DSH 互见 + QQ 隔离；真实卡 `max_entries=3` 能取到「星期四上课」。**改 `petcore/ui/chat/` 气泡布局或 `interop/memory.py` 渲染前必读**。

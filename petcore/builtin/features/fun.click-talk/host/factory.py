@@ -4,14 +4,15 @@ import logging
 import random
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QPlainTextEdit
+from PySide6.QtWidgets import QHBoxLayout, QPlainTextEdit, QWidget
 
+from petcore.config import DEFAULTS
 from petcore.contracts.contributions import Contribution
 from petcore.contracts.feature import FeatureDefinition
 from petcore.contracts.speech import SpeechRequest
 from petcore.media import talk_images
-from petcore.ui.settings.base import SettingsPage, make_checkbox
-from petcore.ui.settings.text_lines import format_lines, parse_lines
+from petcore.ui.settings.base import SettingsPage, make_button, make_checkbox
+from petcore.ui.settings.text_lines import format_lines, merge_lines, parse_lines
 
 logger = logging.getLogger("petcore.features.click-talk")
 
@@ -168,13 +169,42 @@ class ClickTalkPage(SettingsPage):
         self.texts = QPlainTextEdit(self)
         self.texts.setPlaceholderText("每行一条台词")
         self.texts.setMinimumHeight(120)
-        self.texts.setPlainText(format_lines(self.config().get("click_talk_texts") or []))
+        self.texts.setPlainText(
+            format_lines(
+                merge_lines(
+                    self.config().get("click_talk_texts") or [],
+                    DEFAULTS["click_talk_texts"],
+                )
+            )
+        )
         self._text_timer = QTimer(self)
         self._text_timer.setSingleShot(True)
         self._text_timer.setInterval(250)
         self._text_timer.timeout.connect(self._on_changed)
         self.texts.textChanged.connect(lambda: self._text_timer.start())
-        card.add_row("候选台词", self.texts, "每行一条；留空则不显示。", expand=True)
+        card.add_row(
+            "候选台词",
+            self.texts,
+            "每行一条；内置初始句会在打开本页时补进编辑框，可直接改/删/加，"
+            "留空则回退到自言自语的候选台词。",
+            expand=True,
+            search_keys=("初始台词", "恢复内置", "预制句"),
+        )
+        buttons = QWidget(self)
+        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(8)
+        self.restore_button = make_button("恢复内置", buttons)
+        self.restore_button.clicked.connect(self._restore_default_texts)
+        buttons_layout.addWidget(self.restore_button)
+        buttons_layout.addStretch(1)
+        card.add_row(
+            "快捷操作",
+            buttons,
+            "把候选台词恢复为随包初始句。",
+            expand=True,
+            search_keys=("恢复内置", "恢复默认", "初始台词"),
+        )
         self.voice_enabled = make_checkbox(self)
         self.voice_enabled.setChecked(
             bool(self.config().get("click_talk_voice_enabled"))
@@ -212,6 +242,10 @@ class ClickTalkPage(SettingsPage):
         config.set("click_talk_voice_enabled", values["voice"])
         self.changed.emit()
 
+    def _restore_default_texts(self) -> None:
+        self.texts.setPlainText(format_lines(DEFAULTS["click_talk_texts"]))
+        self._on_changed()
+
     def dirty(self) -> bool:
         return self._current() != self._initial
 
@@ -236,7 +270,17 @@ class ClickTalkPage(SettingsPage):
         self.changed.emit()
 
     def keywords(self) -> list[str]:
-        return ["点击", "台词", "气泡", "语音", "朗读", "click talk", "bubble"]
+        return [
+            "点击",
+            "台词",
+            "气泡",
+            "语音",
+            "朗读",
+            "初始台词",
+            "恢复内置",
+            "click talk",
+            "bubble",
+        ]
 
 
 def create_host(_context):

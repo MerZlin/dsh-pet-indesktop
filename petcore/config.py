@@ -449,7 +449,20 @@ DEFAULTS: dict[str, Any] = {
     "self_talk_champion_enabled": True,
     "self_talk_champion_chance": 8,
     "click_talk_enabled": False,
-    "click_talk_texts": ["我在呢。"],
+    "click_talk_texts": [
+        "我在呢。",
+        "怎么啦？",
+        "叫我了？",
+        "嗯，我在听。",
+        "摸摸头。",
+        "今天也辛苦了。",
+        "先喝口水吧。",
+        "需要我陪你一会儿吗？",
+        "别急，慢慢来。",
+        "要休息一下吗？",
+        "我一直都在。",
+        "嗯？想说什么就说吧。",
+    ],
     "click_talk_voice_enabled": True,
     "quick_launch_apps": [],
     "quiet_minutes_default": 30,
@@ -1703,7 +1716,7 @@ class Config:
             normalized[hotkey_key] = hotkey_spec.normalize(normalized.get(hotkey_key))
         normalized["ai_service"] = str(normalized.get("ai_service") or "").strip()
         normalized["ai_model"] = str(normalized.get("ai_model") or "").strip()
-        normalized["ai_system_prompt"] = str(normalized.get("ai_system_prompt") or "")[:4000]
+        normalized["ai_system_prompt"] = str(normalized.get("ai_system_prompt") or "")[:20000]
         normalized["ai_persona"] = str(normalized.get("ai_persona") or "").strip()[:64]
         normalized["ai_vision_enabled"] = _bool(
             normalized.get("ai_vision_enabled"), True

@@ -265,7 +265,8 @@ register_search_terms(row, "每日一句", "今日台词", "连说")
 
 `ai.chat` 的用户人格卡落在 `<data_root>/feature-data/ai.chat/personas/*.json`，
 同 id 文件覆盖包内预设（可改名/改提示词），删除文件即恢复内置；包内
-`persona_presets/*.json` 永远只读。
+`persona_presets/*.json` 永远只读。人格提示词上限 20000 字；`ai_system_prompt`
+与人格卡共用同一上限，保存/归一化都按它校验。
 
 
 ## 9. Core 内置特性与 `host_page`（P8）

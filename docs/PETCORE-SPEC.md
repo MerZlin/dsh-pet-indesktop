@@ -1095,7 +1095,8 @@ PrintWindow/BitBlt 非黑占比，不写标题正文。
 
 **人格卡**：包内 `persona_presets/*.json` 只读；用户卡在
 `<data_root>/feature-data/ai.chat/personas/`，同 id 覆盖内置。保存校验 id/名称/
-说明/提示词长度，原子写；runtime 按目录+文件 mtime 缓存。
+说明/提示词长度（提示词上限 20000 字，`ai_system_prompt` 同样按 20000 归一化），
+原子写；runtime 按目录+文件 mtime 缓存。
 
 **会话**：`ChatSession.archived_at`（0=未归档）仍属 schema 1；侧栏按
 今天/昨天/本周/本月/更早分节，组头折叠；归档会话默认隐藏，可切换显示；
@@ -1114,8 +1115,10 @@ PrintWindow/BitBlt 非黑占比，不写标题正文。
   自言自语/报时 TTS 共用 `AudioOutputRouter`；手动设备不存在时静音、不回退；`QMediaDevices`
   热插拔后重建 `QSoundEffect/QMediaPlayer` 缓存。设置落「语音」页顶部。
 - **每日一句**：随包 `daily_lines.json` 1200 句；每天按 `(day, slot)` 抽 `self_talk_daily_count`
-  （1–24，默认 12）；每 tick 显示一句，成功后才推进 `daily.json:index`；抽完回退普通自语；
-  设置页为编号列表预览 + 明天再看 + 可折叠自定义。`self_talk_daily_texts=[]` 表示内置池，
+  （1–24，默认 12）；每 tick 显示一句，成功后才推进 `daily.json:index`；抽完与候选台词合并成播放池，
+  按 `(day, slot, cycle)` 逐轮重洗循环；champion 彩蛋不推进游标，配图 caption 按说过推进。
+  设置页为编号列表预览 + 明天再看 + 可折叠自定义；候选台词编辑框会补进内置初始句
+  （保留用户内容，保存才写入）。`self_talk_daily_texts=[]` 表示内置池，
   旧默认 12 句在 normalize 中迁到 `[]`。
 - **素材下载**：`market_download_connections`（1–8，默认 4）+ `market_download_sources`
   （auto/ordered/race）；多连接 Range、段级续传、镜像 TTFB 竞速、200 回退单流一次；

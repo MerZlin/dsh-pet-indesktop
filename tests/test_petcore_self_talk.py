@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication
 
 from petcore import paths
-from petcore.config import Config
+from petcore.config import Config, DEFAULTS
 from petcore.contracts.host import HostPorts
 from petcore.mods import feature as feature_mod
 
@@ -365,10 +366,168 @@ def test_daily_line_comes_before_random_talk_and_never_rolls_an_image(
     assert presentation.images == [], "每日一句只冒文字气泡，不掷配图"
     assert presentation.said and presentation.said[0][0] in pool
 
-    # 当天的 1 句说完 → 下一次回到普通自言自语（这里 100% 出图）。
+    # 当天的 1 句说完 → 播放池阶段（这里 100% 出图，仍然照常掷配图）。
     runtime._speak()
     assert presentation.images
     assert len(presentation.said) == 1
+
+
+def test_playback_pool_keeps_cycling_daily_and_candidate_lines(
+    app, tmp_path: Path
+) -> None:
+    config = _config(tmp_path, chance=0, image_dir=tmp_path)
+    config.set("self_talk_daily_enabled", True)
+    config.set("self_talk_daily_texts", ["每日甲", "每日乙", "每日丙", "每日丁"])
+    config.set("self_talk_daily_count", 1)
+    config.set("self_talk_texts", ["候选甲", "候选乙"])
+    presentation = SpyPresentation()
+    runtime = _load_runtime(
+        SELF_TALK_PACK,
+        "fun.self-talk",
+        HostPorts(
+            presentation=presentation,
+            scheduler=FakeScheduler(),
+            storage=FakeStorage(tmp_path),
+        ),
+        config,
+    )
+
+    for _ in range(4):
+        runtime._speak()
+    assert len(presentation.said) == 4
+    daily_line = presentation.said[0][0]
+    assert daily_line in {"每日甲", "每日乙", "每日丙", "每日丁"}
+    first_cycle = [item[0] for item in presentation.said[1:]]
+    assert len(first_cycle) == 3
+    assert set(first_cycle) == {daily_line, "候选甲", "候选乙"}
+
+    for _ in range(3):
+        runtime._speak()
+    second_cycle = [item[0] for item in presentation.said[4:]]
+    assert set(second_cycle) == set(first_cycle)
+    assert second_cycle[0] != first_cycle[-1], "轮次接缝不能连续重复同一句"
+    state = json.loads(
+        (tmp_path / "feature-data" / "fun.self-talk" / "daily.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state["0"]["index"] == 7
+
+
+def test_playback_champion_egg_does_not_advance_the_pool(
+    app, tmp_path: Path
+) -> None:
+    config = _config(tmp_path, chance=0, image_dir=tmp_path)
+    config.set("self_talk_daily_texts", ["每日甲"])
+    config.set("self_talk_daily_count", 1)
+    config.set("self_talk_texts", ["候选甲"])
+    config.set("self_talk_champion_enabled", True)
+    config.set("self_talk_champion_chance", 100)
+    presentation = SpyPresentation()
+    runtime = _load_runtime(
+        SELF_TALK_PACK,
+        "fun.self-talk",
+        HostPorts(
+            presentation=presentation,
+            scheduler=FakeScheduler(),
+            storage=FakeStorage(tmp_path),
+        ),
+        config,
+    )
+
+    runtime._speak()
+    runtime._speak()
+    assert presentation.sequences, "champion 彩蛋应走多气泡通道"
+    state = json.loads(
+        (tmp_path / "feature-data" / "fun.self-talk" / "daily.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state["0"]["index"] == 1, "彩蛋不消耗播放池台词"
+
+
+def test_playback_image_caption_advances_the_pool(app, tmp_path: Path) -> None:
+    folder = tmp_path / "pics"
+    folder.mkdir()
+    _write_image(folder / "a.png")
+    config = _config(tmp_path, chance=100, image_dir=folder)
+    config.set("self_talk_daily_texts", ["每日甲"])
+    config.set("self_talk_daily_count", 1)
+    config.set("self_talk_texts", ["候选甲"])
+    presentation = SpyPresentation()
+    runtime = _load_runtime(
+        SELF_TALK_PACK,
+        "fun.self-talk",
+        HostPorts(
+            presentation=presentation,
+            scheduler=FakeScheduler(),
+            storage=FakeStorage(tmp_path),
+        ),
+        config,
+    )
+
+    runtime._speak()
+    runtime._speak()
+    assert len(presentation.images) == 1
+    assert presentation.images[0][1] in {"每日甲", "候选甲"}
+    state = json.loads(
+        (tmp_path / "feature-data" / "fun.self-talk" / "daily.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state["0"]["index"] == 2, "配图 caption 也是这一轮说过的台词"
+
+
+def test_self_talk_page_merges_builtin_initial_lines(app, tmp_path: Path) -> None:
+    host = _PageHost(tmp_path)
+    host.config.set("self_talk_texts", ["我自己的句子", "今天也要好好休息。"])
+    feature = _load_feature(
+        SELF_TALK_PACK,
+        "fun.self-talk",
+        HostPorts(presentation=SpyPresentation(), scheduler=FakeScheduler()),
+        host.config,
+    )
+    page = feature.definition.settings_factory(host)
+    try:
+        lines = page.texts.toPlainText().splitlines()
+        assert lines[0] == "我自己的句子"
+        assert "今天也要好好休息。" in lines
+        assert "好女孩……" in lines
+        assert page.dirty() is True
+        page.confirm_save()
+        saved = host.config.get("self_talk_texts")
+        assert "我自己的句子" in saved
+        assert "好女孩……" in saved
+    finally:
+        page.close()
+
+
+def test_click_talk_page_shows_initial_lines_and_restores(
+    app, tmp_path: Path
+) -> None:
+    host = _PageHost(tmp_path)
+    host.config.set("click_talk_texts", ["我自己的点击句"])
+    feature = _load_feature(
+        CLICK_TALK_PACK,
+        "fun.click-talk",
+        HostPorts(presentation=SpyPresentation(), scheduler=FakeScheduler()),
+        host.config,
+    )
+    page = feature.definition.settings_factory(host)
+    try:
+        lines = page.texts.toPlainText().splitlines()
+        assert lines[0] == "我自己的点击句"
+        assert "我在呢。" in lines
+        assert len(DEFAULTS["click_talk_texts"]) == 12
+        page._restore_default_texts()
+        assert page.texts.toPlainText().splitlines() == list(
+            DEFAULTS["click_talk_texts"]
+        )
+        assert host.config.get("click_talk_texts") == list(
+            DEFAULTS["click_talk_texts"]
+        )
+    finally:
+        page.close()
 
 
 def test_image_settings_live_on_the_interaction_page(app, tmp_path: Path) -> None:

@@ -25,7 +25,7 @@ PRESET_DIR = Path(__file__).resolve().parent.parent / "persona_presets"
 MAX_PRESETS = 64
 MAX_NAME = 32
 MAX_DESCRIPTION = 160
-MAX_PROMPT = 8000
+MAX_PROMPT = 20000
 _USER_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 
 

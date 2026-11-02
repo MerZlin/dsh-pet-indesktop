@@ -25,7 +25,7 @@ from petcore.contracts.speech import SpeechRequest
 from petcore.media import talk_images
 from petcore.ui.settings.base import SettingsPage, make_button, make_checkbox
 from petcore.ui.settings.folds import CollapsibleSection
-from petcore.ui.settings.text_lines import format_lines, parse_lines
+from petcore.ui.settings.text_lines import format_lines, merge_lines, parse_lines
 
 try:  # 正常包加载（tests/安装后的 mod loader）
     from . import daily, daily_pool
@@ -159,11 +159,10 @@ class SelfTalkRuntime:
             if self._champion_roll(config):
                 self._play_champion(config, presentation, slot)
                 return
-            texts = [
-                str(item)
-                for item in (config.get("self_talk_texts") or [])
-                if str(item).strip()
-            ]
+            # 每日句说完后，播放池继续循环当天的 12 句 + 候选台词；champion/配图
+            # 仍走原来的概率，只有文本真的显示出来才推进播放池游标。
+            playback = self._playback_line(config, slot)
+            texts = [playback[0]] if playback is not None else self._texts(config)
             if not texts:
                 return
             directory, images = talk_images.configured_images(config)
@@ -189,14 +188,17 @@ class SelfTalkRuntime:
                 text = value if kind == "text" else self._rng.choice(texts)
                 shown = presentation.say(text, duration_ms=duration_ms) is not False
             if shown:
+                if playback is not None:
+                    self._mark_daily(slot, playback[1] + 1)
                 # 气泡没显示出来（例如歌词持有展示会话）就不要朗读：
                 # 听得见却看不见的那句话会让人以为桌宠出错了。
                 self._speak_text(config, slot, text)
             logger.info(
-                "self-talk kind=%s dir=%s images=%d shown=%s",
+                "self-talk kind=%s dir=%s images=%d playback=%s shown=%s",
                 kind,
                 directory,
                 len(images),
+                playback is not None,
                 shown,
             )
         except Exception:
@@ -226,6 +228,57 @@ class SelfTalkRuntime:
     @staticmethod
     def _daily_count(config) -> int:
         return daily_pool.clamp_count(config.get("self_talk_daily_count"))
+
+    @staticmethod
+    def _texts(config) -> list[str]:
+        return [
+            str(item).strip()
+            for item in (config.get("self_talk_texts") or [])
+            if str(item).strip()
+        ]
+
+    def _playback_line(self, config, slot, *, day: _dt.date | None = None):
+        """每日句说完后的下一句播放池台词：``(文本, 当前游标)``；未到该阶段为 None。"""
+        if not bool(config.get("self_talk_daily_enabled", True)):
+            return None
+        path = self._daily_path()
+        if path is None:
+            return None
+        current = day or _dt.date.today()
+        slot_value = int(slot or 0)
+        lines = daily_pool.daily_set(
+            self._daily_pool(config),
+            current,
+            count=self._daily_count(config),
+            salt=slot_value,
+        )
+        if not lines:
+            return None
+        index = daily.daily_index(daily.load_state(path), slot_value, current)
+        if index < len(lines):
+            return None
+        text = daily_pool.playback_line(
+            lines,
+            self._texts(config),
+            current.toordinal(),
+            index,
+            salt=slot_value,
+        )
+        if not text:
+            return None
+        return text, index
+
+    def _mark_daily(self, slot, index: int, day: _dt.date | None = None) -> None:
+        path = self._daily_path()
+        if path is None:
+            return
+        current = day or _dt.date.today()
+        state = daily.load_state(path)
+        daily.mark_said(state, int(slot or 0), current, int(index))
+        try:
+            daily.save_state(path, state)
+        except OSError:
+            logger.debug("self-talk daily state save failed", exc_info=True)
 
     def _speak_daily(
         self,
@@ -295,11 +348,7 @@ class SelfTalkRuntime:
                 presentation.say(sequence[0], duration_ms=duration_ms) is not False
             )
         if shown:
-            daily.mark_said(state, slot_value, current, index + 1)
-            try:
-                daily.save_state(path, state)
-            except OSError:
-                logger.debug("self-talk daily state save failed", exc_info=True)
+            self._mark_daily(slot, index + 1, current)
             if len(sequence) == 1:
                 self._speak_text(config, slot, sequence[0])
         logger.info(
@@ -452,7 +501,14 @@ class SelfTalkPage(SettingsPage):
         self.texts = QPlainTextEdit(self)
         self.texts.setPlaceholderText("每行一条台词")
         self.texts.setMinimumHeight(120)
-        self.texts.setPlainText(format_lines(self.config().get("self_talk_texts") or []))
+        self.texts.setPlainText(
+            format_lines(
+                merge_lines(
+                    self.config().get("self_talk_texts") or [],
+                    DEFAULTS["self_talk_texts"],
+                )
+            )
+        )
         self._text_timer = QTimer(self)
         self._text_timer.setSingleShot(True)
         self._text_timer.setInterval(250)
@@ -461,7 +517,8 @@ class SelfTalkPage(SettingsPage):
         card.add_row(
             "候选台词",
             self.texts,
-            "每行一条；这里是初始预制句，可直接改/删/加，留空则不显示。",
+            "每行一条；内置初始句会在打开本页时补进编辑框，可直接改/删/加，"
+            "留空则不显示。",
             expand=True,
             search_keys=("恢复内置台词", "预制句"),
         )
@@ -475,7 +532,8 @@ class SelfTalkPage(SettingsPage):
         daily_card.add_row(
             "启用每日一句",
             self.daily_enabled,
-            "每天按日期给每只宠挑一组台词，一次自言自语说一句；说完再回到普通台词。",
+            "每天按日期给每只宠挑一组台词，一次自言自语说一句；"
+            "这组说完后与候选台词一起循环播放。",
             search_keys=("每日一句", "今日台词", "每日随机"),
         )
         self.daily_count = QSpinBox(self)
@@ -730,7 +788,7 @@ class SelfTalkPage(SettingsPage):
             if offset:
                 head += " · 明天的预览（明天再看这一组）"
             elif spoken >= len(lines):
-                head += " · 都说过了，接下来是普通自言自语"
+                head += " · 都说过了，接下来循环播放今天的台词与候选台词"
             elif spoken > 0:
                 head += f" · 下一句第 {spoken + 1} 句"
             self.daily_preview_title.setText(head)
