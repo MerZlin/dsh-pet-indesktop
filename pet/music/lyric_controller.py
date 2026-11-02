@@ -92,12 +92,14 @@ def split_bubble_text(title_line: str, lyric: str = "") -> tuple[str, str]:
     return title, lyric
 
 
-# 歌词提前量（秒）的默认值与可调范围。实机实测歌词比音频晚不到 1 秒；
-# 用户明确表示宁可歌词早、不能接受歌词晚，故默认提前 1 秒。
-# 允许负值：如果某些播放器反而偏早，用户可往回调。
-LYRIC_LEAD_SECONDS = 1.0
-LEAD_MIN_SECONDS = -2.0
-LEAD_MAX_SECONDS = 3.0
+# 歌词提前量（秒）的默认值与可调范围：定义在轻模块 ``lyric_lead``（零 Qt、零
+# 网络导入），供 config 归一化与设置页滑块直接取用；这里 re-export 保持原有
+# 导入路径（``from pet.music.lyric_controller import LYRIC_LEAD_SECONDS``）不变。
+from .lyric_lead import (  # noqa: E402  —— 有意放在原定义位置
+    LEAD_MAX_SECONDS,
+    LEAD_MIN_SECONDS,
+    LYRIC_LEAD_SECONDS,
+)
 
 
 class LyricTracker:

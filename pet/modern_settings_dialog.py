@@ -1009,9 +1009,17 @@ class ModernSettingsDialog(QDialog):
         # 语音模块未激活：整页不构造（「语音」域随之只剩节日组/整个隐藏）
         self.voice_chime_page = None
         if _fa.is_active("voice"):
+            from .voice import chime_settings as _chime_settings
             from .voice.chime_settings import VoiceChimeSettingsPage
 
-            self.voice_chime_page = VoiceChimeSettingsPage(self.config, self)
+            # 凭据状态那几行要读系统钥匙串（import keyring，Windows 上连带
+            # win32ctypes，本机实测 200~500ms）。构造期先不读，窗口显示后再补：
+            # 开窗时间不该被一行「已保存 / 还没设置」的提示挡住（见 showEvent）。
+            _chime_settings.set_defer_secret_hints(True)
+            try:
+                self.voice_chime_page = VoiceChimeSettingsPage(self.config, self)
+            finally:
+                _chime_settings.set_defer_secret_hints(False)
             self.voice_chime_page.preview_requested.connect(self._on_voice_chime_preview)
 
         # 节日提醒设置页（行在 _rebuild_domain_navigation 中拾入「语音」总域）
@@ -1744,6 +1752,22 @@ class ModernSettingsDialog(QDialog):
         if not getattr(self, "_initial_focus_assigned", False):
             self._initial_focus_assigned = True
             self.sidebar.setFocus(Qt.FocusReason.OtherFocusReason)
+        if not getattr(self, "_deferred_secret_hints_scheduled", False):
+            self._deferred_secret_hints_scheduled = True
+            # 窗口已经画出来了，再补读凭据状态（keyring 导入不挡开窗，见 __init__
+            # 里构造语音页那段注释）。零延迟定时器 = 本轮事件处理完就执行，
+            # 用户看到窗口的时机不受影响。
+            QTimer.singleShot(0, self._refresh_deferred_secret_hints)
+
+    def _refresh_deferred_secret_hints(self) -> None:
+        """补读「语音报时」凭据行的状态（构造期推迟的那次读取）。"""
+        page = getattr(self, "voice_chime_page", None)
+        if page is None:
+            return
+        try:
+            page.refresh_backend_rows()
+        except Exception:  # noqa: BLE001 —— 提示文案刷新失败不该影响开窗
+            logging.exception("语音报时凭据状态延迟刷新失败")
 
     def _move_away_from(self, pet_geo: QRect) -> None:
         """首次显示时把窗口移到不与桌宠相交的位置（右侧优先，再左侧/下方/上方）"""
@@ -2162,7 +2186,9 @@ class ModernSettingsDialog(QDialog):
             # 语音报时的行刚被搬进这张平卡（容器散架、行序即创建序）：让设置页按当前
             # 后端重新排一遍——当前后端平铺在最上面，其余后端各占一行折叠头。
             if self.voice_chime_page is not None:
-                self.voice_chime_page.refresh_backend_rows()
+                # with_secrets=False：构造期只排布局，凭据状态（要 import keyring）
+                # 等 showEvent 后再补，见 _refresh_deferred_secret_hints。
+                self.voice_chime_page.refresh_backend_rows(with_secrets=False)
             if self.festival_page is not None:
                 # 节日提醒的行同样被搬进这张平卡：摆正「常用项在前 + 少用项折叠」的行序。
                 self.festival_page.refresh_backend_rows()

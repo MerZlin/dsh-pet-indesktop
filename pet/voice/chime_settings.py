@@ -69,6 +69,22 @@ from ..voice_chime_tts_panel import (
     notice_row,
 )
 
+# 设置窗构造期是否把「凭据状态」的读取推迟到窗口显示之后。
+#
+# 读状态走 ``tts_secrets.get`` → ``import keyring``（Windows 上连带
+# win32ctypes，本机实测 200~500ms）。设置窗构造期读它，等于每次开窗都先等这段
+# 导入；而这几行提示只是「已保存 / 还没设置」的展示细节，晚一拍补齐没有任何
+# 功能影响。对话框在构造本页前置 True，``show`` 之后用零延迟定时器调
+# :meth:`VoiceChimeSettingsPage.refresh_backend_rows` 补齐；单独构造本页
+# （测试、其它入口）默认 False，行为与改动前逐位一致。
+_DEFER_SECRET_HINTS = False
+
+
+def set_defer_secret_hints(defer: bool) -> None:
+    """打开/关闭构造期的凭据状态延迟读取（见 ``_DEFER_SECRET_HINTS``）。"""
+    global _DEFER_SECRET_HINTS
+    _DEFER_SECRET_HINTS = bool(defer)
+
 
 class VoiceChimeSettingsPage(QWidget):
     """自含语音报时设置页（后端参数行由 provider 声明生成）。"""
@@ -79,6 +95,11 @@ class VoiceChimeSettingsPage(QWidget):
     def __init__(self, config, parent: QWidget | None = None):
         super().__init__(parent)
         self.config = config
+        # 凭据状态要读系统钥匙串（import keyring，Windows 上连带 win32ctypes，
+        # 本机实测 200~500ms）。设置窗构造期可以先不读，等窗口显示出来再补
+        # （对话框用 ``set_defer_secret_hints`` 打开这个开关）；单独构造本页
+        # 时默认就是原来的行为：构造完行里立刻有「已保存 / 还没设置」。
+        self._secret_hints_ready = not _DEFER_SECRET_HINTS
 
         # 字段控件/行：按 (provider_id, 字段名) 与配置键索引，供显隐与读写使用
         self._field_widgets: dict[str, QWidget] = {}
@@ -381,10 +402,20 @@ class VoiceChimeSettingsPage(QWidget):
                 row_visible[spec.name] = show
             visible[provider.id] = row_visible
         self._tts_panel.apply(backend, visible)
-        self._refresh_secret_hints()
+        if self._secret_hints_ready:
+            self._refresh_secret_hints()
 
-    def refresh_backend_rows(self) -> None:
-        """行被「语音」域搬进平卡后重新编排一次折叠与行序（域构建完由对话框调用）。"""
+    def refresh_backend_rows(self, *, with_secrets: bool = True) -> None:
+        """行被「语音」域搬进平卡后重新编排一次折叠与行序（域构建完由对话框调用）。
+
+        ``with_secrets=False``：只排布局，不读凭据状态。设置窗构造期走这条
+        ——读状态要 import keyring（200~500ms），等窗口显示后再读（见
+        :meth:`_refresh_secret_hints` 与对话框的 showEvent）。
+        """
+        # 走到这里说明要么是正常构造（早就 ready），要么是构造期推迟了凭据状态
+        # 读取、等窗口显示后再补——补完就不再推迟了。
+        if with_secrets:
+            self._secret_hints_ready = True
         self._refresh_backend_controls()
 
     def _current_field_values(self, provider) -> dict:

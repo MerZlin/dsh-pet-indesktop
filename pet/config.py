@@ -1804,6 +1804,19 @@ class Config:
         providers = chat.get("providers") if isinstance(chat, dict) else None
         if not isinstance(providers, dict):
             return
+        # 只有盘上真的还留着明文 Key 时才需要钥匙串。导入 keyring（Windows 下
+        # 连带 win32ctypes）本机实测 200~500ms，而绝大多数配置早已迁移完——
+        # 原先这里无条件 import，等于每次 Config() 都白付一段，主进程与独立设置
+        # 进程都要等。判据与下面的迁移循环同一口径（去空白后非空才算明文）。
+        has_plaintext = any(
+            isinstance(provider, dict) and (
+                str(provider.get("api_key") or "").strip()
+                or str(provider.get("vision_api_key") or "").strip()
+            )
+            for provider in providers.values()
+        )
+        if not has_plaintext:
+            return
         try:
             from .chat.models import SecretStore  # 惰性导入，且只实例化一次
         except ModuleNotFoundError as exc:
@@ -2120,7 +2133,7 @@ class Config:
         )
         # 歌词提前量的区间与设置页滑块**同源**（music_lyric_controller 的常量），
         # 不再抄一份边界。惰性导入：config.py 顶层不引 Qt。
-        from .music.lyric_controller import (
+        from .music.lyric_lead import (
             LEAD_MAX_SECONDS,
             LEAD_MIN_SECONDS,
             LYRIC_LEAD_SECONDS,

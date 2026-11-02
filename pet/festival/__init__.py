@@ -78,7 +78,9 @@ except ImportError:  # pragma: no cover
 # 复用语音报时的清洗实现，避免在同一包内写第二份同语义清洗逻辑：
 # clean_flag（布尔真值解析）、clean_custom_times（HH:MM 集合）、
 # clean_custom_quotes（多行文本去控制字符/去重保序/单条截断）。
-from ..voice_chime import clean_custom_quotes, clean_custom_times, clean_flag
+# 导入的是**纯清洗轻模块**（pet/voice_chime_clean.py）：节日提醒不需要 TTS，
+# 走 pet/voice_chime.py 会把 edge-tts / mimo / sapi 整条导入链拖进设置页启动。
+from ..voice_chime_clean import clean_custom_quotes, clean_custom_times, clean_flag
 
 # —— 提醒方式（二选一）——
 MODE_TIMES = "times"

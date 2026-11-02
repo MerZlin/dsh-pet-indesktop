@@ -307,7 +307,12 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 按文件约定只随实测校准，不为达标压行（拆分仍是待办）。
 # 2026-10-22 上调到 2722：AI 域新增「场景扮演」组的一行 claim（roleplay_enabled /
 # roleplay_scene），行本体在 _AiSettingsPage。实测 2722。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2722  # 2026-10-22：场景扮演组 claim 一行
+# 2026-11-02 上调到 2748（+26）：设置窗开窗提速——凭据状态改到窗口显示后再读。
+# 为什么只能落在这个文件：只有对话框知道「窗口真的显示出来了」（showEvent）；
+# 语音页自己的行会被 _rebuild_domain_navigation 搬进「语音」域的平卡，它的
+# showEvent 永远不触发，所以延迟补读只能挂在对话框这边（一处 showEvent 钩子 +
+# 一个 9 行补读方法 + 构造处的开关/注释）。没有新增页面或控件。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2748  # 2026-11-02：开窗延迟读凭据状态
 
 
 def _read(name: str) -> str:
