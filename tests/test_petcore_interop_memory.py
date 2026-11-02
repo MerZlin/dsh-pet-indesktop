@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
+import pytest
+
+import petcore.interop.memory as memmod
 from petcore.interop.memory import (
     MemoryCard,
     MemoryEntry,
@@ -405,3 +409,156 @@ def test_tidy_does_not_merge_template_facts_with_correction_words(
     assert result["superseded"] == 0
     assert store.find_entry("a").superseded_by == ""
     assert store.find_entry("b").superseded_by == ""
+
+
+def test_render_dedupes_same_text_across_sources(tmp_path: Path) -> None:
+    """多个外部源镜像到同一条事实时，提示词只出现一次。"""
+    store = MemoryStore(tmp_path, "m")
+    now = time.time()
+    store.save_card(
+        MemoryCard(
+            entries=[
+                MemoryEntry(
+                    id="local",
+                    text="主人喜欢鲸鱼",
+                    source="ai",
+                    platform="pet",
+                    scope="pet",
+                    importance=80,
+                    created_at=now,
+                ),
+                MemoryEntry(
+                    id="ext-dsh",
+                    text="主人喜欢鲸鱼",
+                    source="dsh-facts",
+                    platform="dsh",
+                    scope="dsh",
+                    kind="external",
+                    importance=100,
+                    created_at=now - 10,
+                    origin="dsh-facts:f1",
+                ),
+                MemoryEntry(
+                    id="ext-identity",
+                    text="主人喜欢鲸鱼",
+                    source="identity:owner",
+                    platform="dsh",
+                    scope="dsh",
+                    kind="external",
+                    importance=90,
+                    created_at=now - 20,
+                    origin="identity:i1",
+                ),
+            ]
+        )
+    )
+    text = store.render("pet", query="鲸鱼", max_chars=2000)
+    assert text.count("主人喜欢鲸鱼") == 1
+    # 分数最高的本地条目优先，外部镜像不会把它挤掉。
+    assert "【和主人】" in text
+
+
+def test_apply_external_updates_importance_on_amend(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path, "m")
+    record = {
+        "origin": "feiyu:__default__:f1",
+        "text": "被 amend 的事实",
+        "importance": 60,
+        "created_at": 100.0,
+        "source": "feiyu:remember",
+    }
+    store.apply_external("feiyu:__default__", [record], status="ok", label="feiyu")
+    assert store.entries()[0].importance == 60
+    record["importance"] = 90
+    store.apply_external("feiyu:__default__", [record], status="ok", label="feiyu")
+    assert store.entries()[0].importance == 90
+
+
+def test_dedupe_keeps_first_section_entry(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path, "m")
+    now = time.time()
+    store.save_card(
+        MemoryCard(
+            entries=[
+                MemoryEntry(
+                    id="high",
+                    text="同一句话",
+                    importance=99,
+                    created_at=now,
+                ),
+                MemoryEntry(
+                    id="first",
+                    text="同一句话",
+                    importance=10,
+                    created_at=now - 100,
+                    first=True,
+                    kind="first",
+                ),
+            ]
+        )
+    )
+    text = store.render("pet", max_chars=2000, max_entries=2)
+    assert text.count("同一句话") == 1
+    assert "【最初】" in text, "去重不能吃掉 first 的分区保底"
+
+
+def test_compact_reserves_local_slots_when_external_floods(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path, "m", max_entries=50)
+    now = time.time()
+    store.save_card(
+        MemoryCard(
+            entries=[
+                MemoryEntry(
+                    id=f"local-{i}",
+                    text=f"本地记忆 {i}",
+                    importance=50,
+                    created_at=now - i,
+                )
+                for i in range(50)
+            ]
+        )
+    )
+    records = [
+        {
+            "origin": f"identity:i{i}",
+            "text": f"外部记忆 {i}",
+            "importance": 90,
+            "created_at": now,
+            "source": "identity:owner",
+        }
+        for i in range(50)
+    ]
+    store.apply_external("identity", records, status="ok", label="identity")
+    entries = store.entries()
+    assert len(entries) == 50
+    local = [entry for entry in entries if not entry.origin]
+    assert len(local) >= 30, "外部镜像不能把本地记忆整批挤掉"
+
+
+def test_replace_with_retry_retries_permission_error(monkeypatch, tmp_path: Path) -> None:
+    calls: list[int] = []
+
+    def fake_replace(_source, _target):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError(13, "busy")
+
+    monkeypatch.setattr(memmod.os, "replace", fake_replace)
+    memmod._replace_with_retry("a", tmp_path / "b")
+    if os.name == "nt":
+        assert len(calls) == 3
+    else:
+        assert len(calls) == 1
+
+
+def test_replace_with_retry_does_not_mask_other_errors(monkeypatch, tmp_path: Path) -> None:
+    calls: list[int] = []
+
+    def fake_replace(_source, _target):
+        calls.append(1)
+        raise FileNotFoundError(2, "missing")
+
+    monkeypatch.setattr(memmod.os, "replace", fake_replace)
+    with pytest.raises(FileNotFoundError):
+        memmod._replace_with_retry("a", tmp_path / "b")
+    assert len(calls) == 1

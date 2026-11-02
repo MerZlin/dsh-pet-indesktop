@@ -194,6 +194,28 @@ def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, int(value)))
 
 
+def _replace_with_retry(source: str, target: Path, *, attempts: int = 5) -> None:
+    """Windows 上目标文件正被读取时 ``os.replace`` 会短暂拒绝访问。
+
+    ``os.replace`` 在 POSIX 是原子的；Windows 也不允许覆盖已打开的文件。
+    记忆页/状态查询会在同步 worker 落盘时读同一份 ``external.json``，一次
+    瞬时 ``PermissionError`` 不该让整轮同步失败。只在 Windows 上短暂退避后
+    重试（最长约 0.15s），最后仍失败才抛给调用方（真实权限/磁盘错误不吞）。
+    POSIX 上的 PermissionError 不重试，避免无意义地拖住 GUI。
+    """
+    if os.name != "nt":
+        os.replace(source, target)
+        return
+    for attempt in range(max(1, attempts)):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(0.01 * (attempt + 1))
+
+
 def _safe_name(value: object) -> str:
     text = str(value or "").strip()[:64]
     if not text or text in {".", ".."}:
@@ -388,7 +410,7 @@ class MemoryStore:
         try:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
                 stream.write(payload)
-            os.replace(temp_name, self.card_path)
+            _replace_with_retry(temp_name, self.card_path)
         except BaseException:
             try:
                 os.unlink(temp_name)
@@ -444,7 +466,7 @@ class MemoryStore:
         try:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
                 stream.write(payload)
-            os.replace(temp_name, self.seen_path)
+            _replace_with_retry(temp_name, self.seen_path)
         except BaseException:
             try:
                 os.unlink(temp_name)
@@ -463,7 +485,7 @@ class MemoryStore:
             self.directory.mkdir(parents=True, exist_ok=True)
             temp = self.offset_path.with_name(self.offset_path.name + ".tmp")
             temp.write_text(f"{max(0, int(value))}\n", encoding="utf-8")
-            os.replace(temp, self.offset_path)
+            _replace_with_retry(temp, self.offset_path)
         except OSError:
             pass
 
@@ -623,11 +645,38 @@ class MemoryStore:
             card.peak_level = 0
             return
         card.peak_level = max(card.peak_level, 2)
-        keep = sorted(
-            card.entries,
-            key=lambda item: (item.pinned, item.importance, item.last_seen_at),
-            reverse=True,
+        def score(item):
+            return (item.importance, item.last_seen_at)
+
+        pinned = sorted(
+            (item for item in card.entries if item.pinned), key=score, reverse=True
         )[: self.max_entries]
+        keep = list(pinned)
+        remaining = self.max_entries - len(keep)
+        if remaining > 0:
+            local = sorted(
+                (
+                    item
+                    for item in card.entries
+                    if not item.pinned and not item.origin
+                ),
+                key=score,
+                reverse=True,
+            )
+            external = sorted(
+                (item for item in card.entries if not item.pinned and item.origin),
+                key=score,
+                reverse=True,
+            )
+            # 外部镜像不能把用户自己的记忆整批挤出容量：非置顶名额至少
+            # 60% 先留给本地条目，剩余再按重要度/最近使用填外部镜像。
+            reserve_local = min(len(local), max(0, int(remaining * 0.6)))
+            keep.extend(local[:reserve_local])
+            remaining = self.max_entries - len(keep)
+            if remaining > 0:
+                rest = local[reserve_local:] + external
+                rest.sort(key=score, reverse=True)
+                keep.extend(rest[:remaining])
         keep_ids = {item.id for item in keep}
         removed = [item for item in card.entries if item.id not in keep_ids]
         if removed:
@@ -730,7 +779,9 @@ class MemoryStore:
         scored = [(item, _entry_score(item, terms, query, now)) for item in candidates]
         scored.sort(key=lambda pair: pair[1], reverse=True)
         scores = {item.id: score for item, score in scored}
-        selected = _select_for_render([item for item, _ in scored], max_entries)
+        selected = _select_for_render(
+            _dedupe_by_text([item for item, _ in scored]), max_entries
+        )
         text = _compose_render(selected, scores, max_chars)
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
@@ -981,7 +1032,7 @@ class MemoryStore:
         try:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
                 stream.write(payload)
-            os.replace(temp_name, self.external_path)
+            _replace_with_retry(temp_name, self.external_path)
         except BaseException:
             try:
                 os.unlink(temp_name)
@@ -1031,6 +1082,11 @@ class MemoryStore:
         existing = {
             item.origin: item for item in card.entries if item.origin
         }
+        local_texts = {
+            normalize_text(item.text)
+            for item in card.entries
+            if not item.origin and item.kind != "reply"
+        }
         seen: set[str] = set()
         added = updated = removed = 0
         now = time.time()
@@ -1046,24 +1102,27 @@ class MemoryStore:
                 continue
             entry = existing.get(origin)
             if entry is not None:
+                changed = False
                 if entry.text != text:
                     entry.text = text
                     entry.title = text[:MAX_TITLE]
+                    changed = True
+                new_importance = _clamp(
+                    int(record.get("importance") or entry.importance), 1, 100
+                )
+                if entry.importance != new_importance:
+                    entry.importance = new_importance
+                    changed = True
+                new_created = float(record.get("created_at") or entry.created_at)
+                if new_created and new_created != entry.created_at:
+                    entry.created_at = new_created
+                    changed = True
+                if changed:
                     entry.updated_at = now
                     updated += 1
                 continue
             normalized = normalize_text(text)
-            duplicate = next(
-                (
-                    item
-                    for item in card.entries
-                    if not item.origin
-                    and item.kind != "reply"
-                    and normalize_text(item.text) == normalized
-                ),
-                None,
-            )
-            if duplicate is not None:
+            if normalized in local_texts:
                 continue
             entry = MemoryEntry(
                 id=f"ext-{hashlib.sha1(origin.encode('utf-8')).hexdigest()[:16]}",
@@ -1071,7 +1130,7 @@ class MemoryStore:
                 platform=str(record.get("platform") or "dsh")[:16],
                 scope=str(record.get("scope") or "dsh")[:16],
                 kind=str(record.get("kind") or "external")[:24],
-                title=text[:MAX_TITLE],
+                title=str(record.get("title") or text)[:MAX_TITLE],
                 text=text,
                 importance=_clamp(int(record.get("importance") or 70), 1, 100),
                 clarity="vivid",
@@ -1272,6 +1331,34 @@ def _entry_score(
         + (0.35 if (entry.first or entry.kind == "first") else 0.0)
         + min(5, int(entry.recall_count)) * 0.03
     )
+
+
+def _dedupe_by_text(ordered: list[MemoryEntry]) -> list[MemoryEntry]:
+    """同一规范化文本只保留一条；分数最高者优先，但保留 first/pinned 语义。
+
+    多个外部源（dsh.memory / meow-memory / 身份接力 / feiyu）可能镜像到同一条
+    事实；``apply_external`` 只和本地条目去重，这里补上跨源去重，避免提示词
+    里同一句话出现两次。若低分的同文条目带 ``first``/``pinned``，换它进列表，
+    否则 ``_select_for_render`` 的「最初/锚点」保底会被去重悄悄吃掉。
+    记忆页仍能看到各源镜像，便于用户判断来源。
+    """
+    seen: dict[str, int] = {}
+    deduped: list[MemoryEntry] = []
+    for item in ordered:
+        key = normalize_text(item.text)
+        index = seen.get(key)
+        if index is None:
+            seen[key] = len(deduped)
+            deduped.append(item)
+            continue
+        current = deduped[index]
+        if _wants_section_slot(item) and not _wants_section_slot(current):
+            deduped[index] = item
+    return deduped
+
+
+def _wants_section_slot(item: MemoryEntry) -> bool:
+    return bool(item.pinned or item.first or item.kind == "first")
 
 
 def _select_for_render(ordered: list[MemoryEntry], max_entries: int) -> list[MemoryEntry]:

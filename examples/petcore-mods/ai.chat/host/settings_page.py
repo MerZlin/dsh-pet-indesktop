@@ -67,6 +67,9 @@ class AiChatPage(SettingsPage):
         "ai_memory_max_entries",
         "ai_memory_share_channels",
         "ai_memory_import_dsh",
+        "ai_memory_identity_dir",
+        "ai_memory_feiyu_root",
+        "ai_memory_feiyu_session",
         "ai_web_search",
         "ai_web_engine",
         "ai_web_results",
@@ -276,7 +279,7 @@ class AiChatPage(SettingsPage):
         card_anim.add_row(
             "朗读回复",
             self.voice_reply_check,
-            "回复完成后用「语音 → 主后端」朗读（去 Markdown、最多 500 字）。",
+            "回复完成后按句朗读（去 Markdown；单句超长会拆，整条最多 4000 字/40 句）。",
         )
 
         card_mem = self.section("长期记忆", level=3)
@@ -306,9 +309,42 @@ class AiChatPage(SettingsPage):
         )
         self.memory_import_check.toggled.connect(self._on_changed)
         card_mem.add_row(
-            "同步 DSH 记忆",
+            "同步外部记忆",
             self.memory_import_check,
-            "只读本机 dsh.memory 的事实与 meow-memory 的 .dsh-meow/memory.db；不会写回对方。",
+            "只读本机 dsh.memory、meow-memory、身份接力与 feiyu 记忆；不会写回对方。",
+        )
+        self.identity_dir_edit = QLineEdit(self)
+        self.identity_dir_edit.setPlaceholderText("默认 ~/.dsh/identity-memory")
+        self.identity_dir_edit.setText(
+            str(self._initial.get("ai_memory_identity_dir") or "")
+        )
+        self.identity_dir_edit.editingFinished.connect(self._on_changed)
+        card_mem.add_row(
+            "身份接力目录",
+            self.identity_dir_edit,
+            "留空用默认目录；只读取其中的 facts.jsonl，不写回。",
+        )
+        self.feiyu_root_edit = QLineEdit(self)
+        self.feiyu_root_edit.setPlaceholderText("默认 ~/.dsh/feiyu-memory")
+        self.feiyu_root_edit.setText(
+            str(self._initial.get("ai_memory_feiyu_root") or "")
+        )
+        self.feiyu_root_edit.editingFinished.connect(self._on_changed)
+        card_mem.add_row(
+            "feiyu 记忆目录",
+            self.feiyu_root_edit,
+            "留空自动读 ~/.dsh/feiyu-memory-root.json 或默认目录；只读 log.jsonl。",
+        )
+        self.feiyu_session_edit = QLineEdit(self)
+        self.feiyu_session_edit.setPlaceholderText("__default__")
+        self.feiyu_session_edit.setText(
+            str(self._initial.get("ai_memory_feiyu_session") or "__default__")
+        )
+        self.feiyu_session_edit.editingFinished.connect(self._on_changed)
+        card_mem.add_row(
+            "feiyu 会话",
+            self.feiyu_session_edit,
+            "读取哪个会话日志；默认 __default__，与 feiyu 的 sharedMemory 设置一致。",
         )
         self.memory_inject = QSpinBox(self)
         self.memory_inject.setRange(1, 8)
@@ -992,6 +1028,14 @@ class AiChatPage(SettingsPage):
         config.set(
             "ai_memory_import_dsh", bool(self.memory_import_check.isChecked())
         )
+        config.set(
+            "ai_memory_identity_dir", self.identity_dir_edit.text().strip()
+        )
+        config.set("ai_memory_feiyu_root", self.feiyu_root_edit.text().strip())
+        config.set(
+            "ai_memory_feiyu_session",
+            self.feiyu_session_edit.text().strip() or "__default__",
+        )
         config.set("ai_memory_inject", int(self.memory_inject.value()))
         config.set("ai_memory_max_entries", int(self.memory_max.value()))
         config.set("ai_web_search", bool(self.web_check.isChecked()))
@@ -1420,6 +1464,14 @@ class AiChatPage(SettingsPage):
                 value = fallback
             widget.blockSignals(True)
             widget.setValue(value)
+            widget.blockSignals(False)
+        for widget, key, fallback in (
+            (self.identity_dir_edit, "ai_memory_identity_dir", ""),
+            (self.feiyu_root_edit, "ai_memory_feiyu_root", ""),
+            (self.feiyu_session_edit, "ai_memory_feiyu_session", "__default__"),
+        ):
+            widget.blockSignals(True)
+            widget.setText(str(config.get(key) or fallback))
             widget.blockSignals(False)
         self._refresh_memory_status()
 

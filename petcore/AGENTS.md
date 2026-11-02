@@ -784,10 +784,14 @@
 - **记忆可见性矩阵**：`shared` 永远可见；`ai_memory_share_channels=True`（默认）时
   `pet`（AI）与 `dsh`（DSH）互见，`qq` 仍只与 `shared` 互通；关掉退回严格 scope。
   不要再用 `{shared, scope}` 的旧两元组。
-- **外部记忆只读**：`petcore/interop/external_memory.py` 只读
-  `<data_root>/memory/facts.jsonl`（dsh.memory）与 `<workspace>/.dsh-meow/memory.db`
-  （meow-memory）；`MemoryService` 在单线程 worker 同步（`ai_memory_import_dsh`），
-  绝不写回源文件/DB，删除镜像=静音 origin。外部条目带 `origin`、`scope=dsh`，记忆页只读。
+- **外部记忆只读**：`petcore/interop/external_memory.py` 只读四类来源——
+  `<data_root>/memory/facts.jsonl`（dsh.memory）、`<workspace>/.dsh-meow/memory.db`
+  （meow-memory）、身份接力 `facts.jsonl`（默认 `~/.dsh/identity-memory`）、feiyu
+  `sessions/<sid>/log.jsonl`（默认 `~/.dsh/feiyu-memory`，`ai_memory_feiyu_root/
+  _session` 可改）。`MemoryService` 在单线程 worker 同步（`ai_memory_import_dsh`），
+  绝不写回源文件/DB，删除镜像=静音 origin。身份接力/feiyu 的坏行返回 `partial`：
+  只新增/更新镜像、不删除已有条目；只有完整 `ok` 才执行移除。外部条目带 `origin`、
+  `scope=dsh`，记忆页只读；同一文本跨源镜像在 `render` 只输出一次（分数最高者）。
 - **记忆页是 chat_view**：`ai.chat` 的 `memory` 视图经 `Contribution(kind="chat_view")` +
   `view_factories` 注册；`ChatWindow` 把 `pet_slot` 通过 `set_pet_slot` 注入视图，禁止
   视图自己猜主宠。设置页只保留两个开关的**唯一所有权行**（`ai_memory_share_channels` /

@@ -64,9 +64,14 @@ def _match_score(query: str, text: str) -> int:
 
 def _scope_label(entry: dict) -> str:
     if entry.get("origin"):
+        origin = str(entry.get("origin") or "")
         source = str(entry.get("source") or "")
         if source.startswith("meow:"):
             return "meow-memory（只读）"
+        if origin.startswith("identity:"):
+            return "身份接力（只读）"
+        if origin.startswith("feiyu:"):
+            return "feiyu 记忆（只读）"
         return "DSH 记忆（只读）"
     if entry.get("kind") == "reply":
         return "桌宠自述"
@@ -264,7 +269,7 @@ class MemoryView(QWidget):
         self.delete_button = QPushButton("删除", self)
         self.restore_button = QPushButton("恢复", self)
         self.tidy_button = QPushButton("整理", self)
-        self.sync_button = QPushButton("同步 DSH", self)
+        self.sync_button = QPushButton("同步外部记忆", self)
         self.dir_button = QPushButton("目录", self)
         for button in (
             self.add_button,
@@ -437,27 +442,30 @@ class MemoryView(QWidget):
         enabled = bool(status.get("enabled", True)) if isinstance(status, dict) else True
         if not isinstance(sources, list) or not sources:
             self.source_status.setText(
-                "DSH 记忆：未检测到（安装 dsh.memory 或 meow-memory 后自动同步）"
+                "外部记忆：未检测到（安装 dsh.memory / meow-memory / 身份接力 / feiyu 后自动同步）"
                 if enabled
-                else "DSH 记忆：同步已关闭"
+                else "外部记忆：同步已关闭"
             )
             return
         parts = []
         for source in sources:
             if not isinstance(source, dict):
                 continue
-            label = str(source.get("label") or source.get("key") or "DSH")
+            label = str(source.get("label") or source.get("key") or "外部")
             state = str(source.get("status") or "unknown")
             count = int(source.get("count") or 0)
             if state == "ok":
                 when = _stamp(source.get("last_sync"))
                 parts.append(f"{label}：已同步 {count} 条" + (f" · {when}" if when else ""))
+            elif state == "partial":
+                reason = str(source.get("reason") or "部分行无法解析")
+                parts.append(f"{label}：部分读取 {count} 条（{reason}）")
             elif state == "not_found":
                 parts.append(f"{label}：未找到")
             else:
                 reason = str(source.get("reason") or "读取失败")
                 parts.append(f"{label}：{reason}")
-        self.source_status.setText("DSH 记忆　" + "　|　".join(parts))
+        self.source_status.setText("外部记忆　" + "　|　".join(parts))
 
     def _refresh_preview(self) -> None:
         memory = self._memory()
@@ -593,7 +601,7 @@ class MemoryView(QWidget):
             return
         external = bool(entry.get("origin"))
         question = (
-            "只从本地隐藏这条 DSH 记忆？不会删除 DSH 里的原件。"
+            "只从本地隐藏这条外部记忆？不会删除源文件里的原件。"
             if external
             else "删除这条记忆？会保留在归档里，可随时恢复。"
         )

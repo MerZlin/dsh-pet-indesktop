@@ -6110,3 +6110,95 @@ petcore 的 `ai.agent` mod；完成后提交并本地构建 setup。
 - 第三方 `dsh.memory` 扩展本身不修改，只读 `facts.jsonl`。
 - 记忆页未在安装包内跑（源码树 + 临时数据根）；`tidy` 的更正启发式可能误合并，
   被覆盖条目可在「已更新」恢复。
+
+## L160 — 2026-11-02 — AI 回复朗读按句滴灌 + 预合成（PR #424 语音部分）
+
+**背景**：PR #424 把主分支「按句滴灌 + 预合成前锋」移植到 petcore `ai.chat`，但
+`ReplyVoicePlayer` 的完成回调写成零参数；真实 `SpeechPort.on_finished` 契约是
+`Callable[[SpeechResult], None]`，`SpeechChannel` 会传结果，`TypeError` 被回调包装
+吞掉，导致每条多句回复只念第一句。PR 的测试 fake 也用零参数，54 条测试全绿但没覆盖
+真实契约。
+
+**改动**
+
+- `examples/petcore-mods/ai.chat/host/reply_voice.py`（新）：`clean_for_speech` /
+  `split_sentences`（中文句末 + 英文句点）、`ReplyVoicePlayer`（`finished(_result=None)`、
+  RLock、总句数/总字数上限、`stop()` 取消音频）、`PrecacheWorker`（单线程单槽，最多
+  一个在飞，新句子覆盖未开始任务）。
+- `examples/petcore-mods/ai.chat/host/runtime.py`：`_speak_reply(text, slot)`；按 slot
+  缓存 player 与 precache worker；`speak(..., owner=OWNER, slot=slot)`；取消优先
+  `cancel_slot(slot)`；`stop()` 关闭全部 player/worker。
+- `tests/test_petcore_ai_reply_voice.py`（新，23 条）：真实 `SpeechResult` 回调、双 slot
+  互不取消、预合成单飞/覆盖、stop 取消、英文断句、失败停链。
+
+**验证**
+
+- `QT_QPA_PLATFORM=offscreen pytest -q tests/test_petcore_ai_reply_voice.py` → 23 passed。
+- 语音/记忆相邻族（ai_mod / ai_memory / memory_service / external / interop / view /
+  chat_ui / speech / reply_voice）→ 206 passed。
+- 修复前同一测试 13 failed / 9 passed（回调、双 slot、预合成、stop、英文断句均红）。
+- `ruff check` 改动文件 → All checks passed。
+
+**未验证 / 边界**
+
+- 本机未配置真实语音后端，朗读听感（句间停顿）未实机验收；Smart App Control 仍拦
+  新构建。测试只证明顺序/回调/取消/预合成有界，不证明音质。
+- 预合成 worker 每 slot 一条 daemon 线程，只在首次朗读时创建；99 宠全聊天的最坏线程
+  数未实测。
+- 英文断句是启发式：`e.g.`/小数等缩写仍可能在句点处多切一刀。
+
+## L161 — 2026-11-02 — 身份接力 + feiyu 只读外部源 + 跨源同文去重
+
+**背景**：PR #424 的「身份接力记忆」从 `ai.chat` runtime 直接读写
+`~/.dsh/identity-memory/facts.jsonl`，违反本地「记忆单写者 / 外部记忆只读」两条红线；
+且整文件 `write_text` 非原子、读失败当空文件、跨进程无锁、按 `lines[-cap:]` 删 active
+事实。决定不搬它的写函数，改为 core 的两个只读源：身份接力（第三个源）与 feiyu
+`log.jsonl`（第四个源，贡献者 `dsh-fy-mod-puls-max` 的日结/周结/章节就写在这里）。
+
+**改动**
+
+- `petcore/interop/external_memory.py`：新增 `read_identity_facts()`（`content` 脱敏、
+  active/superseded/archived 过滤、同 subject 取最新、source 五档映射 75/70/60/50/45、
+  坏行 `partial`）与 `read_feiyu_logs()`（重放 `add/amend/del/restore/supersede/purge`、
+  只收 fact/event、importance 0–1→1–100、milestone +10、坏行 `partial`）；
+  `read_external_sources(..., identity_dir, feiyu_root, feiyu_session)`。
+- `petcore/interop/memory.py`：`_dedupe_by_text()` 在 `render` 前按规范化文本去重（保留
+  分数最高者）；`_replace_with_retry()` 让 card/seen/offset/external 的 `os.replace`
+  在 Windows 目标文件正被读取时短暂退避重试（同步 worker 与记忆页并发读的真实
+  回归，测试曾稳定复现 `WinError 5`）。
+- `petcore/ui/memory_service.py`：`_identity_dir()` / `_feiyu_source()` 解析配置与
+  `~/.dsh/feiyu-memory-root.json`；同步 worker 传入四个源。
+- `petcore/config.py`：新增 `ai_memory_identity_dir`、`ai_memory_feiyu_root`、
+  `ai_memory_feiyu_session`（默认 `""`/`""`/`"__default__"`，全局作用域，归一化）。
+- `settings_page.py`：外部源总开关文案改「同步外部记忆」，新增三个只读目录/会话行；
+  `memory_view.py`：身份接力/feiyu 只读徽标、`partial` 状态「部分读取」。
+- 测试：`test_petcore_external_memory.py` 16、`test_petcore_interop_memory.py` 24、
+  `test_petcore_memory_service.py` 5、`test_petcore_memory_view.py` 6、
+  `test_petcore_ai_memory.py` 7；新增 identity 空/截断/文件变化 partial、feiyu 未知 op
+  不冻结删除、会话目录逃逸、来源配额、importance amend、first 去重保底。
+
+**验证**
+
+- 聚焦：external / interop / memory_service / memory_view / ai_memory → 58 passed。
+- 真实只读对账（本机）：`read_dsh_facts(%APPDATA%/dsh-pet-core)` → 2 条，apply 到
+  临时卡后 `render` 可见；运行前后 `facts.jsonl` sha256 不变（`dsh_facts_hash_unchanged
+  True`）。`~/.dsh/identity-memory` 与 `~/.dsh/feiyu-memory` 本机都不存在，分别返回
+  `not_found`，不建目录、不写文件。
+- 性能（本机 Windows 11 / Python 3.12）：identity 1000 行 14.66ms；feiyu 1000 op
+  13.09ms；500 条 render 有去重 15.11ms vs 无去重 13.60ms（+1.51ms，+11%）；
+  `apply_external` 500 条卡 + 1000 条外部记录首次 84.63ms、第二次 82.34ms（旧实现
+  逐条重建本地文本集 1998ms；现 300 本地/200 外部）；`split_sentences` 138 字
+  0.033ms/次。
+- 全量 petcore：`tests/test_petcore_*.py` → 3029 passed, 1 skipped in 355.67s。
+- `ruff check` 改动文件 → All checks passed。
+
+**未验证 / 边界**
+
+- 本机没有真实身份接力库；89 条/81 active 的证据来自 PR 作者机器 `C:\Users\admin`，
+  本机无法复现。适配器按「目录可能不存在」设计。
+- feiyu 真机库同样不存在；只按 `log.jsonl` 格式与合成 1000 op 测试覆盖，真实
+  DSH/feiyu 安装后需复核（尤其 `supersede/purge` 与多会话）。
+- 记忆页未在安装包内跑；新三行设置的窄窗布局未做截图目视复核。
+- 多角色同步仍按每个角色读一遍外部源（N 角色 × M 源）；本轮未加同轮缓存，已量到
+  单源 14ms，等真实多角色库再决定是否加。
+- 不做自动双向写回：身份接力/feiyu 仍由各自宿主单写，petcore 只读。

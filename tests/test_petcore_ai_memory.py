@@ -128,10 +128,32 @@ def test_settings_page_memory_switches(qt_app, tmp_path: Path) -> None:
         page.memory_import_check.setChecked(False)
         page.memory_inject.setValue(5)
         page.memory_max.setValue(800)
+        page.identity_dir_edit.setText(str(tmp_path / "identity"))
+        page.feiyu_root_edit.setText(str(tmp_path / "feiyu"))
+        page.feiyu_session_edit.setText("shared")
+        page._on_changed()
         assert host.config.get("ai_memory_enabled") is False
         assert host.config.get("ai_memory_share_channels") is False
         assert host.config.get("ai_memory_import_dsh") is False
         assert host.config.get("ai_memory_inject") == 5
         assert host.config.get("ai_memory_max_entries") == 800
+        assert host.config.get("ai_memory_identity_dir") == str(tmp_path / "identity")
+        assert host.config.get("ai_memory_feiyu_root") == str(tmp_path / "feiyu")
+        assert host.config.get("ai_memory_feiyu_session") == "shared"
     finally:
         page.close()
+
+
+def test_external_memory_source_keys_are_normalized(tmp_path: Path) -> None:
+    config = Config(tmp_path)
+    assert config.get("ai_memory_identity_dir") == ""
+    assert config.get("ai_memory_feiyu_root") == ""
+    assert config.get("ai_memory_feiyu_session") == "__default__"
+    config.set("ai_memory_identity_dir", "  C:/identity  ")
+    config.set("ai_memory_feiyu_root", "  D:/feiyu  ")
+    config.set("ai_memory_feiyu_session", "   ")
+    config.save()
+    reloaded = Config.load(tmp_path)
+    assert reloaded.get("ai_memory_identity_dir") == "C:/identity"
+    assert reloaded.get("ai_memory_feiyu_root") == "D:/feiyu"
+    assert reloaded.get("ai_memory_feiyu_session") == "__default__"

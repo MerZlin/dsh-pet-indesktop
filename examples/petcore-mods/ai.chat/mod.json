@@ -4,7 +4,7 @@
   "id": "ai.chat",
   "name": "AI chat",
   "name_zh": "AI 对话",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "api_version": "1",
   "core_requires": ">=0.1.0,<1.0.0",
   "author": "dsh-pet",

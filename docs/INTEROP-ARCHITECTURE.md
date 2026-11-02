@@ -109,10 +109,16 @@ im.qq mod（examples/petcore-mods/im.qq，Qt-free runtime + 设置页）
   `最初/锚点/和主人/桌宠/DSH/QQ/最近/模糊` 排版；超预算先丢最低分的已输出条目。
 - 可见性：`shared` 永远可见；AI 的 `pet` 与 DSH 的 `dsh` 默认互见
   （`ai_memory_share_channels=True`，关掉退回严格 scope）；`qq` 只与 `shared` 互通。
-- 外部只读镜像：`petcore/interop/external_memory.py` 读 `dsh.memory` 的
-  `<data_root>/memory/facts.jsonl` 与 meow-memory 的 `<workspace>/.dsh-meow/memory.db`；
-  `MemoryService` 启动后 3 秒、之后每 10 分钟在单线程 worker 同步（`ai_memory_import_dsh`）。
-  外部条目带 `origin`、`scope=dsh`，在「记忆」页显示只读徽标；删除=加入静音表，绝不写回源。
+- 外部只读镜像：`petcore/interop/external_memory.py` 读四类来源——
+  `dsh.memory` 的 `<data_root>/memory/facts.jsonl`、meow-memory 的
+  `<workspace>/.dsh-meow/memory.db`、身份接力的 `facts.jsonl`（默认
+  `~/.dsh/identity-memory`）、feiyu 的 `sessions/<sid>/log.jsonl`（默认
+  `~/.dsh/feiyu-memory`，可由 `ai_memory_feiyu_root`/`ai_memory_feiyu_session`
+  指定）。`MemoryService` 启动后 3 秒、之后每 10 分钟在单线程 worker 同步
+  （`ai_memory_import_dsh` 总开关）。身份接力/feiyu 的坏行返回 `partial`：只新增/
+  更新镜像，**不删除**已有条目；只有完整 `ok` 才执行移除。外部条目带 `origin`、
+  `scope=dsh`，在「记忆」页显示只读徽标；删除=加入静音表，绝不写回源。
+  多个源镜像到同一句话时，`render` 按规范化文本去重，只保留分数最高的一条。
 - 迁移：旧 `feature-data/ai.chat/memory/global.jsonl` 与 `<character>.jsonl` 一次性导入
   `source=legacy`，旧文件原样保留，标记 `interop/memory/migration-ai-chat-<character>.json` 幂等。
 - 人格层：`petcore/interop/persona.py` 提供核心/场景/日常组合 + 预算裁剪；`ai.chat` 的设置页

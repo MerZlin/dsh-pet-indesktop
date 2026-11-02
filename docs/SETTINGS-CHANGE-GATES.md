@@ -949,7 +949,10 @@ C 盘剩余空间显示选项（性能占用要低）」。
 | `chat_dark_mode` | `False` | 全局 | primary | 只影响对话窗（侧栏/标题/消息/输入区/DSH 视图）；标题栏月亮按钮与设置页是同一个开关；无持久化失败路径（保存失败只记日志，界面保持当前态） | 深色 / 夜间 / 暗色 / 主题 / 对话窗外观 |
 | `dsh_memory_inject` | `True` | 全局 | primary | 为真时 DSH prompt 带 `context.memory`（内部 system，不进历史） | DSH 记忆 / 互通 |
 | `ai_memory_share_channels` | `True` | 全局 | primary | AI 的 `pet` 与 DSH 的 `dsh` 主人私聊通道互见；关=退回严格 scope（只 `shared` 跨通道）；QQ 始终隔离 | 共享记忆 / 跨通道 / 记忆可见性 |
-| `ai_memory_import_dsh` | `True` | 全局 | primary | 只读 `<data_root>/memory/facts.jsonl`（dsh.memory）与 `<workspace>/.dsh-meow/memory.db`（meow-memory）；关=不新增镜像，已有保留；源缺失只显示「未找到」 | DSH 记忆同步 / meow-memory / 外部记忆 |
+| `ai_memory_import_dsh` | `True` | 全局 | primary | 只读全部外部记忆源：`<data_root>/memory/facts.jsonl`（dsh.memory）、`<workspace>/.dsh-meow/memory.db`（meow-memory）、身份接力 `facts.jsonl`、feiyu `sessions/<sid>/log.jsonl`；关=不新增镜像，已有保留；源缺失只显示「未找到」 | 外部记忆同步 / dsh.memory / meow-memory / 身份接力 / feiyu |
+| `ai_memory_identity_dir` | `""` | 全局 | advanced | 空=`~/.dsh/identity-memory`；只读其中的 `facts.jsonl`，不写回；坏行只标「部分读取」，不删除已有镜像 | 身份接力 / identity memory / 只读 |
+| `ai_memory_feiyu_root` | `""` | 全局 | advanced | 空=先读 `~/.dsh/feiyu-memory-root.json` 的 `root`，再退回 `~/.dsh/feiyu-memory`；只读 `log.jsonl`，不写回 | feiyu 记忆 / 叙事 / 日结 / 只读 |
+| `ai_memory_feiyu_session` | `"__default__"` | 全局 | advanced | 读取哪个 feiyu 会话日志；空值归一化为 `__default__`，与 feiyu 的 sharedMemory 默认库一致 | feiyu 会话 / session |
 | `dsh_persona_inject` | `True` | 全局 | advanced | 预留给人设注入；当前 DSH 只注入记忆，人设仍由 DSH preset 决定 | DSH 人设 |
 | `dsh_history_limit` | `200` | 全局 | advanced | 20–500；DSH 历史回放条数上限 | DSH 历史 |
 | `im_qq_enabled` | `False`（extra） | 全局 | primary | 默认关；缺 webhook/凭据端口时只通知不启动 | QQ / OneBot |

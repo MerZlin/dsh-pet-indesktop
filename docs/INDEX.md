@@ -144,6 +144,7 @@
 
 ## PR 报告存档
 
+- [PR #424 审查 / 语音修复 / 身份接力与 feiyu 只读融合（2026-11-02）](PR-REPORT-PR424-REVIEW-AND-MEMORY-FUSION-2026-11-02.md)：PR #424 语音回调 P0（零参数 `finished` 导致只念第一句）、身份接力 mod 直写违反单写者/只读红线、非原子写/读失败当空/字面召回等阻断项；修语音并按 slot 隔离、预合成有界；身份接力与 feiyu 改为 core 只读外部源，跨源同文去重；`os.replace` Windows 竞态退避。**审查/合并记忆 PR 或改外部记忆源前必读**。
 - [AI 对话：用户气泡宽度与跨会话记忆召回（2026-11-02）](PR-REPORT-AI-CHAT-MEMORY-RECALL-2026-11-02.md)：用户气泡从「只设 maxWidth 被压到 120px」改成按 `QFontMetrics` 显式定宽（66%→86%、边距 76→44）；记忆渲染改相关度优先 top-K（不再被固定分区截断）、问句降权、reply/superseded 排除、AI↔DSH 互见 + QQ 隔离；真实卡 `max_entries=3` 能取到「星期四上课」。**改 `petcore/ui/chat/` 气泡布局或 `interop/memory.py` 渲染前必读**。
 - [AI 对话：记忆管理页、只增不改修复与 DSH 外部记忆互通（2026-11-02）](PR-REPORT-AI-CHAT-MEMORY-MANAGER-2026-11-02.md)：`MemoryEntry` 增 `superseded_by/origin`、RLock、单条编辑/删除/恢复/整理；重复合并 + 更正覆盖；助手回复标 `reply`；新增对话窗「记忆」页与 `ai_memory_import_dsh`；只读 dsh.memory facts + meow-memory `.dsh-meow/memory.db`（SQLite `mode=ro`），worker 同步不阻塞 GUI。**改记忆单写者、记忆页、外部记忆同步或 DSH 记忆互通前必读**；meow-memory 真机未验证。
 - [DSH v2 真机联调（2026-10-31）](PR-REPORT-DSH-REAL-MACHINE-2026-10-31.md)：在真实 DSH 44.7.0 上补齐 v1→v2 迁移（旧 junction / patch `insert` / 旧 channel 链接三处）、历史只回放 `source.kind=user`（实测注入 10,292 字符）、审批指纹忽略 `description`（修重复弹卡）、`pet_control` 改标准 JSON Schema 并如实报 `commands`、`/pet/new` 清旧审批。**改 DSH 安装器、审批闸、历史过滤或 `pet_control` 前必读**；未验证项见报告末节。

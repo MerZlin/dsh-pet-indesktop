@@ -113,6 +113,9 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "ai_memory_max_entries",
         "ai_memory_share_channels",
         "ai_memory_import_dsh",
+        "ai_memory_identity_dir",
+        "ai_memory_feiyu_root",
+        "ai_memory_feiyu_session",
         "ai_web_search",
         "ai_web_engine",
         "ai_web_results",
@@ -316,6 +319,9 @@ DEFAULTS: dict[str, Any] = {
     "ai_memory_max_entries": 500,
     "ai_memory_share_channels": True,
     "ai_memory_import_dsh": True,
+    "ai_memory_identity_dir": "",
+    "ai_memory_feiyu_root": "",
+    "ai_memory_feiyu_session": "__default__",
     "ai_web_search": False,
     "ai_web_engine": "baidu",
     "ai_web_results": 5,
@@ -1740,6 +1746,16 @@ class Config:
         normalized["ai_memory_import_dsh"] = _bool(
             normalized.get("ai_memory_import_dsh"), True
         )
+        normalized["ai_memory_identity_dir"] = str(
+            normalized.get("ai_memory_identity_dir") or ""
+        ).strip()[:260]
+        normalized["ai_memory_feiyu_root"] = str(
+            normalized.get("ai_memory_feiyu_root") or ""
+        ).strip()[:260]
+        feiyu_session = str(
+            normalized.get("ai_memory_feiyu_session") or ""
+        ).strip()[:80]
+        normalized["ai_memory_feiyu_session"] = feiyu_session or "__default__"
         normalized["ai_web_search"] = _bool(normalized.get("ai_web_search"), False)
         engine = str(normalized.get("ai_web_engine") or "baidu")
         normalized["ai_web_engine"] = (

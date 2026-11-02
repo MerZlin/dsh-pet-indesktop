@@ -253,3 +253,46 @@ def test_external_status_line(qt_app, view_module) -> None:
         assert "已同步 1 条" in text
     finally:
         view.shutdown()
+
+
+def test_external_source_labels(view_module) -> None:
+    assert view_module._scope_label(
+        {"origin": "identity:i1", "source": "identity:owner"}
+    ) == "身份接力（只读）"
+    assert view_module._scope_label(
+        {"origin": "feiyu:__default__:f1", "source": "feiyu:remember"}
+    ) == "feiyu 记忆（只读）"
+    assert view_module._scope_label(
+        {"origin": "dsh-facts:f1", "source": "dsh-facts"}
+    ) == "DSH 记忆（只读）"
+
+
+def test_external_status_partial_is_visible(qt_app, view_module) -> None:
+    memory = FakeMemory()
+    memory.external_status = lambda **_: {
+        "enabled": True,
+        "sources": [
+            {
+                "key": "identity",
+                "label": "身份接力（只读）",
+                "status": "partial",
+                "count": 3,
+                "reason": "跳过 1 行无法解析",
+            }
+        ],
+        "muted": 0,
+    }
+    context = SimpleNamespace(
+        ports=SimpleNamespace(
+            memory=memory,
+            config=SimpleNamespace(get=lambda key, default=None: default),
+        )
+    )
+    view = view_module.MemoryView(context)
+    try:
+        text = view.source_status.text()
+        assert "身份接力" in text
+        assert "部分读取 3 条" in text
+        assert "跳过 1 行" in text
+    finally:
+        view.shutdown()

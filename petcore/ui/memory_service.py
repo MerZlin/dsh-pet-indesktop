@@ -100,6 +100,50 @@ class MemoryService(QObject):
             return default
         return default if value is None else value
 
+    def _identity_dir(self) -> Path:
+        """身份接力目录：配置优先，空则默认 ``~/.dsh/identity-memory``。"""
+        configured = str(self._config_get("ai_memory_identity_dir", "") or "").strip()
+        if configured:
+            try:
+                return Path(configured).expanduser()
+            except (OSError, RuntimeError):
+                pass
+        try:
+            return Path.home() / ".dsh" / "identity-memory"
+        except RuntimeError:
+            return Path(".dsh") / "identity-memory"
+
+    def _feiyu_source(self) -> tuple[Path | None, str]:
+        """feiyu 记忆根与会话；未安装且未配置时返回 ``None``（不建空源）。"""
+        session = str(
+            self._config_get("ai_memory_feiyu_session", "__default__")
+            or "__default__"
+        ).strip()[:80] or "__default__"
+        configured = str(self._config_get("ai_memory_feiyu_root", "") or "").strip()
+        if configured:
+            try:
+                return Path(configured).expanduser(), session
+            except (OSError, RuntimeError):
+                pass
+        try:
+            home = Path.home()
+            pointer = home / ".dsh" / "feiyu-memory-root.json"
+            try:
+                raw = json.loads(pointer.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                raw = None
+            if isinstance(raw, dict):
+                root = str(raw.get("root") or "").strip()
+                if root:
+                    try:
+                        return Path(root).expanduser(), session
+                    except (OSError, RuntimeError):
+                        pass
+            default = home / ".dsh" / "feiyu-memory"
+            return (default if default.is_dir() else None), session
+        except RuntimeError:
+            return None, session
+
     def character_for(self, pet_slot: int | None = None) -> str:
         pets = getattr(self.host, "pets", None)
         window = None
@@ -430,7 +474,17 @@ class MemoryService(QObject):
         root = Path(getattr(self.host, "root", self.root))
         try:
             if include_sources:
-                for source in read_external_sources(root, Path.home()):
+                identity_dir = self._identity_dir()
+                feiyu_root, feiyu_session = self._feiyu_source()
+                sources = read_external_sources(
+                    root,
+                    Path.home(),
+                    identity_dir=identity_dir,
+                    feiyu_root=feiyu_root,
+                    feiyu_session=feiyu_session,
+                )
+                current_keys = {source.key for source in sources}
+                for source in sources:
                     try:
                         applied = store.apply_external(
                             source.key,
@@ -453,6 +507,33 @@ class MemoryService(QObject):
                             source.key,
                             exc_info=True,
                         )
+                # 切换 feiyu 会话后旧 key 的镜像不会再被任何同步命中；这里主动
+                # 按「源已切换」清掉，否则旧会话的事实会永久留在提示词里。
+                # feiyu_root 为 None（未安装/未配置）时不动，避免把"临时拔掉"
+                # 误当成"删除"。
+                if feiyu_root is not None:
+                    for info in store.external_status().get("sources", []):
+                        key = str(info.get("key") or "")
+                        if not key.startswith("feiyu:") or key in current_keys:
+                            continue
+                        try:
+                            applied = store.apply_external(
+                                key,
+                                [],
+                                status="ok",
+                                label=str(info.get("label") or key),
+                                path=str(info.get("path") or ""),
+                                reason="源已切换",
+                            )
+                            result["sources"].append(
+                                {"key": key, "status": "ok", **applied}
+                            )
+                        except Exception:
+                            logger.warning(
+                                "memory external prune failed: %s",
+                                key,
+                                exc_info=True,
+                            )
             if need_replies:
                 result["reply_marked"] = store.mark_replies(
                     assistant_texts(root, store.character)
