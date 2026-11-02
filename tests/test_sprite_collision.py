@@ -347,7 +347,7 @@ def test_world_wakes_on_motion_and_static_change(monkeypatch):
     world.tick([a, b], 0.016)
     assert len(calls) == 1
 
-    b.set_pos(FakePoint(600, 500))          # 位移 → 唤醒
+    b.set_pos(FakePoint(150, 0))            # 位移到"可能接触区"内 → 唤醒
     world.tick([a, b], 0.016)
     assert len(calls) == 2
 
@@ -356,6 +356,32 @@ def test_world_wakes_on_motion_and_static_change(monkeypatch):
     world.add_static_member("island", 100, 100, 200, 80)  # 静态变更 → 唤醒
     world.tick([a, b], 0.016)
     assert len(calls) == 3
+
+
+def test_world_broad_phase_skips_solve_when_nothing_near(monkeypatch):
+    """世界级宽相：成员都在安全距离外时，位移变化也不值得求解。
+
+    与静态豁免同族、更前置的一层：AABB 宽相能证明本 tick 任何 pair 都
+    不可能接触时（身体框外扩 margin 仍不相交），扫掠与求解结果必为空集，
+    直接跳过——这是撞岛场景里桌宠"离岛很远"绝大多数 tick 的常态。
+    """
+    calls = []
+    real_solve = collision.solve_multi_body_collision
+    monkeypatch.setattr(collision, "solve_multi_body_collision",
+                        lambda *a, **kw: (calls.append(1), real_solve(*a, **kw))[1])
+    world = SpriteCollisionWorld()
+    a = FakeSprite(0, 0, collision_id="a")
+    b = FakeSprite(500, 500, collision_id="b")
+    world.tick([a, b], 0.016)               # 首 tick 必求解（建立基线）
+    assert len(calls) == 1
+
+    b.set_pos(FakePoint(600, 500))          # 位移，但仍相隔几百像素
+    world.tick([a, b], 0.016)
+    assert len(calls) == 1                  # 宽相判定不可能接触 → 不求教
+
+    world.add_static_member("island", 0, 0, 60, 60)   # 岛就压在 a 身上 → 唤醒
+    world.tick([a, b], 0.016)
+    assert len(calls) == 2
 
 
 # ---------------------------------------------------------------- D9：岛 stadium（胶囊圆链）

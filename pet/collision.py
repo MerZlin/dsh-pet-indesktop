@@ -207,14 +207,21 @@ def check_collision_circles(
     circles1: Sequence[Sequence[float]], circles2: Sequence[Sequence[float]],
     id1: str = "", id2: str = "",
 ) -> tuple[bool, float, float, float, float, float]:
-    """Check all circle pairs and return the deepest overlap."""
+    """Check all circle pairs and return the deepest overlap.
+
+    性能（撞岛路径）：内层是每 tick 每 pair 都要跑的热循环，索引直取代替
+    ``map(float, raw[:3])``（避免每对圆切片 + map 两个临时对象）——语义逐位
+    不变（圆链元素本就是数值；``float()`` 只影响类型提示不影响运算）。
+    """
     best = None
     for raw1 in circles1 or ():
+        if len(raw1) < 3:
+            continue
+        x1, y1, r1 = raw1[0], raw1[1], raw1[2]
         for raw2 in circles2 or ():
-            if len(raw1) < 3 or len(raw2) < 3:
+            if len(raw2) < 3:
                 continue
-            x1, y1, r1 = map(float, raw1[:3])
-            x2, y2, r2 = map(float, raw2[:3])
+            x2, y2, r2 = raw2[0], raw2[1], raw2[2]
             r1, r2 = max(1e-4, r1), max(1e-4, r2)
             dx, dy = x2 - x1, y2 - y1
             distance = math.hypot(dx, dy)
@@ -260,24 +267,70 @@ def swept_circle_chain_collision(
     return True, nx, ny, overlap, contact_x, contact_y
 
 
+def _swept_bounds(circles_prev: Sequence[Sequence[float]] | None,
+                  circles_curr: Sequence[Sequence[float]] | None):
+    """圆链在 [prev, curr] 这一帧内的保守包围盒（已含各圆半径）。
+
+    顶点会随两帧位置做线性插值，t∈[0,1] 时刻的圆盘一定落在两端圆盘的
+    凸包内，因此两端包围盒的并（AABB）覆盖整段扫掠轨迹。返回
+    ``(min_x, min_y, max_x, max_y)``；空链/数据不足返回 ``None``。
+    """
+    min_x = min_y = math.inf
+    max_x = max_y = -math.inf
+    for chain in (circles_prev, circles_curr):
+        if not chain:
+            continue
+        for c in chain:
+            if len(c) < 3:
+                continue
+            r = c[2]
+            if r < 1e-4:
+                r = 1e-4
+            x, y = c[0], c[1]
+            if x - r < min_x:
+                min_x = x - r
+            if x + r > max_x:
+                max_x = x + r
+            if y - r < min_y:
+                min_y = y - r
+            if y + r > max_y:
+                max_y = y + r
+    if min_x > max_x:
+        return None
+    return (min_x, min_y, max_x, max_y)
+
+
 def swept_circle_chain_collision_at_t(
     a_prev: Sequence[Sequence[float]], a_curr: Sequence[Sequence[float]],
     b_prev: Sequence[Sequence[float]], b_curr: Sequence[Sequence[float]],
 ) -> tuple[bool, float, float, float, float, float, float]:
     """扫掠碰撞检测，同时返回首次接触的归一化时间 t。"""
+    # 宽相：整段扫掠的包围盒不相交 → 这一帧不可能接触，直接早退。
+    # 撞岛场景里桌宠十有八九离岛很远，这层判据把每 tick 的圆对二次方程
+    # （3×N 个 sqrt/disc）整段跳过；语义不变（包围盒保守）。
+    bounds_a = _swept_bounds(a_prev, a_curr)
+    bounds_b = _swept_bounds(b_prev, b_curr)
+    if (bounds_a is None or bounds_b is None
+            or bounds_a[2] < bounds_b[0] or bounds_b[2] < bounds_a[0]
+            or bounds_a[3] < bounds_b[1] or bounds_b[3] < bounds_a[1]):
+        return False, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     best = None  # (t, nx, ny, contact_x, contact_y)
     for raw_a_prev, raw_a_curr in zip(a_prev or (), a_curr or ()):
         if len(raw_a_prev) < 3 or len(raw_a_curr) < 3:
             continue
-        ax0, ay0 = float(raw_a_prev[0]), float(raw_a_prev[1])
-        ax1, ay1 = float(raw_a_curr[0]), float(raw_a_curr[1])
-        r1 = max(1e-4, float(raw_a_curr[2]))
+        ax0, ay0 = raw_a_prev[0], raw_a_prev[1]
+        ax1, ay1 = raw_a_curr[0], raw_a_curr[1]
+        r1 = raw_a_curr[2]
+        if r1 < 1e-4:
+            r1 = 1e-4
         for raw_b_prev, raw_b_curr in zip(b_prev or (), b_curr or ()):
             if len(raw_b_prev) < 3 or len(raw_b_curr) < 3:
                 continue
-            bx0, by0 = float(raw_b_prev[0]), float(raw_b_prev[1])
-            bx1, by1 = float(raw_b_curr[0]), float(raw_b_curr[1])
-            r2 = max(1e-4, float(raw_b_curr[2]))
+            bx0, by0 = raw_b_prev[0], raw_b_prev[1]
+            bx1, by1 = raw_b_curr[0], raw_b_curr[1]
+            r2 = raw_b_curr[2]
+            if r2 < 1e-4:
+                r2 = 1e-4
             # 相对运动：B 静止化
             start_x, start_y = ax0 - bx0, ay0 - by0
             delta_x = (ax1 - ax0) - (bx1 - bx0)
