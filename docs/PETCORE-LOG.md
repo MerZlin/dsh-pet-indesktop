@@ -6017,3 +6017,49 @@ petcore 的 `ai.agent` mod；完成后提交并本地构建 setup。
   逐个启动真实 Agent 采样。OpenCode SQLite 路径按主分支口径
   `~/.local/share/opencode/opencode.db`，Windows 实际安装位置若不同需后续调整。
 - 构建使用当前工作区（包含上一提交的存储/下载批次），setup 不是只含本次差异。
+
+## L160 — 2026-11-02 — AI 回复朗读按句滴灌 + 预合成前锋（语音部分，从 #424 拆出）
+
+**背景**：原 #424 把「语音流水线」和「身份接力记忆」塞在一个 PR 里；审查要求拆开，
+语音部分可独立合并。本条目只含语音。
+
+**改动**
+
+- `examples/petcore-mods/ai.chat/host/reply_voice.py`（新增 239 行）：`clean_for_speech`
+  （去代码块/链接/强调）、`split_sentences`（中文句末标点 + 英文句号后跟空白才切；
+  超长按就近标点硬切）、`ReplyVoicePlayer`（`play/stop/_advance`：上一句播完才送下一句、
+  送出当前句时后台预合成下一句、generation 作废在飞回调、失败停链不挡文字）。
+- `runtime.py`（+70/−18）：删旧 `_speech_text` + 整段朗读；新增 `_speak_reply`、
+  `_voice_speak`（带 slot）、`_voice_precache`（后台线程 `synthesize`）、
+  `_voice_cancel`（优先 `cancel_slot`，回退 `cancel_owner`）；`stop()` 补 `player.stop()`。
+- `tests/test_petcore_ai_reply_voice.py`（新增 435 行，25 条）。
+- 报告：`docs/PR-REPORT-AI-CHAT-VOICE-REPLY-2026-11-02.md`（INDEX 已登记）。
+
+**验证**：本文件 25 passed（0.91 s）；相邻族 ai_mod / speech / reminder_ports 109 passed；
+ruff 全绿；文档纪律族 351 passed。
+
+**未验证 / 边界**：真机语音通道听感未验收（本机无 petcore 语音后端）；多宠并发
+「只停本槽」未实测；英文缩写（e.g.）会被切一刀，属已知取舍。身份接力记忆不在本 PR。
+
+## L161 — 2026-11-02 — 修 P0：朗读 `on_finished` 契约（多句只念第一句）
+
+**背景**：审查指出 `SpeechPort.on_finished` 契约是 `Callable[[SpeechResult], None]`
+（`petcore/contracts/speech.py:104`，`petcore/ui/speech_channel.py:171/192` 带结果回调），
+而 `reply_voice.py` 的 `finished()` 是零参 → 真实端口下 `TypeError` 被通道 `_callback`
+的 except 吞掉 → **多条句子的回复只念第一句**。原测试的 fake 也是零参调用，全绿掩盖了它。
+
+**改动**
+
+- `reply_voice.py`：`finished(result: object = None)` 收下契约参数；`stop()` 追加
+  `cancel()` 真正打断当前句；句末正则新增 `(?<=\.)(?=\s)`（英文句号后跟空白才切）；
+  `speak` 回调类型标注同步。
+- `runtime.py`：`_voice_speak(..., slot)` 传 `self._active_slot()`；`_voice_cancel(speech, slot)`
+  优先 `cancel_slot(slot)`，端口无按槽取消才回退 `cancel_owner(OWNER)`。
+- `tests/test_petcore_ai_reply_voice.py`：新增 5 条，含真端口端到端
+  （`CoreSpeechPort` + `play_tracked` 回执，断言三句全念）。
+
+**验证**：本文件 25 passed；红→绿证据：把 `finished` 改回零参后真端口用例复现
+`TypeError: ...finished() takes 0 positional arguments but 1 was given`
+（被 `speech callback failed` 吞掉，链停第 1 句），恢复后同用例绿。ruff 全绿。
+
+**未验证 / 边界**：听感仍待真机；多宠并发未实测。
