@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from . import autostart as autostart_mod
 from . import catalog
 from .agent_link import AgentLinkManager
-from .music.lyric_controller import (
+from .music.lyric_lead import (
     LEAD_MAX_SECONDS,
     LEAD_MIN_SECONDS,
     LYRIC_LEAD_SECONDS,

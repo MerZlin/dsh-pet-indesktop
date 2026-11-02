@@ -89,7 +89,7 @@ from ..modern_settings_dialog import (
     ToggleSwitch,
 )
 from ..settings_widgets import ModernSelect
-from ..voice_chime import clean_flag
+from ..voice_chime_clean import clean_flag
 
 
 class FestivalSettingsPage(QWidget):

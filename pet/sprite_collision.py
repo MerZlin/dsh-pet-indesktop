@@ -115,6 +115,13 @@ SUPPORT_PROXIMITY = 2.5         # px：圆链间距不超过它算"贴住静态�
 SUPPORT_SETTLE_SPEED = 90.0     # px/s：支撑接触期的速度上限
 SUPPORT_SETTLE_TICKS = 6        # 连续支撑 tick 数达到它 → 收尾回 normal
 
+# 世界级宽相（撞岛路径降温点）：身体框外扩 margin = 基础 + 速度 × 档位间隔上界。
+# 基础 96px 覆盖 60fps 满速档（MAX_THROW_SPEED 3000px/s 也只有 50px/tick）；
+# 速度项覆盖降档后的长间隔（T2 250ms 下 2000px/s = 500px/tick），避免"上一
+# tick 还远、这一 tick 直接跨过岛"被宽相当成不可能接触而漏判。
+WORLD_CLEAR_MIN_MARGIN = 96.0     # px
+WORLD_CLEAR_TIER_GAP_S = 0.30     # s：大于 T2 的 250ms 间隔
+
 
 @dataclass(frozen=True)
 class CollisionEvent:
@@ -199,6 +206,10 @@ class SpriteCollisionWorld:
         self._listeners: List[Callable[[CollisionEvent], None]] = []
         # 静态成员自定义圆链（岛 stadium 口径，member_id -> circles）
         self._static_member_circles: Dict[str, list] = {}
+        # 静态成员 MemberState 缓存：member_id -> (rect, vx, vy, MemberState)，
+        # 几何/速度都未变时整对象复用（岛静止时每 tick 省一次 MemberState +
+        # 质量计算的分配；几何/岛速一变即失效，语义与逐 tick 重建逐位一致）
+        self._static_state_cache: Dict[str, tuple] = {}
         # 静止豁免（P1/③-1）：上 tick 的运动签名 + 静态成员脏标记。
         # 签名一致且无未结清交互时，求解结果可证不变，整 tick 跳过
         self._last_motion_sig: tuple | None = None
@@ -228,6 +239,7 @@ class SpriteCollisionWorld:
                 [float(c[0]), float(c[1]), float(c[2])] for c in circles]
         else:
             self._static_member_circles.pop(str(member_id), None)
+        self._static_state_cache.pop(str(member_id), None)
         self._static_dirty = True
 
     def remove_static_member(self, member_id: str) -> None:
@@ -236,6 +248,7 @@ class SpriteCollisionWorld:
         self._static_member_velocity.pop(str(member_id), None)
         self._static_member_circles.pop(str(member_id), None)
         self._prev_circles.pop(str(member_id), None)
+        self._static_state_cache.pop(str(member_id), None)
         self._static_dirty = True
 
     # ---------------------------------------------------------------- 事件回调
@@ -269,6 +282,30 @@ class SpriteCollisionWorld:
             # 求解结果可证与上 tick 相同，整 tick 跳过。静止期间岛（静态
             # 成员）变更经 _static_dirty 唤醒；外部 set_pos 经签名唤醒。
             # 支撑落定进行中（_support_streak 非空）不可跳过：它按 tick 计数
+            return []
+        # 世界级宽相：与任何静态成员/其它 sprite 都隔着安全距离时，本 tick
+        # 不可能有任何接触 → 只维护签名与拖拽采样，跳过成员快照、扫掠、
+        # 多体求解整条链。撞岛场景里桌宠绝大多数 tick 都在岛区之外，这是
+        # 每 tick 25~30µs 降到个位数的主刀。
+        # 首 tick（``_last_motion_sig is None``）不走宽相：先让一次正常求解
+        # 建立扫掠基线（_prev_circles）与成员记账，之后才允许按距离跳过。
+        if self._last_motion_sig is not None and self._world_clear(sprites):
+            self._last_motion_sig = sig
+            self._static_dirty = False
+            if (self._prev_circles or self._support_streak
+                    or self._overlap_history):
+                # 离开接触区：扫掠 prev 与接触记账全部作废——否则下一次
+                # 进场那一 tick 会拿"很久以前的位置"算扫掠，凭空撞岛；
+                # 支撑计数同理（隔着屏幕的"连续托住"没有意义）。
+                self._prev_circles = {}
+                self._support_streak.clear()
+                self._overlap_history = {}
+            # 离场成员的纯位置分离去抖条目照常清理（隐藏/回收的成员不许
+            # 在去抖窗口里"留着号"，否则它回来第一次接触会被吞掉）
+            self._prune_position_only_members({
+                self._member_id(s) for s in sprites
+                if getattr(s, "visible", True)})
+            self._sample_drag_velocities(sprites)
             return []
         self._tick += 1
         self._sample_drag_velocities(sprites)
@@ -322,6 +359,54 @@ class SpriteCollisionWorld:
         self._last_motion_sig = sig
         self._static_dirty = False
         return results
+
+    # ---------------------------------------------------------------- 内部：宽相
+    def _world_clear(self, sprites: Sequence) -> bool:
+        """本 tick 是否可证明"任何 pair 都不可能接触"（世界级宽相）。
+
+        只用 AABB 粗判：可见 sprite 的身体框外扩 ``margin``（基础 + 速度 ×
+        档位间隔上界，见模块常量），与静态成员矩形/彼此相交才算"可能接触"。
+        这层判据只会保守地"多跑"，不会漏判（margin 覆盖满速档单 tick 位移，
+        速度项覆盖降档后的长间隔）——被它判成 clear 的 tick，圆链扫掠与
+        多体求解的结果必然是空集。
+
+        成本：每 sprite 一次 ``body_rect()`` + 4 次取数，1~2µs；相比"
+        每 tick 建 MemberState + 3×N 圆对扫掠"低一到两个数量级。
+        """
+        boxes = []
+        for sprite in sprites:
+            if not getattr(sprite, "visible", True):
+                continue
+            body = (sprite.body_rect() if hasattr(sprite, "body_rect")
+                    else sprite.rect())
+            left = float(body.x())
+            top = float(body.y())
+            right = left + float(body.width())
+            bottom = top + float(body.height())
+            velocity = getattr(sprite, "velocity", None)
+            speed = 0.0
+            if velocity is not None:
+                speed = math.hypot(float(velocity.x()), float(velocity.y()))
+            margin = WORLD_CLEAR_MIN_MARGIN + speed * WORLD_CLEAR_TIER_GAP_S
+            boxes.append((left - margin, top - margin,
+                          right + margin, bottom + margin))
+        if not boxes:
+            return True  # 没有可见成员：静态成员也没有对手
+        for rect in self._static_members.values():
+            left, top, width, height = rect
+            right, bottom = left + width, top + height
+            for box in boxes:
+                if (box[0] <= right and box[2] >= left
+                        and box[1] <= bottom and box[3] >= top):
+                    return False
+        for i in range(len(boxes) - 1):
+            box_a = boxes[i]
+            for j in range(i + 1, len(boxes)):
+                box_b = boxes[j]
+                if (box_a[0] <= box_b[2] and box_b[0] <= box_a[2]
+                        and box_a[1] <= box_b[3] and box_b[1] <= box_a[3]):
+                    return False
+        return True
 
     # ---------------------------------------------------------------- 内部：快照构造
     @staticmethod
@@ -460,7 +545,13 @@ class SpriteCollisionWorld:
         if self._clock() - ts > STATIC_VELOCITY_TTL_SECS:
             # 幽灵速度闸：速度样本超期未刷新（岛已停但无人再喂几何）→ 当 0。
             vx, vy = 0.0, 0.0
-        return collision.MemberState(
+        # 几何与有效岛速都没变 → 复用上 tick 的 MemberState（岛静止时每 tick
+        # 省一次对象 + 质量计算；求解器只读成员、不改写，复用安全）。
+        cached = self._static_state_cache.get(member_id)
+        if (cached is not None and cached[0] == rect
+                and cached[1] == vx and cached[2] == vy):
+            return cached[3]
+        state = collision.MemberState(
             runtime_id=member_id,
             x=left + w / 2.0,
             y=top + h / 2.0,
@@ -478,6 +569,8 @@ class SpriteCollisionWorld:
             circles=(self._static_member_circles.get(member_id)
                      or collision.circles_from_rect(left, top, w, h)),
         )
+        self._static_state_cache[member_id] = (rect, vx, vy, state)
+        return state
 
     # ---------------------------------------------------------------- 内部：扫掠
     def _swept_collisions(self, members: Sequence[collision.MemberState]
@@ -504,6 +597,12 @@ class SpriteCollisionWorld:
                     continue
                 prev_b = prev.get(b.runtime_id)
                 if prev_b is None:
+                    continue
+                # 本 tick 已经重叠的 pair 不需要扫掠：求解器只在「当前帧没撞上」
+                # 时才采用 swept 结果（collision.solve_multi_body_collision 的
+                # `if not collided and swept_collisions`），先算的扫掠会被整份
+                # 丢弃。桌宠贴住/持续顶岛的每 tick 都省下 3×N 个圆对二次方程。
+                if collision.check_collision_members(a, b)[0]:
                     continue
                 hit = collision.swept_circle_chain_collision(
                     prev_a, a.circles, prev_b, b.circles)

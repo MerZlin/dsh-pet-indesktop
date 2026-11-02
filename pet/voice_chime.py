@@ -57,7 +57,16 @@ DEFAULT_SHOW_QUOTE = True  # 台词/歌词开关
 # 为什么不是「每 8 小时换一批」：旧实现里批次 =（日期序数 × 3 + 当日第几段）% 3，
 # 乘 3 与取模 3 恰好对消 —— 批次只由「当天第几段」决定，日期被自己抵消掉，于是
 # 每天同一时刻永远是同一句（用户反馈「几乎每天都是一样的台词」即由此而来）。
-_MAX_CUSTOM_QUOTE_LEN = 120  # 自定义单条台词长度上限（超长截断，防误粘长文）
+#
+# 三个纯清洗函数（clean_flag / clean_custom_times / clean_custom_quotes）与
+# 自定义时间正则、单条台词上限移到了 ``pet/voice_chime_clean.py``：节日提醒
+# 与 config 归一化只需要它们，不该为几个字符串函数拖起本文件的 TTS 导入链。
+# 这里 re-export，既有调用方与测试的导入路径保持不变。
+from .voice_chime_clean import (  # noqa: E402  —— 有意放在原实现位置
+    clean_custom_quotes,
+    clean_custom_times,
+    clean_flag,
+)
 
 # ---------------------------------------------------------------- 合成后端
 # 后端清单/标签来自注册表（pet/tts）：新增 provider 后这里自动跟着变，不需要改本文件。
@@ -166,7 +175,8 @@ def voice_label(value) -> str:
             return label.split("（")[0]
     return DEPRECATED_VOICE_LABELS.get(voice, voice)
 
-_CUSTOM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+# 自定义时间点的正则与单条台词上限随三个清洗函数一起移到了
+# pet/voice_chime_clean.py（见文件上方 re-export 注释）。
 _RATE_RE = re.compile(r"^[+-]?\d+$")
 _PITCH_RE = re.compile(r"^[+-]?\d+$")
 
@@ -211,20 +221,6 @@ def default_chime_config() -> dict:
                 continue  # 凭据存系统钥匙串，不进 config
             config[spec.key] = spec.default
     return config
-
-
-def clean_flag(value, default: bool = True) -> bool:
-    """清洗布尔开关：JSON bool 原样返回，字符串按常见真值解析，非法回落默认。"""
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return default
-    text = str(value).strip().lower()
-    if text in ("1", "true", "yes", "on", "开", "开启"):
-        return True
-    if text in ("0", "false", "no", "off", "关", "关闭"):
-        return False
-    return default
 
 
 def clean_backend(value) -> str:
@@ -275,47 +271,10 @@ def clean_schedule(value) -> str:
     return text if text in SCHEDULE_KEYS else "hourly"
 
 
-def clean_custom_times(value) -> frozenset[str]:
-    """清洗自定义时间点：逗号/空格/分号分隔的 HH:MM，非法项丢弃。"""
-    text = str(value or "").strip()
-    parts = re.split(r"[,，;；\s]+", text)
-    times: set[str] = set()
-    for part in parts:
-        part = part.strip()
-        match = _CUSTOM_RE.match(part)
-        if match:
-            times.add(f"{int(match.group(1)):02d}:{match.group(2)}")
-    return frozenset(times)
-
-
 def clean_voice(value) -> str:
     """清洗音色名：仅保留可见字符，超长截断。"""
     text = str(value or "").strip()
     return text[:64] if text else DEFAULT_VOICE
-
-
-def clean_custom_quotes(value) -> tuple[str, ...]:
-    """清洗自定义台词/歌词：按行拆分（一行一条），去空行/去重/保序。
-
-    兼容设置页传来的多行字符串（``\\n`` / ``\\r\\n`` / ``\\r``）与已是
-    序列的配置值；去除控制字符并按 ``_MAX_CUSTOM_QUOTE_LEN`` 截断单条，
-    保证进入 TTS 的文本干净。返回空元组表示“未自定义”，调用方回退内置库。
-    """
-    if value is None:
-        return ()
-    if isinstance(value, (tuple, list, set)):
-        raw_lines = [str(item) for item in value]
-    else:
-        raw_lines = re.split(r"\r\n|\r|\n", str(value))
-    quotes: list[str] = []
-    for line in raw_lines:
-        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", line).strip()
-        if not text:
-            continue
-        text = text[:_MAX_CUSTOM_QUOTE_LEN].strip()
-        if text and text not in quotes:
-            quotes.append(text)
-    return tuple(quotes)
 
 
 def clean_rate(value) -> int:
