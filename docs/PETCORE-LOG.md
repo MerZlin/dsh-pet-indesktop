@@ -6017,3 +6017,75 @@ petcore 的 `ai.agent` mod；完成后提交并本地构建 setup。
   逐个启动真实 Agent 采样。OpenCode SQLite 路径按主分支口径
   `~/.local/share/opencode/opencode.db`，Windows 实际安装位置若不同需后续调整。
 - 构建使用当前工作区（包含上一提交的存储/下载批次），setup 不是只含本次差异。
+
+## L158 — 2026-11-02 — AI 回复朗读按句滴灌 + 预合成前锋（主分支方案移植）
+
+**背景**：主分支 v4.4.0 的「助手回复朗读」修复（逐句串行导致行间停顿 → 边播边
+预合成下一句）已在主分支实测通过（PR-REPORT-CHAT-REPLY-VOICE-PRECACHE）。本条目
+把同一方案移植进 petcore 的 `ai.chat` mod：原先 `ai_voice_reply` 把整段回复一次
+交给语音端口（合成+播放一条龙，长回复开头要等整段合成）。
+
+**改动**
+
+- `examples/petcore-mods/ai.chat/host/reply_voice.py`（新增）：`clean_for_speech` /
+  `split_sentences`（与主分支 `pet/chat_reply_voice.py` 同口径：去 Markdown、按句末
+  标点切、超 80 字就近软切）+ `ReplyVoicePlayer`（注入 speak/precache/enabled/cancel，
+  链式 on_finished 交棒、generation 作废旧链、失败停链不挡文字）。
+- `runtime.py`：`_speak_reply` 改为按句 `speech.speak(..., owner=OWNER)` 滴灌；送出
+  当前句的同时把下一句交给 `SpeechPort.synthesize()`（后台线程预热缓存，失败静默
+  退化）；新回复先 `cancel_owner` 打断上一轮；`stop()` 清空朗读队列。
+- `settings_page.py`：朗读回复行的提示文案改为「按句朗读 + 预合成」；`mod.json`
+  1.4.0 → 1.5.0。
+- 新增 `tests/test_petcore_ai_reply_voice.py`：拆句/清洗 + 播放器行为（不叠音、
+  预合成前锋、单句不预合成、预合成失败退化、新覆盖旧、失败停链、热开关、无
+  预合成退回）+ 运行时接线（拆句、预合成、打断、stop）共 22 条。
+
+**验证**
+
+- `pytest tests/test_petcore_ai_reply_voice.py tests/test_petcore_ai_relay_memory.py`
+  → 54 passed in 3.70s。
+- 相邻族：`test_petcore_ai_mod / ai_memory / ai_persona / ai_startup / quick_chat /
+  interop_memory` → 97 passed；`test_petcore_speech / settings_voice /
+  memory_service` → 43 passed。
+- `ruff check` 全部改动文件 → All checks passed。
+
+**未验证 / 边界**
+
+- 预合成与队列 worker 对同一句的并发合成是良性竞态（同键同产物、原子替换）；
+  仅在合成极慢且上一句极短时可能双合成一次，不产生错音频。
+- 真实 GUI 听感（句间停顿）未在本机实机验收：petcore 打包版受本机 SAC 拦截，
+  源码运行版未做语音后端真机配置。主分支同方案的听感已实测（「基本没有停顿」），
+  本条目是逐语义移植 + 测试守卫。
+
+## L159 — 2026-11-02 — 身份接力记忆后端（与 DSH 共用 facts.jsonl）
+
+**背景**：把 dsh-identity-relay 的 facts.jsonl 记忆库接成 `ai.chat` 的可选后端，
+让桌宠与 DSH 侧的「小鲸」读写同一份长期记忆（同键新压旧、作废盖章、来源优先），
+并按人格接力注入 persona.md / handover.md。适配层与主分支 `pet/chat/relay_store.py`
+同源，先在新仓库独立成文件。
+
+**改动**
+
+- `examples/petcore-mods/ai.chat/host/relay_store.py`（新增，268 行）：facts.jsonl
+  读写（parse/append/retract/read/recall/stats + read_identity_text），与 DSH 版
+  store.mjs 逐字段对齐；密钥模式拒写；进程内写锁；recall 硬上限 20 + 关联带出 ≤3。
+- `runtime.py`：新增 `_relay_enabled/_relay_dir`；`_remember_text` 在接力开启时写
+  facts.jsonl（source=owner）、`_memory_context` 按 recall 注入、`_prompt` 追加
+  persona.md/handover.md（mtime 缓存）；默认关闭，关闭时行为逐位不变。
+- `settings_page.py`：「长期记忆」新增三个开关/目录行（默认关/默认
+  `~/.dsh/identity-memory`/默认注入人格）；状态行显示接力统计。`_KEYS` 登记三键。
+- 新增 `tests/test_petcore_ai_relay_memory.py`：适配层语义 26 条（对齐 DSH 版
+  store.mjs 语义测试）+ 运行时接线 9 条 + 设置页往返 1 条。
+
+**验证**
+
+- 同 L158：54 passed（本文件 32 条）与相邻族全绿；ruff 全绿。
+
+**未验证 / 边界**
+
+- 与 DSH 侧同时写同一份 facts.jsonl 的并发写是「后写覆盖」（与 DSH 版 README Q8
+  同一已知边界，写锁只在进程内）；建议单侧写、另一侧只读或错开写。
+- 检索是字面包含（content/subject 包含检索词），语义近义（同义词）检索未做，
+  属远期项；与 DSH 侧 recall 同口径。
+- 真实三端（桌宠/DSH/QQ）并发读写未实测；只读对账已在主分支对真库做过
+  （88 条/80 active/8 superseded，recall 排序与 DSH 侧一致）。
