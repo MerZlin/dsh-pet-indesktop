@@ -30,7 +30,7 @@ def _direct_only(monkeypatch):
     同时把重试间隔压到 0：重试语义要测，但不该让每个用例多睡 0.6 秒。
     """
 
-    def direct_urlopen(request, *, timeout, context=None, opener=None, routes=None, **kwargs):
+    def direct_urlopen(request, *, timeout, context=None, opener=None, routes=None, pollute=True, **kwargs):
         return net_http._opener(False, context).open(request, timeout=timeout, **kwargs)  # noqa: SLF001
 
     monkeypatch.setattr("petcore.api.chat.urlopen", direct_urlopen)

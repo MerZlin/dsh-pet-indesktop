@@ -243,6 +243,14 @@ QComboBox#memory-scope {
     min-height: 30px; padding: 0 8px; border: 1px solid #e0e4eb;
     border-radius: 8px; background: #ffffff; color: #252a32;
 }
+/* 弹出列表是独立的 QAbstractItemView，不继承上面组合框本体的 color；
+   不显式写死会在深色系统调色板下变成白字白底（记忆页截图）。 */
+QComboBox QAbstractItemView {
+    background: #ffffff; color: #252a32; border: 1px solid #e0e4eb;
+    selection-background-color: #e4ebfc; selection-color: @ACCENT@;
+    outline: none; padding: 4px 0;
+}
+QComboBox QAbstractItemView::item { min-height: 28px; padding: 6px 10px; }
 QCheckBox#memory-pinned { color: #5f6673; }
 QTreeWidget#memory-list {
     border: 1px solid #e6e9ef; border-radius: 10px; background: #ffffff;
@@ -369,6 +377,11 @@ QLabel#memory-title { color: #f0f0f5; }
 QLabel#memory-summary, QLabel#memory-source { color: #9aa3b4; }
 QLineEdit#memory-search, QComboBox#memory-scope {
     background: #1b1f27; color: #e6e8ec; border-color: #333947;
+}
+QComboBox QAbstractItemView {
+    background: #1b1f27; color: #e6e8ec; border: 1px solid #333947;
+    selection-background-color: #262b36; selection-color: @ACCENT@;
+    outline: none; padding: 4px 0;
 }
 QCheckBox#memory-pinned { color: #c9d0da; }
 QTreeWidget#memory-list {

@@ -200,6 +200,44 @@ def test_settings_page_creates_renames_and_deletes_a_persona_card(
         page.close()
 
 
+CHARACTER_PERSONAS = {
+    "mom": "妈妈",
+    "elysia": "爱莉希雅",
+    "emilia": "艾米莉亚",
+    "rem": "蕾姆",
+    "chizuru": "水原千鹤",
+    "lin_pianpian": "林翩翩",
+    "zhuang_fangyi": "庄方宜",
+}
+
+
+def test_character_persona_cards_are_present_and_rich() -> None:
+    folder = ai_mod.MOD_DIR / "persona_presets"
+    for persona_id, expected_name in CHARACTER_PERSONAS.items():
+        path = folder / f"{persona_id}.json"
+        assert path.is_file(), persona_id
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        assert str(doc.get("id") or "") == persona_id
+        assert str(doc.get("name") or "") == expected_name
+        prompt = str(doc.get("prompt") or "")
+        assert "{name}" in prompt, persona_id
+        assert len(prompt) >= 400, persona_id
+        assert "回答长度" in prompt, persona_id
+        assert "边界" in prompt, persona_id
+        assert "六到十句" in prompt, persona_id
+
+
+def test_character_persona_keeps_its_identity_when_pet_name_differs(
+    tmp_path: Path,
+) -> None:
+    runtime, context = _runtime(tmp_path)
+    context.host.config.set("ai_persona", "elysia")
+    prompt = runtime._prompt()
+    assert "爱莉希雅" in prompt
+    # `{name}` 只是当前桌面形象；角色卡不能因此把 AI 改成别的人。
+    assert "鲸鱼娘" in prompt
+
+
 def test_settings_search_reaches_memory_and_chat_font_rows(qt_app, tmp_path: Path) -> None:
     from petcore.ui.settings.base import page_search_texts, reveal_text
 

@@ -6,6 +6,7 @@ import json
 import threading
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
@@ -557,7 +558,7 @@ def test_cancel_during_research_skips_the_answer(server, monkeypatch) -> None:
     assert all(item["body"].get("tools") for item in _Handler.seen)
 
 
-def _direct_open(request, *, timeout, context=None, opener=None, routes=None, **kwargs):
+def _direct_open(request, *, timeout, context=None, opener=None, routes=None, pollute=True, **kwargs):
     """本机服务端直连：绕过系统代理，让用例只观察它要断言的东西。"""
     return net_http._opener(False, context).open(request, timeout=timeout, **kwargs)  # noqa: SLF001
 
@@ -649,3 +650,92 @@ def test_api_port_uses_the_configured_timeout(monkeypatch) -> None:
 
     assert port.stream_chat("api1", [], timeout=12.0) == "ok"
     assert captured["timeout"] == 12.0
+
+
+def test_planner_json_request_does_not_pin_the_process_route(monkeypatch) -> None:
+    """planner 是短 JSON 请求，不能代表正式 SSE 的代理可用性。
+
+    ``_post_json`` 走 ``_open_response``，后者默认 ``pollute=True`` 会把一次
+    「直连成功」固化成进程级结论；正式回答随后被钉在直连上，就可能是用户看到的
+    「联网对话偶尔网络不可达」。
+    """
+    import petcore.api.chat as chat_mod
+
+    calls: list[object] = []
+
+    class _Response:
+        def read(self, *_args):
+            return '{"choices":[{"message":{"content":"无需搜索"}}]}'.encode("utf-8")
+
+        def close(self) -> None:
+            return None
+
+    def fake_urlopen(request, *, timeout, context=None, opener=None, routes=None, **kwargs):
+        calls.append(kwargs.get("pollute"))
+        return _Response()
+
+    monkeypatch.setattr(chat_mod, "urlopen", fake_urlopen)
+    data = chat_mod._post_json(
+        _request(SimpleNamespace(server_address=("127.0.0.1", 1))),
+        {"messages": []},
+        timeout=1,
+    )
+
+    assert data["choices"][0]["message"]["content"] == "无需搜索"
+    assert calls == [False]
+
+
+def test_network_unreachable_on_web_search_answer_retries_as_plain_api(
+    server, monkeypatch
+) -> None:
+    """正式回答传输失败时必须退回纯 API 并产出回复，而不是弹「网络不可达」。
+
+    检索阶段本身已降级；这里模拟的是检索成功、资料已并入 system 之后，正式
+    回答在三条路由上都报 ``network``。纯 API（无检索资料）的本机服务端正常。
+    """
+    import petcore.api.chat as chat_mod
+
+    monkeypatch.setattr(
+        websearch,
+        "search",
+        lambda *_args, **_kwargs: [
+            websearch.SearchResult("官方定价", "https://example.test/p", "每百万 token")
+        ],
+    )
+    real_urlopen = chat_mod.urlopen
+
+    def flaky(request, *, timeout, context=None, opener=None, routes=None, **kwargs):
+        body = json.loads(request.data.decode("utf-8")) if request.data else {}
+        messages = body.get("messages") or []
+        system = str(messages[0].get("content") or "") if messages else ""
+        if body.get("stream") and "联网搜索结果" in system:
+            raise errors.NetworkUnreachable()
+        return real_urlopen(
+            request,
+            timeout=timeout,
+            context=context,
+            opener=opener,
+            routes=routes,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(chat_mod, "urlopen", flaky)
+    statuses: list[str] = []
+    result = stream_chat(
+        _request(server),
+        _dialogue(),
+        web_search=WebSearchOptions(engine="bocha", fetch_pages=False),
+        on_status=statuses.append,
+        timeout=5,
+    )
+
+    assert result.text == "你好！"
+    assert result.incomplete is False
+    assert any("网络不可达" in line and "纯 API" in line for line in statuses)
+    fallback = _Handler.seen[-1]["body"]
+    system_text = fallback["messages"][0]["content"]
+    assert "网络不可达" in system_text
+    assert "未联网核实" in system_text
+    # 兜底是「没有使用联网工具的纯 API 对话」：检索资料不能再混进去。
+    assert "联网搜索结果" not in system_text
+    assert fallback.get("tools") is None

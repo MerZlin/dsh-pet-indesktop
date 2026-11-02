@@ -6202,3 +6202,112 @@ petcore 的 `ai.agent` mod；完成后提交并本地构建 setup。
 - 多角色同步仍按每个角色读一遍外部源（N 角色 × M 源）；本轮未加同轮缓存，已量到
   单源 14ms，等真实多角色库再决定是否加。
 - 不做自动双向写回：身份接力/feiyu 仍由各自宿主单写，petcore 只读。
+
+## L162 — 2026-11-02 — 联网失败纯 API 兜底 + 记忆页下拉配色 + 7 张角色人设卡
+
+**背景**：用户三件事。① 记忆页「已删除」下拉在亮色下白字白底：`QComboBox#memory-scope`
+只给组合框本体写了 `color`，弹出列表是独立 `QAbstractItemView`，在系统深色调色板下
+`Text/WindowText` 仍是白色，`Base` 也是白色。② 联网对话偶发「网络不可达」：检索阶段
+已有降级，但正式回答在传输层连续失败后仍会冒错误卡；另外 planner 的 `_post_json()`
+默认 `pollute=True`，一次短 JSON 请求会改写进程级「固定直连」结论。③ 需要 7 张角色
+人设卡：妈妈、爱莉希雅、艾米莉亚、蕾姆、水原千鹤、林翩翩、庄方怡（按《终末地》
+「庄方宜」处理）。
+
+**改动**
+
+- `petcore/ui/chat/styles.py`：`MODERN_QSS` 新增 `QComboBox QAbstractItemView`
+  （背景/文字/边框/选中/行高），`DARK_OVERRIDES` 追加深色覆盖；浅色既有规则未改。
+- `petcore/api/chat.py`：`_open_response(..., pollute=True)` 透传 `urlopen`；
+  `_post_json()` 传 `pollute=False`。新增 `_NETWORK_FALLBACK_PROMPT` /
+  `_NETWORK_FALLBACK_STATUS` / `inject_network_fallback_notice()`；正式回答三路由
+  重试抽成 `_stream_answer()`，`stream_chat()` 在「联网开启 + 传输层 `network` +
+  未吐字 + 未取消 + 非 `HttpStatusError`」时，用检索前原始消息 + 网络说明重发一次
+  纯 API 回答。正常路径与既有检索降级不变。
+- `examples/petcore-mods/ai.chat/persona_presets/`：新增 `mom.json`、`elysia.json`、
+  `emilia.json`、`rem.json`、`chizuru.json`、`lin_pianpian.json`、
+  `zhuang_fangyi.json`；每张含身份/性格/说话方式/相处方式/回答长度（默认 6–10 句）/
+  擅长/边界/示例语气，prompt 用固定本名 + `{name}` 桌面形象写法。
+- 测试：`test_petcore_memory_view.py` +57（强制白字调色板下弹出列表对比度）；
+  `test_petcore_api_chat.py` +91（planner `pollute=False`、正式回答网络失败纯 API
+  兜底）；`test_petcore_ai_persona.py` +38（7 张卡完整性/丰富度/身份不被桌宠名覆盖）；
+  `test_petcore_api_chat_stream.py`、`test_petcore_ai_mod.py` 各 ±1（测试接缝吸收
+  `pollute`）。
+- 文档：`docs/PR-REPORT-AI-CHAT-FALLBACK-PERSONAS-2026-11-02.md`；`docs/INDEX.md`
+  「PR 报告存档」登记。
+
+**验证**
+
+- 根因复现（offscreen，强制 `Text/WindowText=#ffffff`）：修复前弹出列表
+  `Text=#ffffff / Base=#ffffff`；修复后 `Text=#252a32 / Base=#ffffff`；深色表
+  `Text=#e6e8ec / Base=#1b1f27`。
+- 本机假服务端 + 真实 `stream_chat`：检索成功、正式回答连续 3 次
+  `NetworkUnreachable` → 兜底请求返回「纯 API 回复」，状态行含「网络不可达，已改用
+  纯 API 回答（未联网核实）」，兜底 system 不含「联网搜索结果」。
+- 性能（本机 Windows 11 / Python 3.12）：`MODERN_QSS` 14,542 B（+653 字符）；
+  `modern_stylesheet` 36.2/38.3 µs；`load_presets()` 6 张 0.569 ms、13 张 1.186 ms
+  （缓存失效时各 200 次中位数）；正常路径额外请求 0 次，失败路径最多多 1 次。
+- 聚焦：memory_view / api_chat / api_chat_stream / http_safety / ai_persona / ai_mod
+  → 135 passed（18.05s）；`ruff check` 改动文件 → All checks passed。
+- 全量（petcore）：`tests/test_petcore_*.py` → 3034 passed, 1 skipped in 255.67s。
+- 全仓 `python -m pytest -q` 另试一次：约 7 分钟时 `-q` 无输出、进程停在两个
+  127.0.0.1 连接上，为避免继续占用时间中止；未作为通过证据，改动均落在 petcore，
+  以 petcore 全量作为宽门。
+
+**未验证 / 边界**
+
+- 兜底只认传输层 `network`；`timeout/tls/protocol` 与 HTTP 状态不触发（避免重复
+  同一错误）。若真机证明超时同样必现，再评估纳入 `timeout`。
+- 兜底会多消耗一次 API 请求（输入 token），仅失败路径。
+- 未在真实桌宠窗口逐像素截图确认弹出列表（offscreen 中文字体缺失，显示为方块；
+  palette 与像素对比已证明颜色，不作为肉眼验收的替代）。
+- 「庄方怡」按「庄方宜」处理，「艾米莉亚」沿用用户写法；角色卡基于公开设定整理。
+
+## L163 — 2026-11-03 — 重建 0.5.0 签名安装包 + `.scratch` 旧构建清理
+
+**背景**：L162 的代码/人设卡改动需要重新出包；用户同时要求删掉 `.scratch` 里
+之前的过程构建产物。
+
+**构建**
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
+  -Clean -Installer -OutputRoot rel-storage-2026-11-03a `
+  -SignThumbprint 217337C099EC8624AC481BFC9F3E1664D0A442E1
+```
+
+- 产物：`rel-storage-2026-11-03a/dsh-pet-core-setup.exe`
+  - 大小 **301,370,192 B**（287.4 MiB）
+  - SHA-256 `8edebd8366cdd06ce7bfb81febbc9a526dd78933724824cf382a42bb13dd3276`
+  - Authenticode `Status=Valid`，签名者 `CN=DSH Pet Core Dev, O=DSH Pet, C=CN`
+    （证书 SHA-1 指纹 `217337C099EC8624AC481BFC9F3E1664D0A442E1`）
+- onedir：`rel-storage-2026-11-03a/dsh-pet-core` 644,428,065 B；整目录含
+  `.work/check.json/spec/build.log` 合计 1,002,929,694 B。
+- Inno Setup 编译 143.234 s；整轮构建约 4 分 19 秒。
+- 构建内冒烟 `--check --strict` 退出 0；`check.json`：
+  `version=0.5.0`、`menu_template=json`、`characters=1`、
+  `self_talk_images.builtin_readable=24`、`self_talk_daily.unique=1200`、
+  `strict.enabled=true`、`diagnostics=[]`。
+- 构建日志确认安装器压缩了 7 张新人设卡：`chizuru/elysia/emilia/lin_pianpian/
+  mom/rem/zhuang_fangyi.json`（`build.log` 第 7999–8011 行附近）。
+
+**清理**
+
+删除 `.scratch` 下旧的过程构建产物（共约 3.1 GB；`.scratch` 3.6 GB → 549 MB）：
+
+- `petcore-setup-2026-11-02/`（972 MB，旧安装包 + onedir）
+- `petcore-packaging-candidate/`（895 MB，2026-10-25 候选构建）
+- `petcore-p4c3-distribution/t08/`（896 MB，T08 构建输出；保留 t02/t03/t05/t07/t09
+  与 baseline/HANDOFF 等证据）
+- `petcore-pack-test/`（53 MB 角色包测试产物）
+- `issc/`（186 MB 旧 setup）、`exetest/`（12 MB）、`pyi/`（45 MB 测试包）、
+  `sign-test.exe`（15 MB）
+
+保留：`.scratch` 的 issue/handoff 文档、p4c3 的脚本与验收证据、构建/测试日志、
+`animations-repo/` 克隆与其它非构建目录；`rel-storage-2026-11-02a/` 未动。
+
+**未验证**
+
+- 未在本机运行新安装包（会覆盖当前安装/数据目录），只做了构建脚本自带的
+  `--check --strict` 冒烟；未做安装向导/卸载/升级路径实机验收。
+- Smart App Control 的实际拦截行为未单独探针；本构建签名有效，冒烟进程可启动。
+- 旧 `rel-storage-2026-11-02a/dsh-pet-core-setup.exe` 仍在，作为上一版回退包。

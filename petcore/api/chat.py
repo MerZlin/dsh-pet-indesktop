@@ -90,6 +90,15 @@ _WEB_UNAVAILABLE_PROMPT = (
     "『联网检索暂时不可用，以下内容未联网核实』。"
 )
 _WEB_UNAVAILABLE_STATUS = "联网检索暂时不可用，已改用纯 API 回答"
+#: 正式回答在传输层报「网络不可达」时的兜底：不再带任何检索资料，纯 API 回答，
+#: 并让模型自己把「网络不可达、未联网核实」说给用户听（只靠一闪而过的状态行
+#: 用户仍会把模型记忆当成刚查到的实时信息）。
+_NETWORK_FALLBACK_PROMPT = (
+    "本次联网回答没有成功：网络不可达，已自动改用纯 API 回答。"
+    "请直接根据已有知识回答，并在回答开头用一句自然的话告诉用户："
+    "这次联网没有成功（网络不可达），以下内容未联网核实。"
+)
+_NETWORK_FALLBACK_STATUS = "网络不可达，已改用纯 API 回答（未联网核实）"
 _WEB_TOOLS = [
     {
         "type": "function",
@@ -263,6 +272,7 @@ def _open_response(
     opener=None,
     attempts: int = OPEN_RETRY_ATTEMPTS,
     routes: tuple[bool, ...] | None = None,
+    pollute: bool = True,
 ):
     """打开连接；传输层抖动时再试一次（``HTTPError`` 是服务器答复，永不重试）。
 
@@ -272,6 +282,9 @@ def _open_response(
     ``routes`` 原样透传给 :func:`petcore.net.http.urlopen`，是**本次调用**的路由
     计划（``(False,)`` = 只直连、``(True,)`` = 只走代理）；它不改写进程级
     「固定直连」结论——正式回答的换路重试不能替整个进程下结论。
+
+    ``pollute=False`` 给联网检索的 planner 这类**短请求**：它们的成败不代表正式
+    SSE 的代理可用性，不能把进程级「固定直连」结论改写掉。
     """
     last_exc: Exception | None = None
     tries = max(1, int(attempts))
@@ -285,6 +298,7 @@ def _open_response(
                 context=_context(request),
                 opener=opener,
                 routes=routes,
+                pollute=pollute,
             )
         except errors.HttpStatusError:
             # 服务器有答复（4xx/5xx）：链路是通的，不重试、不换路，按状态码分类。
@@ -370,6 +384,17 @@ def inject_web_unavailable_notice(
     return _merge_system(messages, _WEB_UNAVAILABLE_PROMPT)
 
 
+def inject_network_fallback_notice(
+    messages: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """纯 API 兜底：让模型在回答开头说明「网络不可达，未联网核实」。
+
+    与 :func:`inject_web_unavailable_notice` 分开写：那条是「检索阶段失败」的
+    通用口径，这条明确点名网络不可达，且只在正式回答也失败后使用。
+    """
+    return _merge_system(messages, _NETWORK_FALLBACK_PROMPT)
+
+
 def _merge_system(
     messages: Sequence[Mapping[str, Any]], block: str
 ) -> list[dict[str, Any]]:
@@ -397,7 +422,9 @@ def _post_json(
 ) -> Mapping[str, Any]:
     """非流式 JSON 请求（联网检索的 planner 用）。"""
     http_request = _build_request(request, payload, accept="application/json")
-    response = _open_response(http_request, request, timeout=timeout, opener=opener)
+    response = _open_response(
+        http_request, request, timeout=timeout, opener=opener, pollute=False
+    )
     try:
         raw = response.read(4 * 1024 * 1024)
     finally:
@@ -632,7 +659,10 @@ def stream_chat(
     一个字都没有才抛错。
     联网开启时先跑 :func:`research`（资料并入 system），再走正式回答。
     """
-    conversation = [dict(item) if isinstance(item, Mapping) else item for item in messages]
+    original = [
+        dict(item) if isinstance(item, Mapping) else item for item in messages
+    ]
+    conversation = original
     if web_search is not None and not _cancelled(cancel):
         # 联网检索是**增强项**，不是回答的前提：检索阶段的任何失败都必须退回
         # 纯 API 回答（主分支 `pet/chat/providers.py` 的 `_research` 同口径）。
@@ -690,6 +720,80 @@ def stream_chat(
         reasoning_effort=reasoning_effort,
     )
     progress = _Progress()
+    try:
+        return _stream_answer(
+            request,
+            payload,
+            timeout=timeout,
+            on_delta=on_delta,
+            on_reasoning=on_reasoning,
+            on_status=on_status,
+            cancel=cancel,
+            opener=opener,
+            progress=progress,
+        )
+    except errors.NetworkError as exc:
+        # 联网开启时，正式回答的「网络不可达」按用户口径视为联网链路的问题：
+        # 退回**没有使用任何检索资料**的纯 API 对话，并让模型自己说明未联网。
+        # 只兜底传输层失败；HTTP 状态（401/429/502）、取消、已经吐过字的不重发。
+        if (
+            web_search is None
+            or isinstance(exc, errors.HttpStatusError)
+            or exc.reason != errors.NETWORK
+            or progress.emitted
+            or _cancelled(cancel)
+        ):
+            raise
+        logger.warning("web-search answer fell back to the plain API: %s", exc.reason)
+        _status(on_status, _NETWORK_FALLBACK_STATUS)
+        try:
+            plain_messages = inject_network_fallback_notice(original)
+        except Exception as notice_exc:  # noqa: BLE001 - 拼接失败也要照常回答
+            logger.warning(
+                "network fallback notice injection failed: %s",
+                type(notice_exc).__name__,
+            )
+            plain_messages = [
+                dict(item) if isinstance(item, Mapping) else item
+                for item in original
+            ]
+        plain_payload = build_payload(
+            request,
+            plain_messages,
+            model=model,
+            temperature=temperature,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+        )
+        return _stream_answer(
+            request,
+            plain_payload,
+            timeout=timeout,
+            on_delta=on_delta,
+            on_reasoning=on_reasoning,
+            on_status=on_status,
+            cancel=cancel,
+            opener=opener,
+            progress=_Progress(),
+        )
+
+
+def _stream_answer(
+    request: ApiRequest,
+    payload: dict[str, Any],
+    *,
+    timeout: float,
+    on_delta: Callable[[str], None] | None,
+    on_reasoning: Callable[[str], None] | None,
+    on_status: Callable[[str], None] | None,
+    cancel: Any | None,
+    opener,
+    progress: _Progress,
+) -> ChatResult:
+    """正式回答的三次路由重试（默认 → 只直连 → 只代理）。
+
+    只重试「一个字都还没吐出去」的失败；正文已经显示给用户时绝不重发。
+    """
     attempt = 0
     while True:
         attempt += 1

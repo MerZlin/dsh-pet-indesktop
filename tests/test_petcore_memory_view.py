@@ -267,6 +267,63 @@ def test_external_source_labels(view_module) -> None:
     ) == "DSH 记忆（只读）"
 
 
+def _popup_colors(qss: str):
+    from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QComboBox, QWidget
+
+    app = QApplication.instance()
+    host = QWidget()
+    host.setStyleSheet(qss)
+    combo = QComboBox(host)
+    combo.setObjectName("memory-scope")
+    combo.addItems(["全部", "已删除"])
+    host.show()
+    combo.show()
+    combo.showPopup()
+    app.processEvents()
+    view = combo.view()
+    text = view.palette().color(QPalette.ColorRole.Text)
+    base = view.palette().color(QPalette.ColorRole.Base)
+    combo.hidePopup()
+    host.close()
+    host.deleteLater()
+    app.processEvents()
+    return text, base
+
+
+def test_memory_scope_popup_keeps_contrast_with_a_white_text_palette(qt_app) -> None:
+    """系统深色调色板会给弹出列表白字；QSS 必须把列表自己的文字/底色也定死。
+
+    当前实现只给 ``QComboBox#memory-scope`` 写了 ``color``，弹出列表是独立的
+    ``QAbstractItemView``，在白色底上仍是白字——用户截图里的「白字和底色混了」。
+    """
+    from PySide6.QtGui import QColor, QPalette
+
+    from petcore.ui.chat.styles import modern_stylesheet
+
+    app = QApplication.instance()
+    original = app.palette()
+    try:
+        palette = app.palette()
+        palette.setColor(QPalette.ColorRole.Text, QColor("#ffffff"))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#ffffff"))
+        app.setPalette(palette)
+
+        light_text, light_base = _popup_colors(modern_stylesheet(dark=False))
+        assert light_text.lightness() < light_base.lightness(), (
+            light_text.name(),
+            light_base.name(),
+        )
+
+        dark_text, dark_base = _popup_colors(modern_stylesheet(dark=True))
+        assert dark_text.lightness() > dark_base.lightness(), (
+            dark_text.name(),
+            dark_base.name(),
+        )
+    finally:
+        app.setPalette(original)
+
+
 def test_external_status_partial_is_visible(qt_app, view_module) -> None:
     memory = FakeMemory()
     memory.external_status = lambda **_: {

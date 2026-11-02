@@ -1267,7 +1267,7 @@ def test_web_search_failure_never_reaches_the_mod_error_path(tmp_path: Path, mon
 
     monkeypatch.setattr(websearch, "search", boom)
 
-    def direct_urlopen(request, *, timeout, context=None, opener=None, routes=None, **kwargs):
+    def direct_urlopen(request, *, timeout, context=None, opener=None, routes=None, pollute=True, **kwargs):
         return net_http._opener(False, context).open(request, timeout=timeout, **kwargs)  # noqa: SLF001
 
     # 本机服务端：绕过系统代理，用例只观察 mod 的错误路径有没有被走。
