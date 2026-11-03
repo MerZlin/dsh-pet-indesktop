@@ -138,11 +138,28 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest -q \
 
 **全量回归（petcore）**：`QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest -q tests/test_petcore_*.py` → **3047 passed, 1 skipped in 257.31s**（2026-11-03 01:40，本机）。
 
+**安装包构建（unsigned，用户要求不带签名）**：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
+  -Clean -Installer -OutputRoot rel-storage-2026-11-03b
+```
+
+- 产物：`rel-storage-2026-11-03b/dsh-pet-core-setup.exe`
+  - 大小 **307,985,983 B**（293.72 MiB）
+  - SHA-256 `45599A9BBBF364E67D644341BDA85C7031E52F690B5262A3790A6932A7EF2CDA`
+  - Authenticode `Status=NotSigned`（setup 与 `dsh-pet-core.exe` 均未签名；用户明确要求不带签名）
+- 构建内 `--check --strict` 退出 0：`version=0.5.0`、`menu_template=json`、
+  `characters=1`、`daily_lines=1200`、`builtin_images=24`、`strict=True`、`diagnostics=[]`。
+- Inno 日志确认安装器压缩了 8 张角色卡（含 `bobo.json`）。
+- 未实机安装（会覆盖当前安装/数据目录）；本机 `VerifiedAndReputablePolicyState=0`，
+  未签名包可运行，其他机器可能弹 SmartScreen。
+
 **全量回归（仓库）**：`QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest -q` 在 `tests/test_bundle_slim.py::test_verify_required_reports_missing_core_files` 先红（合成 FULL_BUNDLE 缺 `_internal/PySide6/Qt6WebView.dll`、`webview2.dll`，与本次改动无关）；继续跑至 `tests/test_proactive.py::test_self_talk_yields_to_important_bubble` 时 Windows `access violation` 崩溃（线程栈是 legacy `pet/overlay_shell.py` / `pet/mem_debug.py`）。本次改动覆盖的 petcore 全量见上一条：3047 passed / 1 skipped。
 
 ## 六、未验证项与风险
 
-- 未重建安装包：本次只改源码树与包内 JSON；安装器会按 `examples/petcore-mods/ai.chat/*` 递归收录，但未实机安装验证。留待下一次出包。
+- 已重建 unsigned 安装包（见上）并由 Inno 日志确认收录 `bobo.json`；未实机安装验证安装向导/卸载/升级路径。签名按用户要求关闭。
 - 播放池的「轮次接缝避免重复」只保证相邻两句不同；同一句在跨轮较远处仍会再次出现（这是循环播放的预期行为）。
 - 人设卡内容为角色扮演文本，未逐张跑真实模型对话；已验证 JSON 可解析、`{name}` 可格式化、结构/长度符合断言。
 - 全量 pytest 若出现与本改动无关的既有失败，会在提交前记录并区分，不会用本次改动掩盖。

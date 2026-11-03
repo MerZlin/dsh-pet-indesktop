@@ -6351,3 +6351,30 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
 - 未重建安装包；安装器按 `examples/petcore-mods/ai.chat/*` 递归收录，留待下次出包。
 - 播放池只保证相邻不重复，跨轮较远处会再次出现（循环播放的预期行为）。
 - 人设卡未逐张跑真实模型对话，只验证 JSON/`{name}`/结构与长度。
+
+## L165 — 2026-11-03 — 0.5.0 unsigned 安装包重建
+
+**背景**：用户要求把 L164 的代码/人设卡改动打成 setup；随后明确要求不带签名。
+
+**构建**
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
+  -Clean -Installer -OutputRoot rel-storage-2026-11-03b
+```
+
+- 产物：`rel-storage-2026-11-03b/dsh-pet-core-setup.exe`
+  - 大小 **307,985,983 B**（293.72 MiB）
+  - SHA-256 `45599A9BBBF364E67D644341BDA85C7031E52F690B5262A3790A6932A7EF2CDA`
+  - Authenticode `Status=NotSigned`（setup 与 `dsh-pet-core.exe` 均未签名）
+- 构建内 `--check --strict` 退出 0：`version=0.5.0`、`menu_template=json`、
+  `characters=1`、`daily_lines=1200`、`builtin_images=24`、`strict=True`、
+  `diagnostics=[]`。
+- Inno 日志确认安装器压缩了 8 张角色卡（含 `bobo.json`）。
+- 构建日志：`rel-storage-2026-11-03b/build.log`。
+
+**未验证**
+
+- 未实机安装（会覆盖当前安装/数据目录），未做安装向导/卸载/升级路径验收。
+- 未签名包在本机可运行（`VerifiedAndReputablePolicyState=0`）；其他机器可能弹
+  SmartScreen，正式分发应换 CA 证书签名。
