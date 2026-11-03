@@ -783,6 +783,52 @@ def test_viz_switch_state_reader_is_strict(bar):
     assert bar._state_viz_width() == fb._VIZ_WIDTH_DEFAULT
 
 
+def test_ring_style_state_and_setter(bar, monkeypatch):
+    """圆环样式只认 dots/wave/bars；切换写入存档并重置时间平滑。"""
+    bar._state = {}
+    assert bar._state_ring_style() == fb._RING_STYLE_DEFAULT
+    bar._state = {"ring_style": "wave"}
+    assert bar._state_ring_style() == "wave"
+    bar._state = {"ring_style": "bokeh"}
+    assert bar._state_ring_style() == fb._RING_STYLE_DEFAULT
+
+    saved: dict = {}
+    monkeypatch.setattr(fb, "_save_state", lambda state: saved.update(state))
+    bar._ring_prev = [0.5] * fb._RING_SEGMENTS
+    bar.set_ring_style("bars")
+    assert bar._ring_style == "bars"
+    assert saved.get("ring_style") == "bars"
+    assert bar._ring_prev == []
+    bar.set_ring_style("nonsense")
+    assert bar._ring_style == "bars"
+
+
+def test_ring_all_styles_paint_without_error(bar):
+    """三种风格在黑胶面板上都要能完整画一遍（防重构后分派断裂）。"""
+    from PySide6.QtGui import QImage, QPainter
+
+    bar._playing = True
+    bar._spectrum_failed = True
+    bar._edge = "left"
+    bar._skin = fb._SKIN_VINYL
+    bar._apply_form(fb._FORM_EDGE_PANEL, move=False)
+    image = QImage(bar.size(), QImage.Format_ARGB32_Premultiplied)
+    painter = QPainter(image)
+    for key in ("dots", "wave", "bars"):
+        bar.set_ring_style(key)
+        bar._paint_ring_spectrum(painter, 128.0, 32.0, 31.0)
+    painter.end()
+
+
+def test_ring_shape_is_smooth(bar):
+    """锯齿状的输入经过 Catmull-Rom + 圆形滑动平均后，相邻点半径不能突变。"""
+    levels = [1.0 if i % 2 else 0.0 for i in range(fb._VIZ_BARS)]
+    shape = bar._ring_shape(levels)
+    assert len(shape) == fb._RING_SEGMENTS
+    steps = [abs(shape[i] - shape[(i + 1) % len(shape)]) for i in range(len(shape))]
+    assert max(steps) < 0.25
+
+
 def test_ring_state_readers_and_clamps(bar):
     """圆环数量只认 1~5，颜色非法回落默认。"""
     bar._state = {}

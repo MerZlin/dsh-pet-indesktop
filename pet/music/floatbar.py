@@ -183,11 +183,25 @@ _TITLE_SCROLL_PX = 1.0
 _TITLE_SCROLL_PAUSE = 34   # ≈ 1.2 s
 _TITLE_SCROLL_GAP = 56     # 滚出末尾后与本句开头的空隙
 
-# 黑胶圆环频谱：1~5 条同心闭合圆环，半径随电平起伏
+# 黑胶圆环频谱：三种可选风格（圆点 / 声波 / 射线），1~5 档密度或层数
+_RING_STYLES = (
+    ("dots", "圆点"),
+    ("wave", "声波"),
+    ("bars", "射线"),
+)
+_RING_STYLE_DEFAULT = "dots"
 _RING_COUNT_DEFAULT = 3
 _RING_COLOR_DEFAULT = "#de3434"
-_RING_SEGMENTS = 96        # 每条环的角度采样数（越多越圆滑）
-_RING_ALPHA = 205
+_RING_SEGMENTS = 180       # 共享轮廓的角度采样数（越多越圆滑）
+_RING_SMOOTH_W = 4         # 圆形滑动平均的半径（压掉逐段毛刺）
+_RING_FOLLOW = 0.38        # 每帧向目标形状靠近的比例（时间上也不会突跳）
+_RING_GLOW_ALPHA = 46      # 声波环柔光 alpha
+# 声波环：各层是同一条波轮廓的紧密嵌套副本（不是同心圆）
+_RING_WAVE_TOP = 0.62      # 最外层流线的基准半径（占盘半径）
+_RING_WAVE_GAP = 0.038     # 相邻两层之间的径向间距
+_RING_WAVE_AMP = 0.10      # 波峰相对基准线的最大振幅
+_RING_WAVE_FLOOR = 0.42    # 波谷不能压过这里（标签在 0.34）
+_RING_BAR_LEN = 0.22       # 射线最长伸进盘内的长度（占盘半径）
 
 # 呼吸灯：黑盘靠近边缘处挖出一圈镂空环带，灯就亮在这圈镂空里；
 # 不亮时 alpha=0，镂空处直接透出桌面（真透明）。
@@ -673,6 +687,8 @@ class MusicFloatBar(QWidget):
         self._ring_on = self._state_flag("ring_enabled")
         self._ring_count = self._state_ring_count()
         self._ring_color = self._state_ring_color()
+        self._ring_style = self._state_ring_style()
+        self._ring_prev: list[float] = []
         self._viz_hue = 0.0
         self._viz_phase = 0.0
         # 真实频谱：播放且胶囊条可见时才起采集线程（见 _sync_spectrum）
@@ -775,6 +791,10 @@ class MusicFloatBar(QWidget):
     def _state_ring_color(self) -> QColor:
         color = QColor(str(self._state.get("ring_color", _RING_COLOR_DEFAULT)))
         return color if color.isValid() else QColor(_RING_COLOR_DEFAULT)
+
+    def _state_ring_style(self) -> str:
+        value = str(self._state.get("ring_style", _RING_STYLE_DEFAULT))
+        return value if value in {key for key, _label in _RING_STYLES} else _RING_STYLE_DEFAULT
 
     # ---------------------------------------------------------------- 子控件 / 定时器
 
@@ -1354,6 +1374,7 @@ class MusicFloatBar(QWidget):
             "ring_enabled": self._ring_on,
             "ring_count": self._ring_count,
             "ring_color": self._ring_color.name(),
+            "ring_style": self._ring_style,
             "_saved_w": self.width(),
             "_saved_h": self.height(),
         })
@@ -1448,6 +1469,15 @@ class MusicFloatBar(QWidget):
         if count < 1 or count > 5 or count == self._ring_count:
             return
         self._ring_count = count
+        self._persist()
+        self.update()
+
+    def set_ring_style(self, style: str) -> None:
+        """圆环频谱风格：dots（圆点）/ wave（声波）/ bars（射线）。"""
+        if style not in {key for key, _label in _RING_STYLES} or style == self._ring_style:
+            return
+        self._ring_style = style
+        self._ring_prev = []   # 风格切换后重新积累时间平滑
         self._persist()
         self.update()
 
@@ -1689,9 +1719,16 @@ class MusicFloatBar(QWidget):
         act.setCheckable(True)
         act.setChecked(self._ring_on)
         act.triggered.connect(lambda checked: self.set_ring_enabled(checked))
-        count_menu = ring_menu.addMenu("圆环数量")
+        style_menu = ring_menu.addMenu("圆环样式")
+        for key, label in _RING_STYLES:
+            act = style_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(self._ring_style == key)
+            act.triggered.connect(lambda _checked=False, k=key: self.set_ring_style(k))
+        count_label = "声波层数" if self._ring_style == "wave" else "密度"
+        count_menu = ring_menu.addMenu(count_label)
         for count in (1, 2, 3, 4, 5):
-            act = count_menu.addAction(f"{count} 条")
+            act = count_menu.addAction(f"{count} 档")
             act.setCheckable(True)
             act.setChecked(self._ring_count == count)
             act.triggered.connect(lambda _checked=False, c=count: self.set_ring_count(c))
@@ -2267,46 +2304,163 @@ class MusicFloatBar(QWidget):
         painter.drawEllipse(QPointF(cu, cv), hole_r, hole_r)
         painter.restore()
 
+    def _ring_shape(self, levels: list[float], smooth_w: int = _RING_SMOOTH_W) -> list[float]:
+        """把 48 段电平变成一条平滑的环形轮廓。
+
+        先按循环 Catmull-Rom 采样到 180 点（段与段之间是曲线而不是折线），
+        再做圆形滑动平均压掉逐段毛刺；返回 0~1 的归一化轮廓。
+        """
+        n = len(levels)
+        samples = _RING_SEGMENTS
+        raw = []
+        for k in range(samples):
+            t = k / float(samples) * n
+            i = int(t)
+            f = t - i
+            p0 = levels[(i - 1) % n]
+            p1 = levels[i % n]
+            p2 = levels[(i + 1) % n]
+            p3 = levels[(i + 2) % n]
+            raw.append(
+                0.5 * (
+                    2.0 * p1
+                    + (-p0 + p2) * f
+                    + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * f * f
+                    + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * f * f * f
+                )
+            )
+        out = []
+        for k in range(samples):
+            total = 0.0
+            for j in range(-smooth_w, smooth_w + 1):
+                total += raw[(k + j) % samples]
+            out.append(total / (2 * smooth_w + 1))
+        return out
+
+    def _ring_smooth_over_time(self, shape: list[float]) -> list[float]:
+        """逐帧向目标形状靠近一点，避免形状突跳。"""
+        if len(self._ring_prev) == len(shape):
+            shape = [
+                prev + (new - prev) * _RING_FOLLOW for prev, new in zip(self._ring_prev, shape)
+            ]
+        self._ring_prev = shape
+        return shape
+
     def _paint_ring_spectrum(
         self, painter: QPainter, cu: float, cv: float, disc_r: float
     ) -> None:
-        """黑胶盘上的闭合圆环频谱：1~5 圈同心环，半径随当前电平起伏。"""
+        """黑胶盘上的环形频谱，按「圆环样式」分派：圆点 / 声波 / 射线。"""
         if not self._ring_on or not self._playing:
             return
         levels = self._viz_levels()
         if not levels:
             return
         count = max(1, min(5, self._ring_count))
-        base_color = QColor(self._ring_color)
-        n = len(levels)
-        spin = self._viz_phase / (2.0 * math.pi) * 0.15
+        color = QColor(self._ring_color)
         painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        try:
+            if self._ring_style == "dots":
+                smooth = self._ring_smooth_over_time(self._ring_shape(levels, 3))
+                self._paint_ring_dots(painter, cu, cv, disc_r, smooth, color, count)
+            elif self._ring_style == "bars":
+                smooth = self._ring_smooth_over_time(self._ring_shape(levels, 2))
+                self._paint_ring_bars(painter, cu, cv, disc_r, smooth, color, count)
+            else:   # wave
+                smooth = self._ring_smooth_over_time(self._ring_shape(levels, 8))
+                self._paint_ring_wave(painter, cu, cv, disc_r, smooth, color, count)
+        finally:
+            painter.restore()
+
+    @staticmethod
+    def _sample_shape(shape: list[float], angle: float) -> float:
+        """取某个角度上的轮廓电平（角度单位：弧度）。"""
+        k = int(round(angle / (2.0 * math.pi) * len(shape))) % len(shape)
+        return shape[k]
+
+    def _paint_ring_dots(
+        self, painter: QPainter, cu: float, cv: float, disc_r: float,
+        shape: list[float], color: QColor, density: int,
+    ) -> None:
+        """圆点环：一圈等距圆点，每颗的大小/亮度随所在角度的电平呼吸。"""
+        dots = 48 + 12 * (density - 1)
+        orbit = disc_r * 0.86
+        painter.setPen(Qt.NoPen)
+        for i in range(dots):
+            theta = 2.0 * math.pi * i / dots - math.pi / 2.0
+            level = self._sample_shape(shape, theta + math.pi / 2.0)
+            radius = disc_r * (0.014 + 0.020 * level)
+            col = QColor(color)
+            col.setAlpha(int(110 + 145 * level))
+            painter.setBrush(col)
+            painter.drawEllipse(
+                QPointF(cu + orbit * math.cos(theta), cv + orbit * math.sin(theta)),
+                radius, radius,
+            )
+
+    def _paint_ring_bars(
+        self, painter: QPainter, cu: float, cv: float, disc_r: float,
+        shape: list[float], color: QColor, density: int,
+    ) -> None:
+        """射线环：一圈径向圆角频谱条；安静时退成小圆点。"""
+        bars = 44 + 8 * (density - 1)
+        # 射线落在唱片纹槽区（标签 0.34 之外），从外圈向内生长，最响也不压标签
+        r_out_base = disc_r * 0.84
+        r_in_floor = disc_r * 0.50
         painter.setBrush(Qt.NoBrush)
-        for ring in range(count):
-            base = disc_r * (0.40 + 0.12 * ring)
-            amp = disc_r * 0.08
-            shift = ring * 0.12 + spin
+        for i in range(bars):
+            theta = 2.0 * math.pi * i / bars - math.pi / 2.0
+            level = self._sample_shape(shape, theta + math.pi / 2.0)
+            r_in = max(r_in_floor, r_out_base - disc_r * (0.03 + _RING_BAR_LEN * level))
+            col = QColor(color)
+            col.setAlpha(int(105 + 150 * level))
+            pen = QPen(col, max(1.3, disc_r * 0.05))
+            pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(pen)
+            painter.drawLine(
+                QPointF(cu + r_in * math.cos(theta), cv + r_in * math.sin(theta)),
+                QPointF(cu + r_out_base * math.cos(theta), cv + r_out_base * math.sin(theta)),
+            )
+
+    def _paint_ring_wave(
+        self, painter: QPainter, cu: float, cv: float, disc_r: float,
+        shape: list[float], color: QColor, layers_n: int,
+    ) -> None:
+        """声波环：多条半透明平滑闭合流线，像贴在盘边的一圈水波。"""
+        cos_t = [math.cos(2.0 * math.pi * k / _RING_SEGMENTS) for k in range(_RING_SEGMENTS)]
+        sin_t = [math.sin(2.0 * math.pi * k / _RING_SEGMENTS) for k in range(_RING_SEGMENTS)]
+        painter.setBrush(Qt.NoBrush)
+        amp = disc_r * _RING_WAVE_AMP
+        # 所有层共享同一条波轮廓，只是基准半径依次向内收一点（紧密嵌套）
+        for layer in range(layers_n):
+            base = disc_r * (_RING_WAVE_TOP - _RING_WAVE_GAP * layer)
+            phase = layer * 0.02
             path = QPainterPath()
             for k in range(_RING_SEGMENTS):
-                theta = 2.0 * math.pi * k / _RING_SEGMENTS
-                t = (theta / (2.0 * math.pi) + shift) % 1.0
-                pos = t * n
-                i0 = int(pos) % n
-                frac = pos - int(pos)
-                level = levels[i0] * (1.0 - frac) + levels[(i0 + 1) % n] * frac
-                radius = base + amp * (level - 0.45) * 1.4
-                px = cu + radius * math.cos(theta)
-                py = cv + radius * math.sin(theta)
+                level = shape[(k + int(phase * _RING_SEGMENTS)) % _RING_SEGMENTS]
+                # 波峰不能越过盘沿，波谷不能压进标签区
+                radius = min(
+                    disc_r * 0.84,
+                    max(disc_r * _RING_WAVE_FLOOR, base + amp * (level - 0.5) * 2.0),
+                )
+                px = cu + radius * cos_t[k]
+                py = cv + radius * sin_t[k]
                 if k == 0:
                     path.moveTo(px, py)
                 else:
                     path.lineTo(px, py)
             path.closeSubpath()
-            color = QColor(base_color)
-            color.setAlpha(int(_RING_ALPHA * (1.0 - 0.10 * ring)))
-            painter.setPen(QPen(color, 1.4))
+
+            fade = 1.0 - 0.08 * layer
+            glow = QColor(color)
+            glow.setAlpha(max(0, int(_RING_GLOW_ALPHA * fade)))
+            painter.setPen(QPen(glow, 2.3))
             painter.drawPath(path)
-        painter.restore()
+
+            core = QColor(color)
+            core.setAlpha(int(165 * fade))
+            painter.setPen(QPen(core, 0.9))
+            painter.drawPath(path)
 
     def _vinyl_label_color(self) -> QColor:
         """唱片标签跟着灯效取色；不播放时退成中性灰。"""
