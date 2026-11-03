@@ -48,6 +48,7 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
     QVariantAnimation,
+    Signal,
 )
 from PySide6.QtGui import (
     QBrush,
@@ -65,7 +66,15 @@ from PySide6.QtGui import (
     QRadialGradient,
     QTransform,
 )
-from PySide6.QtWidgets import QApplication, QColorDialog, QLabel, QMenu, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QColorDialog,
+    QInputDialog,
+    QLabel,
+    QMenu,
+    QPushButton,
+    QWidget,
+)
 
 _STATE_FILE = "music_floatbar.json"
 _REFRESH_MS = 3000
@@ -119,6 +128,66 @@ _HOVER_POLL_MS = 80
 _HOVER_NEAR_PX = 30     # 光标距长条多少像素内自动展开
 _HOVER_STAY_PX = 12     # 面板外扩多少像素仍算「没移开」
 _HOVER_LEAVE_MS = 450   # 光标移开多久后自动收贴
+
+# 胶囊条音乐可视化（真实频谱带）
+#   位置：above = 胶囊条上方（窗口顶部多留一条带）/ inside = 画在胶囊条内部
+#   配色：单色 / 渐变 / 呼吸 / 彩虹 / 随机；半透明度 0~100
+#   数据：Windows WASAPI 回环采集 + FFT（pet/music/spectrum.py），采集失败回落程序化波形
+_VIZ_H = 26                # 「胶囊上方」时频谱带高度（窗口随之变高）
+_VIZ_INSIDE_H = 30         # 「胶囊内部」时频谱条最大高度（铺满胶囊，键与标题压在频谱上）
+_VIZ_BARS = 48             # 采集侧的分频段数（也是「极细」档的上限）
+_VIZ_GAP = 2.0             # 相邻频谱条的间距
+_VIZ_ALPHA_DEFAULT = 45    # 默认半透明度（%）
+_VIZ_COLOR_DEFAULT = "#de3434"
+_VIZ_COLOR2_DEFAULT = "#ff9a3c"
+_VIZ_STEP = 0.34           # 波形相位步长（35 ms / tick，只在没有真实频谱时作回退）
+_VIZ_POS_ABOVE = "above"
+_VIZ_POS_INSIDE = "inside"
+_VIZ_POSITIONS = (_VIZ_POS_ABOVE, _VIZ_POS_INSIDE)
+_VIZ_MODE_SOLID = "solid"
+_VIZ_MODE_GRADIENT = "gradient"
+_VIZ_MODE_BREATHE = "breathe"
+_VIZ_MODE_RAINBOW = "rainbow"
+_VIZ_MODE_RANDOM = "random"
+_VIZ_MODES = (
+    _VIZ_MODE_SOLID,
+    _VIZ_MODE_GRADIENT,
+    _VIZ_MODE_BREATHE,
+    _VIZ_MODE_RAINBOW,
+    _VIZ_MODE_RANDOM,
+)
+_VIZ_MODE_LABELS = (
+    (_VIZ_MODE_SOLID, "单色"),
+    (_VIZ_MODE_GRADIENT, "渐变"),
+    (_VIZ_MODE_BREATHE, "呼吸"),
+    (_VIZ_MODE_RAINBOW, "彩虹"),
+    (_VIZ_MODE_RANDOM, "随机"),
+)
+_VIZ_MODE_DEFAULT = _VIZ_MODE_SOLID
+
+# 频谱条粗细：5 档，取值是「画面上的条数」（越少越粗）；
+# 极细 40 条：214 px 的频谱带里每条净宽约 3.4 px；最粗 10 条，每条约 19.4 px
+_VIZ_WIDTHS = (
+    ("极细", 40),
+    ("细", 30),
+    ("标准", 22),
+    ("粗", 16),
+    ("极粗", 10),
+)
+_VIZ_WIDTH_DEFAULT = 2
+# 彩虹循环：色相独立累加（35 ms × 0.01 ≈ 3.5 s 绕一圈），回绕处相位是连续的
+_VIZ_HUE_STEP = 0.010
+
+# 标题滚动：每拍（35 ms）移动的像素、到起点停一会儿、接回开头时留的间距
+_TITLE_SCROLL_PX = 1.0
+_TITLE_SCROLL_PAUSE = 34   # ≈ 1.2 s
+_TITLE_SCROLL_GAP = 56     # 滚出末尾后与本句开头的空隙
+
+# 黑胶圆环频谱：1~5 条同心闭合圆环，半径随电平起伏
+_RING_COUNT_DEFAULT = 3
+_RING_COLOR_DEFAULT = "#de3434"
+_RING_SEGMENTS = 96        # 每条环的角度采样数（越多越圆滑）
+_RING_ALPHA = 205
 
 # 呼吸灯：黑盘靠近边缘处挖出一圈镂空环带，灯就亮在这圈镂空里；
 # 不亮时 alpha=0，镂空处直接透出桌面（真透明）。
@@ -270,6 +339,12 @@ def _now_playing():
     return now_playing
 
 
+def _spectrum_class():
+    """惰性导入：真实频谱依赖 numpy，只在真的需要画频谱时才加载。"""
+    from pet.music.spectrum import SystemSpectrum
+    return SystemSpectrum
+
+
 def _is_anything_playing() -> bool:
     np = _now_playing()
     facts = getattr(np, "_session_facts", None)
@@ -399,40 +474,93 @@ class _GlyphButton(QPushButton):
         painter.setBrush(QColor(246, 246, 248, 210 if self.isDown() else 244))
         cx, cy = self.width() / 2.0, self.height() / 2.0
         s = r * 0.28
+        # 竖线统一用暂停图标那两根线的宽度与列位置：
+        #   prev 的竖线占 [cx-2bw, cx-bw]，next 的竖线占 [cx+bw, cx+2bw]
+        bw = max(2.0, r * 0.095)
         if self._kind == "toggle":
             if self._playing:
-                bw = max(2.0, r * 0.095)
                 bh = r * 0.44
                 painter.drawRoundedRect(QRectF(cx - bw * 2.0, cy - bh / 2.0, bw, bh), 1.0, 1.0)
                 painter.drawRoundedRect(QRectF(cx + bw * 1.0, cy - bh / 2.0, bw, bh), 1.0, 1.0)
             else:
-                path = QPainterPath(QPointF(cx - s * 0.55, cy - s))
-                path.lineTo(cx + s * 0.95, cy)
-                path.lineTo(cx - s * 0.55, cy + s)
-                path.closeSubpath()
-                painter.drawPath(path)
+                self._paint_tri(painter, cx - s * 0.60, cx + s * 0.60, cy, 1.0, s)
         elif self._kind == "prev":
-            self._paint_tri(painter, cx, cy, s, -1.0)
-            painter.drawRoundedRect(
-                QRectF(cx - s * 1.05, cy - s, max(1.8, r * 0.075), s * 2.0), 1.0, 1.0
-            )
+            painter.drawRoundedRect(QRectF(cx - bw * 2.0, cy - s, bw, s * 2.0), 1.0, 1.0)
+            self._paint_tri(painter, cx - bw, cx + bw * 2.0, cy, -1.0, s)
         else:   # next
-            self._paint_tri(painter, cx, cy, s, 1.0)
-            painter.drawRoundedRect(
-                QRectF(cx + s * 0.95, cy - s, max(1.8, r * 0.075), s * 2.0), 1.0, 1.0
-            )
+            self._paint_tri(painter, cx - bw * 2.0, cx + bw, cy, 1.0, s)
+            painter.drawRoundedRect(QRectF(cx + bw, cy - s, bw, s * 2.0), 1.0, 1.0)
         painter.end()
 
     @staticmethod
-    def _paint_tri(painter: QPainter, cx: float, cy: float, s: float, direction: float) -> None:
-        """direction=-1 朝左（上一首），+1 朝右（下一首）。"""
-        tip_x = cx + s * 0.75 * direction
-        base_x = cx - s * 0.45 * direction
-        path = QPainterPath(QPointF(base_x, cy - s))
+    def _paint_tri(
+        painter: QPainter, left: float, right: float, cy: float, direction: float, half_h: float
+    ) -> None:
+        """在 [left, right] 这段宽度里画三角形：direction=-1 朝左，+1 朝右。"""
+        tip_x = left if direction < 0 else right
+        base_x = right if direction < 0 else left
+        path = QPainterPath(QPointF(base_x, cy - half_h))
         path.lineTo(tip_x, cy)
-        path.lineTo(base_x, cy + s)
+        path.lineTo(base_x, cy + half_h)
         path.closeSubpath()
         painter.drawPath(path)
+
+
+class _ScrollingLabel(QLabel):
+    """胶囊条标题：放得下居中显示，放不下就「滚动 → 接回开头」循环播放。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._offset = 0.0
+        self._pause = _TITLE_SCROLL_PAUSE
+        self.setTextFormat(Qt.PlainText)
+        # 标题盖在胶囊中间，让它把鼠标事件让给父窗口（否则按在标题上拖不动）
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+    def setText(self, text: str) -> None:   # noqa: N802 —— 覆盖 Qt 的驼峰命名
+        super().setText(text)
+        self._offset = 0.0
+        self._pause = _TITLE_SCROLL_PAUSE
+        self.update()
+
+    def advance(self) -> bool:
+        """推进一帧滚动；返回是否需要重绘。
+
+        循环而不是往返：偏移量走到「文本宽 + 间距」后减去这个周期回到起点。
+        绘制层同时画两份文本，所以回绕那一帧的画面与上一帧完全重合，看不出接缝。
+        """
+        span = self.fontMetrics().horizontalAdvance(self.text())
+        if span <= self.width():
+            if self._offset:
+                self._offset = 0.0
+                return True
+            return False
+        if self._pause > 0:
+            self._pause -= 1
+            return False
+        self._offset += _TITLE_SCROLL_PX
+        cycle = span + _TITLE_SCROLL_GAP
+        if self._offset >= cycle:
+            self._offset -= cycle
+            self._pause = _TITLE_SCROLL_PAUSE
+        return True
+
+    def paintEvent(self, event: QPaintEvent) -> None:   # noqa: N802 —— 覆盖 Qt 的驼峰命名
+        painter = QPainter(self)
+        painter.setFont(self.font())
+        metrics = self.fontMetrics()
+        span = metrics.horizontalAdvance(self.text())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        y = (self.height() + metrics.ascent() - metrics.descent()) // 2
+        painter.setClipRect(self.rect())
+        if span <= self.width():
+            painter.drawText(QPoint((self.width() - span) // 2, y), self.text())
+        else:
+            # 两份文本首尾相接：第一份滚出左边时，第二份正好从右边接上
+            x = -int(self._offset)
+            painter.drawText(QPoint(x, y), self.text())
+            painter.drawText(QPoint(x + span + _TITLE_SCROLL_GAP, y), self.text())
+        painter.end()
 
 
 # ---------------------------------------------------------------- 生命周期
@@ -453,6 +581,9 @@ def create_floatbar(app) -> MusicFloatBar | None:
 
 class MusicFloatBar(QWidget):
     """网易云悬浮控制器：胶囊 / 圆盘 / 贴边长条 / 贴边控制面板。"""
+
+    # 后台曲名采样线程 → 主线程（Qt 自动走排队连接）
+    _track_changed = Signal(str)
 
     _BTN_QSS = (
         "QPushButton { color: #f2f2f2; background: transparent; border: none;"
@@ -488,6 +619,8 @@ class MusicFloatBar(QWidget):
 
         self._animating = False
         self._anim_target: str | None = None
+        # 当前动画进度（0→1），频谱带的高度跟着它一起长出来 / 收回去
+        self._anim_progress = 1.0
 
         # 动画驱动的绘制属性
         self._radius = float(_COLLAPSED_RADIUS if self._form == _FORM_DISC else _EXPANDED_RADIUS)
@@ -519,6 +652,34 @@ class MusicFloatBar(QWidget):
 
         # 灯效只在有音乐播放时点亮（暂停 / 无会话 → 镂空处全透明）
         self._playing = False
+
+        # 胶囊条标题显示当前曲目名（后台常驻线程采样 SMTC 元数据）
+        self._track_title = ""
+        self._track_stop = threading.Event()
+        self._track_thread: threading.Thread | None = None
+        self._track_changed.connect(self._set_track_title)
+
+        # 音乐可视化（胶囊条上方的频谱带 / 胶囊内部频谱）
+        self._viz_pos = self._state_viz_pos()
+        self._viz_mode = self._state_viz_mode()
+        self._viz_alpha = self._state_viz_alpha()
+        self._viz_color = self._state_viz_color()
+        self._viz_color2 = self._state_viz_color2()
+        self._viz_width = self._state_viz_width()
+        # 附加功能开关：关掉后对应线程 / 绘制都完全不启动
+        self._viz_on = self._state_flag("viz_enabled")
+        self._title_on = self._state_flag("title_enabled")
+        # 黑胶盘上的闭合圆环频谱
+        self._ring_on = self._state_flag("ring_enabled")
+        self._ring_count = self._state_ring_count()
+        self._ring_color = self._state_ring_color()
+        self._viz_hue = 0.0
+        self._viz_phase = 0.0
+        # 真实频谱：播放且胶囊条可见时才起采集线程（见 _sync_spectrum）
+        self._spectrum = None
+        self._spectrum_failed = False
+        # 彩虹角度单独累加：相位回绕时角度连续，圆盘接缝不再跳一下
+        self._rainbow_angle = 0.0
 
         # 网易云进程存活状态（None = 还没查过）
         self._netcloud_running: bool | None = None
@@ -569,6 +730,52 @@ class MusicFloatBar(QWidget):
         skin = str(self._state.get("panel_skin", _SKIN_DEFAULT))
         return skin if skin in _PANEL_SKINS else _SKIN_DEFAULT
 
+    def _state_viz_pos(self) -> str:
+        pos = str(self._state.get("viz_pos", _VIZ_POS_ABOVE))
+        return pos if pos in _VIZ_POSITIONS else _VIZ_POS_ABOVE
+
+    def _state_viz_mode(self) -> str:
+        mode = str(self._state.get("viz_mode", _VIZ_MODE_DEFAULT))
+        return mode if mode in _VIZ_MODES else _VIZ_MODE_DEFAULT
+
+    def _state_viz_alpha(self) -> int:
+        try:
+            value = int(self._state.get("viz_alpha", _VIZ_ALPHA_DEFAULT))
+        except (TypeError, ValueError):
+            return _VIZ_ALPHA_DEFAULT
+        return max(0, min(100, value))
+
+    def _state_viz_color(self) -> QColor:
+        color = QColor(str(self._state.get("viz_color", _VIZ_COLOR_DEFAULT)))
+        return color if color.isValid() else QColor(_VIZ_COLOR_DEFAULT)
+
+    def _state_viz_color2(self) -> QColor:
+        color = QColor(str(self._state.get("viz_color2", _VIZ_COLOR2_DEFAULT)))
+        return color if color.isValid() else QColor(_VIZ_COLOR2_DEFAULT)
+
+    def _state_viz_width(self) -> int:
+        try:
+            value = int(self._state.get("viz_width", _VIZ_WIDTH_DEFAULT))
+        except (TypeError, ValueError):
+            return _VIZ_WIDTH_DEFAULT
+        return value if 0 <= value < len(_VIZ_WIDTHS) else _VIZ_WIDTH_DEFAULT
+
+    def _state_flag(self, key: str) -> bool:
+        """附加功能开关：存档里只认真正的布尔值，缺失 / 非法一律按「开」。"""
+        value = self._state.get(key, True)
+        return value if isinstance(value, bool) else True
+
+    def _state_ring_count(self) -> int:
+        try:
+            value = int(self._state.get("ring_count", _RING_COUNT_DEFAULT))
+        except (TypeError, ValueError):
+            return _RING_COUNT_DEFAULT
+        return value if 1 <= value <= 5 else _RING_COUNT_DEFAULT
+
+    def _state_ring_color(self) -> QColor:
+        color = QColor(str(self._state.get("ring_color", _RING_COLOR_DEFAULT)))
+        return color if color.isValid() else QColor(_RING_COLOR_DEFAULT)
+
     # ---------------------------------------------------------------- 子控件 / 定时器
 
     def _build_children(self) -> None:
@@ -587,10 +794,16 @@ class MusicFloatBar(QWidget):
         self._btn_next.setFixedSize(26, 26)
         self._btn_next.clicked.connect(lambda: self._control("next"))
 
-        self._title = QLabel("网易云音乐", self)
-        self._title.setFont(QFont("Microsoft YaHei UI", 9))
-        self._title.setStyleSheet("color: rgba(235,235,235,200); background: transparent;")
+        # 键帽底画在父窗口上：按下 / 抬起要让父窗口重绘，才会有「按下去」的观感
+        for btn in (self._btn_prev, self._btn_toggle, self._btn_next):
+            btn.pressed.connect(self.update)
+            btn.released.connect(self.update)
+
+        self._title = _ScrollingLabel(self)
+        self._title.setFont(QFont("Microsoft YaHei UI", 8))
+        self._title.setStyleSheet("color: rgba(235,235,235,210); background: transparent;")
         self._title.setAlignment(Qt.AlignCenter)
+        self._set_track_title("")
 
         self._btn_collapse = QPushButton("—", self)
         self._btn_collapse.setFont(QFont("Segoe UI Symbol", 9))
@@ -635,9 +848,11 @@ class MusicFloatBar(QWidget):
         self._netcloud_running = running
         _log(f"visibility: cloudmusic running={running}")
         if running:
+            self._start_track_sampler()
             self.show()
             self.raise_()
         else:
+            self._set_track_title("")
             self.hide()
 
     def _refresh_state(self) -> None:
@@ -650,6 +865,53 @@ class MusicFloatBar(QWidget):
             self._playing = playing
             self.update()   # 播放态变化立刻点亮 / 熄灭灯效，不等下一次心跳
         self._btn_toggle.set_playing(playing)
+
+    def _set_track_title(self, title: str) -> None:
+        """胶囊条标题：优先显示当前曲目名（放不下就滚动）；关闭「显示当前曲名」后固定显示「网易云音乐」。"""
+        text = (title or "").strip() if self._title_on else ""
+        self._track_title = text
+        shown = text or "网易云音乐"
+        self._title.setText(shown)
+        self._title.setToolTip(shown)
+
+    def _start_track_sampler(self) -> None:
+        if self._track_thread is not None or sys.platform != "win32" or not self._title_on:
+            return
+        self._track_stop.clear()
+        thread = threading.Thread(target=self._track_loop, name="music-floatbar-track", daemon=True)
+        self._track_thread = thread
+        thread.start()
+
+    def _stop_track_sampler(self) -> None:
+        self._track_stop.set()
+        self._track_thread = None
+
+    def _track_loop(self) -> None:
+        """常驻线程按周期读一次 SMTC 元数据，取当前曲目名。
+
+        ``get_now_playing`` 自带事件循环，必须常驻在同一线程里反复调用；
+        COM 公寓按线程累积，不能每次采样都新起线程。
+        """
+        while True:
+            if self._netcloud_running:
+                title = ""
+                try:
+                    from pet.music.now_playing import get_now_playing
+
+                    playback = get_now_playing()
+                    track = getattr(playback, "track", None) if playback else None
+                    app_id = str(getattr(playback, "app_id", "") or "").lower()
+                    # 只认网易云的会话：别的播放器抢到焦点时不显示它的曲名
+                    if track is not None and (not app_id or "cloudmusic" in app_id):
+                        title = str(getattr(track, "title", "") or "")
+                except Exception as exc:
+                    _log_error("track_sample", exc)
+                try:
+                    self._track_changed.emit(title)
+                except RuntimeError:
+                    return
+            if self._track_stop.wait(_REFRESH_MS / 1000.0):
+                return
 
     def _control(self, op: str) -> None:
         def work():
@@ -671,11 +933,27 @@ class MusicFloatBar(QWidget):
             return scr.availableGeometry()
         return QRect(0, 0, 1280, 720)
 
+    def _viz_band_h(self) -> int:
+        """「胶囊上方」时窗口顶部额外留给频谱带的高度；「胶囊内部」或关闭可视化时为 0。"""
+        if not self._viz_on:
+            return 0
+        return _VIZ_H if self._viz_pos == _VIZ_POS_ABOVE else 0
+
+    def _viz_band_progress(self) -> float:
+        """频谱带当前的生长进度（0→1），让带子跟着窗口动画一起长 / 收。"""
+        if not self._animating:
+            return 1.0 if self._form == _FORM_EXPANDED else 0.0
+        if self._anim_target == _FORM_EXPANDED:
+            return self._anim_progress
+        if self._form == _FORM_EXPANDED:
+            return 1.0 - self._anim_progress
+        return 0.0
+
     def _form_size(self, form: str) -> tuple[int, int]:
         """某形态的目标尺寸；贴边两形态的厚/长方向由当前贴的是哪条边决定。"""
         vertical = self._edge in ("left", "right")
         if form == _FORM_EXPANDED:
-            return _EXPANDED_W, _EXPANDED_H
+            return _EXPANDED_W, _EXPANDED_H + self._viz_band_h()
         if form == _FORM_DISC:
             return _COLLAPSED_W, _COLLAPSED_H
         if form == _FORM_EDGE_BAR:
@@ -715,7 +993,11 @@ class MusicFloatBar(QWidget):
                     cy = avail.top() + h // 2
                 else:
                     cy = avail.bottom() - h // 2 + 1
-            x, y = cx - w // 2, cy - h // 2
+            if form == _FORM_EXPANDED:
+                # 频谱带向上扩：胶囊本体仍以当前中心为锚，带子只在上面长出来
+                x, y = cx - w // 2, cy - _EXPANDED_H // 2 - self._viz_band_h()
+            else:
+                x, y = cx - w // 2, cy - h // 2
 
         x = max(avail.left(), min(x, avail.right() - w + 1))
         y = max(avail.top(), min(y, avail.bottom() - h + 1))
@@ -748,13 +1030,14 @@ class MusicFloatBar(QWidget):
         buttons = (self._btn_prev, self._btn_toggle, self._btn_next)
 
         if form == _FORM_EXPANDED:
+            top = self._viz_band_h()
             for btn in buttons + (self._title, self._btn_collapse):
                 btn.setVisible(True)
-            self._btn_prev.setGeometry(10, 6, 26, 26)
-            self._btn_toggle.setGeometry(38, 6, 26, 26)
-            self._btn_next.setGeometry(66, 6, 26, 26)
-            self._title.setGeometry(96, 4, 96, 30)
-            self._btn_collapse.setGeometry(198, 6, 20, 26)
+            self._btn_prev.setGeometry(10, 6 + top, 26, 26)
+            self._btn_toggle.setGeometry(38, 6 + top, 26, 26)
+            self._btn_next.setGeometry(66, 6 + top, 26, 26)
+            self._title.setGeometry(96, 4 + top, 96, 30)
+            self._btn_collapse.setGeometry(198, 6 + top, 20, 26)
             return
 
         if form == _FORM_EDGE_PANEL:
@@ -812,6 +1095,7 @@ class MusicFloatBar(QWidget):
 
         self._animating = True
         self._anim_target = form
+        self._anim_progress = 0.0
 
         start = self.frameGeometry()
         target = self._target_rect(form)
@@ -845,6 +1129,7 @@ class MusicFloatBar(QWidget):
 
         def on_update(progress):
             p = float(progress)
+            self._anim_progress = p
             w = start.width() + (target.width() - start.width()) * p
             h = start.height() + (target.height() - start.height()) * p
             x = start.x() + (target.x() - start.x()) * p
@@ -859,6 +1144,7 @@ class MusicFloatBar(QWidget):
             anim.deleteLater()
             self._animating = False
             self._anim_target = None
+            self._anim_progress = 1.0
             self.setWindowOpacity(1.0)
             self._apply_form(form)
             if form == _FORM_DISC:
@@ -955,17 +1241,30 @@ class MusicFloatBar(QWidget):
         self._glow_phase += _GLOW_STEP_RAD
         if self._glow_phase > 2 * math.pi:
             self._glow_phase -= 2 * math.pi
+        # 彩虹旋转角单独累加并模 360：相位回绕时角度连续，接缝不会再跳一格
+        self._rainbow_angle = (self._rainbow_angle + math.degrees(self._breathe_step_rad * 0.9)) % 360.0
+        self._sync_spectrum()
+        # 曲名放不下时左右往返滚动；放得下就原地居中
+        if self._form == _FORM_EXPANDED and not self._title.isHidden() and self._title.advance():
+            self._title.update()
         if self._effect == "random":
             self._random_advance()
         if self._playing:
             self._vinyl_phase += 0.02
             if self._vinyl_phase > 2 * math.pi:
                 self._vinyl_phase -= 2 * math.pi
+            self._viz_phase += _VIZ_STEP
+            if self._viz_phase > 2 * math.pi:
+                self._viz_phase -= 2 * math.pi
+            # 彩虹色相独立累加并模 1：相位回绕时颜色连续，不会跳回起点
+            self._viz_hue = (self._viz_hue + _VIZ_HUE_STEP) % 1.0
         if not self._animating and self._playing:
             if self._form in (_FORM_DISC, _FORM_EDGE_BAR):
                 self.update()
             elif self._form == _FORM_EDGE_PANEL and self._skin == _SKIN_VINYL:
                 self.update()   # 黑胶高光在面板上缓慢转，跟呼吸灯同一条 35 ms 心跳
+            elif self._form == _FORM_EXPANDED:
+                self.update()   # 胶囊条上的频谱带逐帧推进
 
     def _random_advance(self) -> None:
         """随机彩变：保持一会儿 → 用固定时长平滑过渡到下一个随机 RGB 色。"""
@@ -1044,9 +1343,127 @@ class MusicFloatBar(QWidget):
             "effect": self._effect,
             "frame": self._frame,
             "panel_skin": self._skin,
+            "viz_pos": self._viz_pos,
+            "viz_mode": self._viz_mode,
+            "viz_alpha": self._viz_alpha,
+            "viz_color": self._viz_color.name(),
+            "viz_color2": self._viz_color2.name(),
+            "viz_width": self._viz_width,
+            "viz_enabled": self._viz_on,
+            "title_enabled": self._title_on,
+            "ring_enabled": self._ring_on,
+            "ring_count": self._ring_count,
+            "ring_color": self._ring_color.name(),
             "_saved_w": self.width(),
             "_saved_h": self.height(),
         })
+
+    # ---------------------------------------------------------------- 音乐可视化设置
+
+    def set_viz_pos(self, pos: str) -> None:
+        """频谱位置：胶囊条上方（窗口变高）/ 胶囊条内部。"""
+        if pos not in _VIZ_POSITIONS or pos == self._viz_pos:
+            return
+        self._viz_pos = pos
+        self._persist()
+        # 位置决定「上方」是否要额外高度，几何立刻按当前形态重排；
+        # 动画中途不重排（收尾的 _apply_form 会读新值），避免打断几何动画
+        if not self._animating:
+            self._apply_form(self._form)
+        self.update()
+
+    def set_viz_mode(self, mode: str) -> None:
+        if mode not in _VIZ_MODES or mode == self._viz_mode:
+            return
+        self._viz_mode = mode
+        self._persist()
+        self.update()
+
+    def set_viz_alpha(self, value: int) -> None:
+        value = max(0, min(100, int(value)))
+        if value == self._viz_alpha:
+            return
+        self._viz_alpha = value
+        self._persist()
+        self.update()
+
+    def set_viz_width(self, level: int) -> None:
+        """频谱条粗细（0 最细 … 4 最粗）；条数由档位与可用宽度共同决定。"""
+        level = int(level)
+        if level < 0 or level >= len(_VIZ_WIDTHS) or level == self._viz_width:
+            return
+        self._viz_width = level
+        self._persist()
+        self.update()
+
+    def set_viz_enabled(self, enabled: bool) -> None:
+        """「音乐可视化」总开关：关掉后不画、不起采集线程，窗口也收回 38 高。"""
+        enabled = bool(enabled)
+        if enabled == self._viz_on:
+            return
+        self._viz_on = enabled
+        self._persist()
+        if not self._animating:
+            self._apply_form(self._form)
+        self.update()
+
+    def set_title_enabled(self, enabled: bool) -> None:
+        """「显示当前曲名」总开关：关掉后标题固定显示「网易云音乐」，采样线程退出。"""
+        enabled = bool(enabled)
+        if enabled == self._title_on:
+            return
+        self._title_on = enabled
+        self._persist()
+        if enabled:
+            self._start_track_sampler()
+        else:
+            self._stop_track_sampler()
+        self._set_track_title(self._track_title)
+
+    def _pick_viz_color(self) -> None:
+        col = QColorDialog.getColor(self._viz_color, None, "可视化颜色（单色 / 渐变起始色）")
+        if col.isValid():
+            self._viz_color = col
+            self._persist()
+            self.update()
+
+    def _pick_viz_color2(self) -> None:
+        col = QColorDialog.getColor(self._viz_color2, None, "渐变结束色")
+        if col.isValid():
+            self._viz_color2 = col
+            self._persist()
+            self.update()
+
+    def set_ring_enabled(self, enabled: bool) -> None:
+        """黑胶盘圆环频谱开关；关掉后不再为面板形态起采集线程。"""
+        enabled = bool(enabled)
+        if enabled == self._ring_on:
+            return
+        self._ring_on = enabled
+        self._persist()
+        self.update()
+
+    def set_ring_count(self, count: int) -> None:
+        count = int(count)
+        if count < 1 or count > 5 or count == self._ring_count:
+            return
+        self._ring_count = count
+        self._persist()
+        self.update()
+
+    def _pick_ring_color(self) -> None:
+        col = QColorDialog.getColor(self._ring_color, None, "圆环频谱颜色")
+        if col.isValid():
+            self._ring_color = col
+            self._persist()
+            self.update()
+
+    def _pick_viz_alpha(self) -> None:
+        value, ok = QInputDialog.getInt(
+            None, "音乐可视化", "半透明度（%）", self._viz_alpha, 0, 100, 5
+        )
+        if ok:
+            self.set_viz_alpha(value)
 
     # ---------------------------------------------------------------- 外框颜色
 
@@ -1228,6 +1645,58 @@ class MusicFloatBar(QWidget):
         frame_menu.addAction("自定义单色…").triggered.connect(self._pick_frame_color)
         frame_menu.addAction("两色渐变…").triggered.connect(self._pick_frame_gradient)
 
+        viz_menu = menu.addMenu("音乐可视化")
+        pos_menu = viz_menu.addMenu("频谱位置")
+        for key, label in ((_VIZ_POS_ABOVE, "胶囊条上方"), (_VIZ_POS_INSIDE, "胶囊条内部")):
+            act = pos_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(self._viz_pos == key)
+            act.triggered.connect(lambda _checked=False, k=key: self.set_viz_pos(k))
+        width_menu = viz_menu.addMenu("线条粗细")
+        for index, (label, count) in enumerate(_VIZ_WIDTHS):
+            act = width_menu.addAction(f"{label}（{count} 条）")
+            act.setCheckable(True)
+            act.setChecked(self._viz_width == index)
+            act.triggered.connect(lambda _checked=False, i=index: self.set_viz_width(i))
+        mode_menu = viz_menu.addMenu("配色")
+        for key, label in _VIZ_MODE_LABELS:
+            act = mode_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(self._viz_mode == key)
+            act.triggered.connect(lambda _checked=False, k=key: self.set_viz_mode(k))
+        viz_menu.addAction("可视化颜色…").triggered.connect(self._pick_viz_color)
+        viz_menu.addAction("渐变第二颜色…").triggered.connect(self._pick_viz_color2)
+        alpha_menu = viz_menu.addMenu("半透明度")
+        for pct in (20, 40, 60, 80):
+            act = alpha_menu.addAction(f"{pct}%")
+            act.setCheckable(True)
+            act.setChecked(self._viz_alpha == pct)
+            act.triggered.connect(lambda _checked=False, v=pct: self.set_viz_alpha(v))
+        alpha_menu.addAction("自定义…").triggered.connect(self._pick_viz_alpha)
+
+        extra_menu = menu.addMenu("附加功能")
+        act = extra_menu.addAction("显示当前曲名")
+        act.setCheckable(True)
+        act.setChecked(self._title_on)
+        act.triggered.connect(lambda checked: self.set_title_enabled(checked))
+        act = extra_menu.addAction("音乐可视化")
+        act.setCheckable(True)
+        act.setChecked(self._viz_on)
+        act.triggered.connect(lambda checked: self.set_viz_enabled(checked))
+
+        ring_menu = extra_menu.addMenu("黑胶圆环频谱")
+        act = ring_menu.addAction("启用")
+        act.setCheckable(True)
+        act.setChecked(self._ring_on)
+        act.triggered.connect(lambda checked: self.set_ring_enabled(checked))
+        count_menu = ring_menu.addMenu("圆环数量")
+        for count in (1, 2, 3, 4, 5):
+            act = count_menu.addAction(f"{count} 条")
+            act.setCheckable(True)
+            act.setChecked(self._ring_count == count)
+            act.triggered.connect(lambda _checked=False, c=count: self.set_ring_count(c))
+        ring_menu.addAction("圆环颜色…").triggered.connect(self._pick_ring_color)
+
         menu.addSeparator()
         action = menu.addAction("退出悬浮控制器（下次启动恢复）")
         if menu.exec(event.globalPos()) == action:
@@ -1261,6 +1730,12 @@ class MusicFloatBar(QWidget):
         rect = self.rect()
         painter.setPen(Qt.NoPen)
 
+        expanded_like = self._form == _FORM_EXPANDED or (
+            self._animating and self._anim_target == _FORM_EXPANDED
+        )
+        band = int(round(self._viz_band_h() * self._viz_band_progress())) if expanded_like else 0
+        body = rect.adjusted(0, band, 0, 0) if 0 < band < rect.height() else rect
+
         edge_like = self._form in (_FORM_EDGE_BAR, _FORM_EDGE_PANEL) or (
             self._animating and self._anim_target in (_FORM_EDGE_BAR, _FORM_EDGE_PANEL)
         )
@@ -1273,11 +1748,131 @@ class MusicFloatBar(QWidget):
             self._paint_breathe(painter, rect)
             self._paint_collapsed_glyph(painter, rect)
         else:
-            # 展开态 / 过渡态：圆角胶囊（radius 由动画驱动）
-            painter.setBrush(self._frame_brush(rect))
-            painter.drawRoundedRect(rect, self._radius, self._radius)
+            # 展开态 / 过渡态：圆角胶囊（radius 由动画驱动；上方频谱带不参与填充）
+            painter.setBrush(self._frame_brush(body))
+            painter.drawRoundedRect(body, self._radius, self._radius)
+
+        if self._form == _FORM_EXPANDED and not self._animating:
+            self._paint_viz(painter, body)
 
         painter.end()
+
+    # ---- 胶囊条音乐可视化（真实频谱）
+
+    def _viz_levels(self) -> list[float]:
+        """条高（0~1）：优先用 WASAPI 回环采到的真实频谱；采集不可用时回落程序化波形。"""
+        spectrum = self._spectrum
+        if spectrum is not None and not spectrum.failed:
+            return spectrum.levels
+        phase = self._viz_phase
+        levels = []
+        for i in range(_VIZ_BARS):
+            x = i / float(_VIZ_BARS - 1)
+            wave = (
+                0.5 * math.sin(phase * 2.0 + x * 9.0)
+                + 0.3 * math.sin(phase * 3.3 - x * 5.0 + 1.7)
+                + 0.2 * math.sin(phase * 1.4 + x * 2.5 + 0.5)
+            )
+            level = (0.55 + 0.45 * wave) * (0.55 + 0.45 * (1.0 - x) ** 0.7)
+            levels.append(max(0.10, min(1.0, level)))
+        return levels
+
+    def _sync_spectrum(self) -> None:
+        """按「正在播放 + 正在显示频谱」启停系统音频采集线程。"""
+        expanded = self._form == _FORM_EXPANDED or (
+            self._animating and self._anim_target == _FORM_EXPANDED
+        )
+        ring_panel = self._ring_on and self._form == _FORM_EDGE_PANEL and self._skin == _SKIN_VINYL
+        want = self._playing and (
+            (self._viz_on and expanded) or ring_panel
+        )
+        if want:
+            if self._spectrum is None and not self._spectrum_failed:
+                try:
+                    factory = _spectrum_class()
+                except Exception as exc:
+                    _log_error("spectrum_import", exc)
+                    self._spectrum_failed = True
+                else:
+                    self._spectrum = factory(_VIZ_BARS)
+                    self._spectrum.start()
+                    _log("spectrum: capture started")
+        elif self._spectrum is not None:
+            self._spectrum.stop()
+            self._spectrum = None
+            _log("spectrum: capture stopped")
+
+    def _viz_bar_count(self, width: float) -> int:
+        """按「粗细」档位算条数；任何档位都先保证每条不少于 3 px，画不下的部分自动减少条数。"""
+        wanted = _VIZ_WIDTHS[self._viz_width][1]
+        fit = max(1, int(width // 3.0))
+        return max(1, min(wanted, fit))
+
+    def _viz_resample(self, levels: list[float], count: int) -> list[float]:
+        """把 22 段原始电平按「取每组最大值」压成 count 条，粗档也不会丢峰。"""
+        if count >= len(levels):
+            return list(levels[:count])
+        out = []
+        for i in range(count):
+            lo = int(i * len(levels) / count)
+            hi = max(lo + 1, int((i + 1) * len(levels) / count))
+            out.append(max(levels[lo:hi]))
+        return out
+
+    def _viz_bar_color(self, index: int, total: int = _VIZ_BARS) -> QColor:
+        """单条频谱的颜色：单色 / 渐变 / 呼吸 / 彩虹 / 随机，统一叠加半透明度。"""
+        mode = self._viz_mode
+        if mode == _VIZ_MODE_RAINBOW:
+            # 色相 = 条序号 + 独立累加的循环偏移；偏移模 1，绕圈处连续不会跳色
+            hue = (index / float(max(1, total)) + self._viz_hue) % 1.0
+            color = QColor.fromHsvF(hue, 0.85, 1.0)
+        elif mode == _VIZ_MODE_RANDOM:
+            color = _lerp_color(self._rand_from, self._rand_to, self._rand_progress)
+        elif mode == _VIZ_MODE_GRADIENT:
+            t = index / float(max(1, total - 1))
+            color = _lerp_color(QColor(self._viz_color), QColor(self._viz_color2), t)
+        else:
+            color = QColor(self._viz_color)
+        alpha = int(round(255 * self._viz_alpha / 100.0))
+        if mode == _VIZ_MODE_BREATHE:
+            breath = (1.0 - math.cos(self._breathe_phase)) / 2.0
+            alpha = int(round(alpha * (0.25 + 0.75 * breath)))
+        color.setAlpha(max(0, min(255, alpha)))
+        return color
+
+    def _paint_viz(self, painter: QPainter, capsule: QRect) -> None:
+        """频谱带：胶囊条上方一整条（窗口顶部预留区），或画在胶囊内部。"""
+        if not self._playing or not self._viz_on:
+            return
+        inside = self._viz_pos == _VIZ_POS_INSIDE
+        if inside:
+            area = QRectF(capsule).adjusted(8.0, 0.0, -8.0, -4.0)
+            max_h = min(float(_VIZ_INSIDE_H), max(2.0, area.height() - 2.0))
+            baseline = area.bottom()
+        else:
+            area = QRectF(
+                capsule.left() + 6.0,
+                capsule.top() - float(_VIZ_H),
+                capsule.width() - 12.0,
+                float(_VIZ_H - 3),
+            )
+            max_h = area.height()
+            baseline = area.bottom()
+
+        count = self._viz_bar_count(area.width())
+        levels = self._viz_resample(self._viz_levels(), count)
+        slot = area.width() / len(levels)
+        bar_w = max(1.5, slot - _VIZ_GAP)
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        # 圆角封顶 2 px：矮条不能变成圆点，否则整条频谱看起来像一串珠子
+        radius = min(bar_w / 2.0, 2.0)
+        for i, level in enumerate(levels):
+            height = max(1.5, max_h * level)
+            x = area.left() + i * slot + (slot - bar_w) / 2.0
+            painter.setBrush(self._viz_bar_color(i, len(levels)))
+            painter.drawRoundedRect(QRectF(x, baseline - height, bar_w, height), radius, radius)
+        painter.restore()
 
     def _disc_ring_radii(self, rect: QRect) -> tuple[float, float]:
         """返回镂空环带的外半径、内半径（几何唯一来源）。"""
@@ -1355,7 +1950,9 @@ class MusicFloatBar(QWidget):
         breathe=False 时亮度恒定，只有颜色在转。
         """
         lum = self._rainbow_lum(breathe)
-        angle = math.degrees(self._breathe_phase * 0.9) % 360.0
+        # 角度用独立累加器（模 360）：早先用 breathe_phase*0.9 会在相位回绕处
+        # 一次跳 36°，视觉上就是圆盘环带上出现一道不自然的分界
+        angle = self._rainbow_angle
 
         grad = QConicalGradient(center, angle)
         steps = 12
@@ -1567,6 +2164,57 @@ class MusicFloatBar(QWidget):
         painter.drawPath(body)
         painter.restore()
 
+        self._paint_key_caps(painter, fade)
+
+    def _paint_key_caps(self, painter: QPainter, fade: float) -> None:
+        """圆角矩形面板的按键区：先挖一条内凹键槽，再把三个圆角键帽放进去。"""
+        caps = [b for b in (self._btn_prev, self._btn_toggle, self._btn_next) if not b.isHidden()]
+        if not caps:
+            return
+        rects = [QRectF(btn.geometry()) for btn in caps]
+        painter.save()
+        painter.setOpacity(fade)
+
+        # 键槽：比键帽外扩 5 px 的深色圆角槽，顶部一道更黑的投射线，像陷进面板里
+        well = rects[0].united(rects[-1]).adjusted(-5.0, -5.0, 5.0, 5.0)
+        painter.setPen(QPen(QColor(0, 0, 0, 120), 1.0))
+        painter.setBrush(QColor(0, 0, 0, 72))
+        painter.drawRoundedRect(well, 10.0, 10.0)
+        painter.setPen(QPen(QColor(0, 0, 0, 150), 1.0))
+        painter.drawLine(
+            QPointF(well.left() + 4.0, well.top() + 1.0),
+            QPointF(well.right() - 4.0, well.top() + 1.0),
+        )
+        painter.setPen(QPen(QColor(255, 255, 255, 18), 1.0))
+        painter.drawLine(
+            QPointF(well.left() + 4.0, well.bottom() - 1.0),
+            QPointF(well.right() - 4.0, well.bottom() - 1.0),
+        )
+
+        for btn, cap in zip(caps, rects):
+            pressed = btn.isDown()
+            # 键帽：上亮下暗 + 圆角 7，未按下时顶边一道高光、底边一道暗线
+            graded = QLinearGradient(cap.topLeft(), cap.bottomLeft())
+            graded.setColorAt(0.0, QColor(255, 255, 255, 20 if pressed else 62))
+            graded.setColorAt(0.55, QColor(255, 255, 255, 12 if pressed else 26))
+            graded.setColorAt(1.0, QColor(255, 255, 255, 4 if pressed else 10))
+            painter.setBrush(QBrush(graded))
+            painter.setPen(QPen(QColor(0, 0, 0, 140 if pressed else 96), 1.0))
+            painter.drawRoundedRect(cap.adjusted(0.5, 0.5, -0.5, -0.5), 7.0, 7.0)
+            if pressed:
+                continue
+            painter.setPen(QPen(QColor(255, 255, 255, 70), 1.0))
+            painter.drawLine(
+                QPointF(cap.left() + 5.0, cap.top() + 1.5),
+                QPointF(cap.right() - 5.0, cap.top() + 1.5),
+            )
+            painter.setPen(QPen(QColor(0, 0, 0, 90), 1.0))
+            painter.drawLine(
+                QPointF(cap.left() + 5.0, cap.bottom() - 1.5),
+                QPointF(cap.right() - 5.0, cap.bottom() - 1.5),
+            )
+        painter.restore()
+
     def _paint_vinyl_disc(
         self, painter: QPainter, rect: QRect, cross: float, span: float, fade: float
     ) -> None:
@@ -1612,9 +2260,52 @@ class MusicFloatBar(QWidget):
         painter.setBrush(self._vinyl_label_color())
         painter.drawEllipse(QPointF(cu, cv), label_r, label_r)
 
+        self._paint_ring_spectrum(painter, cu, cv, disc_r)
+
         hole_r = max(1.6, disc_r * 0.075)
         painter.setBrush(QColor(10, 10, 12, 240))
         painter.drawEllipse(QPointF(cu, cv), hole_r, hole_r)
+        painter.restore()
+
+    def _paint_ring_spectrum(
+        self, painter: QPainter, cu: float, cv: float, disc_r: float
+    ) -> None:
+        """黑胶盘上的闭合圆环频谱：1~5 圈同心环，半径随当前电平起伏。"""
+        if not self._ring_on or not self._playing:
+            return
+        levels = self._viz_levels()
+        if not levels:
+            return
+        count = max(1, min(5, self._ring_count))
+        base_color = QColor(self._ring_color)
+        n = len(levels)
+        spin = self._viz_phase / (2.0 * math.pi) * 0.15
+        painter.save()
+        painter.setBrush(Qt.NoBrush)
+        for ring in range(count):
+            base = disc_r * (0.40 + 0.12 * ring)
+            amp = disc_r * 0.08
+            shift = ring * 0.12 + spin
+            path = QPainterPath()
+            for k in range(_RING_SEGMENTS):
+                theta = 2.0 * math.pi * k / _RING_SEGMENTS
+                t = (theta / (2.0 * math.pi) + shift) % 1.0
+                pos = t * n
+                i0 = int(pos) % n
+                frac = pos - int(pos)
+                level = levels[i0] * (1.0 - frac) + levels[(i0 + 1) % n] * frac
+                radius = base + amp * (level - 0.45) * 1.4
+                px = cu + radius * math.cos(theta)
+                py = cv + radius * math.sin(theta)
+                if k == 0:
+                    path.moveTo(px, py)
+                else:
+                    path.lineTo(px, py)
+            path.closeSubpath()
+            color = QColor(base_color)
+            color.setAlpha(int(_RING_ALPHA * (1.0 - 0.10 * ring)))
+            painter.setPen(QPen(color, 1.4))
+            painter.drawPath(path)
         painter.restore()
 
     def _vinyl_label_color(self) -> QColor:
@@ -1690,3 +2381,7 @@ class MusicFloatBar(QWidget):
                 t.stop()
             except Exception:
                 pass
+        self._stop_track_sampler()
+        if self._spectrum is not None:
+            self._spectrum.stop()
+            self._spectrum = None
