@@ -332,6 +332,9 @@ class PetWindow(QWidget):
         if bool(self.config.get("edge_probe_enabled")):
             QTimer.singleShot(800, self._edge_probe.maybe_enter)
 
+    #: 音效预热上限：folder 包最多 128 个候选，全量预热会在首帧后一次建满播放器。
+    _WARM_SOUND_LIMIT = 8
+
     def _warm_interaction_assets(self) -> None:
         """预热点击素材与音效：第一次点击不该卡在解码/音频后端初始化上。"""
         if self.character is None:
@@ -342,8 +345,10 @@ class PetWindow(QWidget):
                     self.library.warm_first_frame(spec)
                 except Exception:
                     logger.debug("warm click clip failed: %s", spec.name, exc_info=True)
+        if not bool(self.config.get("click_sound")):
+            return
         self.sound.prepare(paths.legacy_asset_root() / "sounds" / "click.wav")
-        for candidate in self._click_sound_candidates():
+        for candidate in self._click_sound_candidates()[: self._WARM_SOUND_LIMIT]:
             try:
                 self.sound.prepare(candidate)
             except Exception:
@@ -1287,24 +1292,27 @@ class PetWindow(QWidget):
         if unsquashed is None:
             return True
         local = unsquashed
-        if not (0 <= local.x() < self.width() and 0 <= local.y() < self.height()):
+        target = self._frame_base_rect()
+        if target.width() <= 0 or target.height() <= 0 or not target.contains(local):
             return True
-        ix = int(local.x() * image.width() / self.width())
-        iy = int(local.y() * image.height() / self.height())
+        x = local.x()
+        if self._mirrored():
+            # paintEvent 在 target 内做了水平翻转（朝右）；命中不跟着翻会把
+            # 可见的身体判成透明 → 整窗被设成 WS_EX_TRANSPARENT，点击落到下层窗口。
+            x = 2 * target.x() + target.width() - 1 - x
+        ix = int((x - target.x()) * image.width() / target.width())
+        iy = int((local.y() - target.y()) * image.height() / target.height())
         if not (0 <= ix < image.width() and 0 <= iy < image.height()):
             return True
         return image.pixelColor(ix, iy).alpha() < 8
 
-    def _frame_target_rect(self) -> QRect:
-        """角色帧的绘制矩形：Q 弹用 squash rect，否则按原比例适配并左上对齐。
+    def _frame_base_rect(self) -> QRect:
+        """未应用 Q 弹时角色帧在窗口里的绘制矩形（命中测试的基准）。
 
         旧实现先 ``scaled(..., KeepAspectRatio)`` 再画到 (0,0)：宽高比与画布一致
         时就是整窗；不一致时保持比例、左上留白。这里用目标矩形复现同一语义，
         但不再每帧分配中间 pixmap。
         """
-        if self.effects.squash_active:
-            x, y, width, height = self.effects.squash_rect()
-            return QRect(x, y, width, height)
         width, height = self.width(), self.height()
         pixmap = self._pixmap
         if pixmap is None or pixmap.width() <= 0 or pixmap.height() <= 0:
@@ -1313,6 +1321,13 @@ class PetWindow(QWidget):
         target_width = max(1, int(round(pixmap.width() * scale)))
         target_height = max(1, int(round(pixmap.height() * scale)))
         return QRect(0, 0, target_width, target_height)
+
+    def _frame_target_rect(self) -> QRect:
+        """角色帧的绘制矩形：Q 弹用 squash rect，否则用基准矩形。"""
+        if self.effects.squash_active:
+            x, y, width, height = self.effects.squash_rect()
+            return QRect(x, y, width, height)
+        return self._frame_base_rect()
 
     def paintEvent(self, _event) -> None:
         from PySide6.QtGui import QPainter
@@ -1481,6 +1496,13 @@ class PetWindow(QWidget):
             self._left_hold_timer.start()
             event.accept()
 
+    def _drag_threshold(self) -> int:
+        """拖拽阈值：不低于引擎常量，并跟随系统 ``SM_CXDRAG``（手抖的点击不算拖拽）。"""
+        try:
+            return max(int(DRAG_THRESHOLD), int(QApplication.startDragDistance()))
+        except Exception:  # noqa: BLE001 - 无 QApplication 的测试替身退回常量
+            return int(DRAG_THRESHOLD)
+
     def mouseMoveEvent(self, event) -> None:
         self._last_cursor_local = event.position()
         if event.buttons():
@@ -1507,7 +1529,7 @@ class PetWindow(QWidget):
         if self._press_global is None or self._press_pos is None:
             return
         delta = event.globalPosition().toPoint() - self._press_global
-        if not self.dragging and delta.manhattanLength() < DRAG_THRESHOLD:
+        if not self.dragging and delta.manhattanLength() < self._drag_threshold():
             return
         if not self.dragging:
             if bool(self.config.get("lock_position")):
@@ -1654,11 +1676,13 @@ class PetWindow(QWidget):
             self._click_sound_token = None
             return
         else:
-            played = self._click_sound_pair.release(
-                self._click_sound_token, self._click_sound_candidates()
-            )
-            self._click_sound_token = None
-            self._on_click(sound_already_played=played)
+            token, self._click_sound_token = self._click_sound_token, None
+            try:
+                # 音效只是反馈：候选解析/播放失败都不许挡住 Q 弹、动画与气泡。
+                self._click_sound_pair.cancel(token)
+            except Exception:  # noqa: BLE001
+                logger.debug("click sound token cancel failed", exc_info=True)
+            self._on_click()
 
     def _release_right_button(self) -> None:
         if self.slingshot.aiming:
@@ -1760,6 +1784,11 @@ class PetWindow(QWidget):
         if self.motion.thrown or self.effects.throw_egg_active:
             # 主分支 on_sprite_clicked：非 normal 状态不消费点击。飞行中换素材
             # 会与 16ms 位移叠加成「两个位置的桌宠在闪」。
+            logger.debug(
+                "click ignored: thrown=%s throw_egg=%s",
+                self.motion.thrown,
+                self.effects.throw_egg_active,
+            )
             return
         self._cancel_animation_gap()
         self._cancel_move_plan()
@@ -1775,10 +1804,16 @@ class PetWindow(QWidget):
                     self._notify_click()
                 return
             self.effects.arm_spin_after_click()
+        if not bool(self.config.get("click_squash_enabled", True)):
+            logger.debug("click squash disabled by click_squash_enabled")
         spec = self._pick_manual(GraphType.TOUCH_BODY, AnimatType.SINGLE)
         if spec is not None:
-            self._play_spec(spec, "click")
+            try:
+                self._play_spec(spec, "click")
+            except Exception:  # noqa: BLE001 - 素材后端失败不许吃掉 Q 弹
+                logger.debug("click clip failed; keeping squash", exc_info=True)
         # 点击素材可能同步解码；Q 弹在切换之后再起表，保证 220ms 真的可见。
+        # 起点在第一次绘制时才锚定（EffectController），点击台词/气泡再慢也抹不掉。
         self.effects.start_squash(int(self.config.get("click_squash_ms") or 220))
         if bool(self.config.get("click_sound")) and not sound_already_played:
             QTimer.singleShot(0, self._play_click_sound)

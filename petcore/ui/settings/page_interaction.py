@@ -43,6 +43,15 @@ from .base import (
 EASTER_DISPLAY_KEY = "easter_egg_display"
 EASTER_DISPLAY_DEFAULT = "bubble"
 
+#: 内置点击音效包（id 必须与 ``petcore.config._CLICK_SOUND_BUILTINS`` 一致；
+#: 目录名即包名，``default`` 用单文件 ``assets/sounds/click.wav``）。
+BUILTIN_SOUND_PACKS = (
+    ("default", "内置 · 默认"),
+    ("duck", "内置 · 小黄鸭"),
+    ("Deep!Seek!", "内置 · Deep!Seek!"),
+    ("to鲸wu", "内置 · to鲸wu"),
+)
+
 
 def _percent(scale: float) -> int:
     return int(round(float(scale) * 100))
@@ -138,13 +147,10 @@ class InteractionPage(SettingsPage):
                 "点击桌宠时播放轻量反馈音效。",
             )
             self.sound_pack_combo = QComboBox(self)
-            for key, label in (
-                ("builtin:default", "内置 · 默认"),
-                ("builtin:duck", "内置 · 小黄鸭"),
-                ("file", "自定义文件"),
-                ("folder", "自定义文件夹（随机）"),
-            ):
-                self.sound_pack_combo.addItem(label, key)
+            for key, label in BUILTIN_SOUND_PACKS:
+                self.sound_pack_combo.addItem(label, "builtin:" + key)
+            self.sound_pack_combo.addItem("自定义文件", "file")
+            self.sound_pack_combo.addItem("自定义文件夹（随机）", "folder")
             self._sound_pack = self._read_sound_pack()
             click_card.add_row(
                 "音效音源",
@@ -672,9 +678,11 @@ class InteractionPage(SettingsPage):
     def _sound_path_text(self) -> str:
         pack = self._sound_pack
         if pack.get("kind") == "builtin":
-            if pack.get("id") == "duck":
-                return "内置小黄鸭音效包（assets/sounds/duck）"
-            return "内置默认音效（assets/sounds/click.wav）"
+            pack_id = str(pack.get("id") or "default")
+            if pack_id == "default":
+                return "内置默认音效（assets/sounds/click.wav）"
+            label = dict(BUILTIN_SOUND_PACKS).get(pack_id, pack_id)
+            return f"{label}（assets/sounds/{pack_id}）"
         return str(pack.get("path") or "（未选择）")
 
     def _sync_sound_pack_widgets(self) -> None:
@@ -1401,6 +1409,8 @@ class InteractionPage(SettingsPage):
             "音效音源",
             "小黄鸭",
             "duck",
+            "Deep!Seek!",
+            "to鲸wu",
             "click sound",
             "sound pack",
             "余额",

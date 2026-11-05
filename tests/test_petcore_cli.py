@@ -40,6 +40,8 @@ def test_check_reports_legacy_character(tmp_path) -> None:
     assert isinstance(report["menu_layout_diagnostics"], list)
     assert report["self_talk_images"]["count"] >= 0
     assert report["self_talk_images"]["builtin_dir"]
+    assert set(report["credentials"]) == {"backend", "available"}
+    assert isinstance(report["credentials"]["available"], bool)
 
 
 def test_check_reports_the_builtin_daily_pool(tmp_path) -> None:

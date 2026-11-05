@@ -352,7 +352,7 @@ petcore/
 - **扩展管理**：左侧竖向滚动导航（基础扩展/加装扩展），ModsPage 加同口径过滤；
   `mod.json` 新增 `name_zh`，13 个内置/示例包已补中文名。
 - **彩蛋与音效**：菜单「工具与帮助 → 彩蛋图片」随机弹 `assets/big_blue_fat_fish`
-  的图片（可配置目录/标题）；点击音效包支持默认/小黄鸭/自定义文件/文件夹，
+  的图片（可配置目录/标题）；点击音效包支持默认/小黄鸭/Deep!Seek!/to鲸wu/自定义文件/文件夹（内置包 = ``assets/sounds/<id>`` 目录，wav 优先、同名 mp3 兜底），
   碰撞与碰边复用同一音源。
 
 ## 12. H8 已落地（2026-10-21）
@@ -1097,6 +1097,32 @@ PrintWindow/BitBlt 非黑占比，不写标题正文。
 `<data_root>/feature-data/ai.chat/personas/`，同 id 覆盖内置。保存校验 id/名称/
 说明/提示词长度（提示词上限 20000 字，`ai_system_prompt` 同样按 20000 归一化），
 原子写；runtime 按目录+文件 mtime 缓存。
+
+现代角色卡（`chizuru`/`elysia`/`emilia`/`lin_pianpian`/`mom`/`rem`/`zhuang_fangyi`/`bobo`/
+`anon`/`soyo`/`tomori`/`taki`/`rana`/`sakiko`/`sakiko_cs`）统一十一节骨架，含
+`角色扮演约定` 与「默认六到八句话」；默认卡 `whale_maid` 与 `gentle`/`tsundere`/
+`genki`/`calm`/`cat` 保持短格式。
+
+**系统提示词上限**：`MAX_AI_SYSTEM_PROMPT = 20000`（`petcore/config.py`），
+`ai_system_prompt` 与人设卡共用；`Config._normalize` 截断时记一条只含长度的
+warning，设置页在编辑框上方显示 `N / 20000` 并在超限时当场截断/标红，不再静默砍尾。
+
+**工具调用兜底**：core 不声明 tools。`stream_chat` 剥离正文里的
+`<tool_call>` / 函数调用形状 JSON；`finish_reason="tool_calls"` 或清理后无正文时
+返回 `end_reason="tool_calls"` + `incomplete=True`；`ai.chat` 显示能力说明，
+不得留空气泡。提示词另带固定能力边界（自定义人格卡也追加）。
+
+**聊天图片**：本地文件与 `data:` URL 作为内联贴纸（逻辑边长 ≤240；GIF 走
+`AnimatedImage`，历史消息只画首帧）；`http(s)` 不自动下载，显示 `[图片：alt]`；
+仅当围栏代码块里只有一张本地图片时解包（修「图片语法被当代码输出」）。
+只有最新一条助手消息的贴纸起播。
+
+**表情包回复**：全局 `ai_meme_reply_enabled`（默认关）。开启后主对话/快速对话的
+system 追加彩蛋目录清单（`easter_egg_image_dir`，空 = `assets/big_blue_fat_fish`；
+可选 `meme-manifest.json` 提供 caption/tags/keywords），模型在回复末尾写
+`[表情: 文件名或标签]`；runtime 只在清单内解析（绝不把标记当路径），改成
+`![表情包](<绝对路径>)` 附在回复末尾，由聊天窗渲染成贴纸。OCR/翻译/截图问答
+不追加表情包指令。
 
 **会话**：`ChatSession.archived_at`（0=未归档）仍属 schema 1；侧栏按
 今天/昨天/本周/本月/更早分节，组头折叠；归档会话默认隐藏，可切换显示；

@@ -62,3 +62,13 @@ def test_empty_buckets_are_omitted() -> None:
     assert len(result) == 1
     assert result[0].key == BUCKET_TODAY
     assert result[0].label == "今天"
+
+
+def test_bad_timestamp_does_not_break_the_older_bucket_sort() -> None:
+    rows = [
+        _session("bad", "坏了"),
+        _session("older", _at(2026, 9, 1)),
+    ]
+    result = buckets(rows, NOW)
+    older = next(bucket for bucket in result if bucket.key == BUCKET_OLDER)
+    assert [session.session_id for session in older.sessions] == ["older", "bad"]

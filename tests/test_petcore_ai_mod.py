@@ -97,6 +97,11 @@ class FakeApi:
         self.service = service
         self.requests: list[dict] = []
         self.search_keys: dict[str, str] = {}
+        #: 默认是一条正常回答；工具调用/空回答用例改这几个字段。
+        self.text = "答案"
+        self.end_reason = "done"
+        self.incomplete = False
+        self.emit_delta = True
 
     def services(self):
         if not self.service:
@@ -138,10 +143,16 @@ class FakeApi:
             on_status("正在判断是否需要联网…")
         if on_reasoning is not None:
             on_reasoning("想一想")
-        if on_delta is not None:
+        if self.emit_delta and on_delta is not None:
             on_delta("答")
             on_delta("案")
-        return SimpleNamespace(text="答案", chunks=2, cancelled=False)
+        return SimpleNamespace(
+            text=self.text,
+            chunks=2,
+            cancelled=False,
+            incomplete=self.incomplete,
+            end_reason=self.end_reason,
+        )
 
     def open_settings(self):
         self.requests.append({"open_settings": True})
@@ -1347,5 +1358,228 @@ def test_settings_page_dark_toggle_saves_and_previews(qt_app, tmp_path: Path) ->
         # 设置搜索：行文本进索引，用户搜「深色」能找到
         haystack = " ".join(page_search_texts(page))
         assert "深色模式" in haystack
+    finally:
+        page.close()
+
+
+# ---------------------------------------------------------------- 工具调用兜底
+
+
+def test_system_prompt_declares_no_tool_capability(runtime) -> None:
+    chat = runtime.context.ports.chat
+    runtime._on_submit("你好", 2)
+    assert chat.done_event.wait(5)
+    system = runtime.context.ports.api.requests[0]["messages"][0]["content"]
+    assert "没有工具" in system
+    assert "不要输出工具调用" in system
+
+
+def test_custom_persona_prompt_also_gets_the_capability_boundary(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    context.host.config.set("ai_persona", "custom")
+    context.host.config.set("ai_system_prompt", "你是一只猫。")
+    instance = _create_host(context).runtime_factory(context)
+    try:
+        instance._on_submit("你好", 2)
+        assert context.ports.chat.done_event.wait(5)
+        system = context.ports.api.requests[0]["messages"][0]["content"]
+        assert system.startswith("你是一只猫。")
+        assert "没有工具" in system
+    finally:
+        instance.stop()
+
+
+def test_tool_call_result_becomes_a_visible_message(runtime) -> None:
+    api = runtime.context.ports.api
+    api.text = ""
+    api.end_reason = "tool_calls"
+    api.incomplete = True
+    api.emit_delta = False
+    chat = runtime.context.ports.chat
+    runtime._on_submit("帮我把这个文件删掉", 2)
+    assert chat.done_event.wait(5)
+    done = [call for call in chat.calls if call[0] == "done"]
+    assert done, chat.calls
+    assert "工具" in done[-1][1]
+    assert "没有正常结束" not in done[-1][1]
+    assert done[-1][1].strip()
+
+
+def test_quick_chat_tool_call_becomes_a_visible_message(runtime) -> None:
+    api = runtime.context.ports.api
+    api.text = ""
+    api.end_reason = "tool_calls"
+    api.incomplete = True
+    api.emit_delta = False
+    quick = runtime.context.ports.quick_chat
+    runtime._on_quick_submit("跑个命令", 2)
+    assert quick.done_event.wait(5)
+    done = [call for call in quick.calls if call[0] == "done"]
+    assert done and "工具" in done[-1][1]
+
+
+def test_look_screen_tool_call_reports_a_visible_reason(qt_app, runtime) -> None:
+    api = runtime.context.ports.api
+    api.text = ""
+    api.end_reason = "tool_calls"
+    api.incomplete = True
+    api.emit_delta = False
+    runtime.look_screen(2)
+    chat = runtime.context.ports.chat
+    assert _wait_until(qt_app, lambda: len(chat.records) == 2)
+    said = runtime.context.ports.presentation.said
+    assert said[-1] and "工具" in said[-1]
+
+
+# ---------------------------------------------------------------- 提示词上限
+
+
+def test_prompt_editor_caps_at_20000_and_shows_a_counter(qt_app, tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    definition = _create_host(context)
+    host = SimpleNamespace(
+        config=Config(tmp_path),
+        features=SimpleNamespace(ports=SimpleNamespace(api=FakeApi())),
+        chat=SimpleNamespace(apply_appearance=lambda **kwargs: None),
+    )
+    page = definition.settings_factory(host)
+    try:
+        page.prompt_edit.setPlainText("字" * 21000)
+        assert len(page.prompt_edit.toPlainText()) == 20000
+        assert "20000 / 20000" in page.prompt_count.text()
+        assert page.prompt_count.property("state") == "error"
+        assert "已截断" in page.prompt_count.toolTip()
+
+        page.prompt_edit.setPlainText("你好")
+        assert "2 / 20000" in page.prompt_count.text()
+        assert page.prompt_count.property("state") != "error"
+    finally:
+        page.close()
+
+
+# ---------------------------------------------------------------- 表情包回复
+
+
+def _meme_dir(tmp_path: Path) -> Path:
+    folder = tmp_path / "memes"
+    folder.mkdir()
+    (folder / "happy.gif").write_bytes(b"GIF89a")
+    (folder / "sad.png").write_bytes(b"\x89PNG")
+    (folder / "meme-manifest.json").write_text(
+        '{"version":1,"items":['
+        '{"file":"happy.gif","caption":"开心到转圈","tags":["happy"]},'
+        '{"file":"sad.png","caption":"流泪","tags":["sad"]}'
+        "]}",
+        encoding="utf-8",
+    )
+    return folder
+
+
+def _enable_memes(context, tmp_path: Path) -> Path:
+    folder = _meme_dir(tmp_path)
+    context.host.config.set("easter_egg_image_dir", str(folder))
+    context.host.config.set("ai_meme_reply_enabled", True)
+    return folder
+
+
+def test_meme_prompt_and_marker_are_wired(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    _enable_memes(context, tmp_path)
+    context.ports.api.text = "好耶\n[表情: happy]"
+    context.ports.api.emit_delta = False
+    instance = _create_host(context).runtime_factory(context)
+    try:
+        instance._on_submit("今天好开心", 2)
+        chat = context.ports.chat
+        assert chat.done_event.wait(5)
+        system = context.ports.api.requests[0]["messages"][0]["content"]
+        assert "[表情:" in system
+        assert "happy.gif" in system
+        assert "开心到转圈" in system
+        done = [call for call in chat.calls if call[0] == "done"][-1][1]
+        assert "好耶" in done
+        assert "[表情:" not in done
+        assert "![表情包](" in done
+        assert "happy.gif" in done
+    finally:
+        instance.stop()
+
+
+def test_meme_disabled_keeps_the_plain_reply(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    folder = _meme_dir(tmp_path)
+    context.host.config.set("easter_egg_image_dir", str(folder))
+    context.ports.api.text = "好耶\n[表情: happy]"
+    context.ports.api.emit_delta = False
+    instance = _create_host(context).runtime_factory(context)
+    try:
+        instance._on_submit("今天好开心", 2)
+        chat = context.ports.chat
+        assert chat.done_event.wait(5)
+        system = context.ports.api.requests[0]["messages"][0]["content"]
+        assert "可用表情包" not in system
+        done = [call for call in chat.calls if call[0] == "done"][-1][1]
+        assert "![表情包](" not in done
+    finally:
+        instance.stop()
+
+
+def test_meme_marker_never_becomes_a_path_from_the_model(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    _enable_memes(context, tmp_path)
+    context.ports.api.text = "好耶\n[表情: ../../etc/passwd]"
+    context.ports.api.emit_delta = False
+    instance = _create_host(context).runtime_factory(context)
+    try:
+        instance._on_submit("今天好开心", 2)
+        chat = context.ports.chat
+        assert chat.done_event.wait(5)
+        done = [call for call in chat.calls if call[0] == "done"][-1][1]
+        assert "passwd" not in done
+        assert "![表情包](" in done
+        assert ("happy.gif" in done) or ("sad.png" in done)
+    finally:
+        instance.stop()
+
+
+def test_meme_history_drops_image_markup_before_sending(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    _enable_memes(context, tmp_path)
+    context.ports.chat.history_messages = [
+        {"role": "user", "content": "上一句"},
+        {"role": "assistant", "content": "上一答\n\n![表情包](<C:/old.gif>)"},
+    ]
+    context.ports.api.text = "好耶"
+    context.ports.api.emit_delta = False
+    instance = _create_host(context).runtime_factory(context)
+    try:
+        instance._on_submit("现在这句", 2)
+        assert context.ports.chat.done_event.wait(5)
+        messages = context.ports.api.requests[0]["messages"]
+        assistant = [item for item in messages if item["role"] == "assistant"][0]
+        assert "![表情包]" not in assistant["content"]
+        assert "上一答" in assistant["content"]
+    finally:
+        instance.stop()
+
+
+def test_meme_reply_row_saves_and_shows_the_directory(qt_app, tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    folder = _meme_dir(tmp_path)
+    context.host.config.set("easter_egg_image_dir", str(folder))
+    definition = _create_host(context)
+    host = SimpleNamespace(
+        config=Config(tmp_path),
+        features=SimpleNamespace(ports=SimpleNamespace(api=FakeApi())),
+        chat=SimpleNamespace(apply_appearance=lambda **kwargs: None),
+    )
+    host.config.set("easter_egg_image_dir", str(folder))
+    page = definition.settings_factory(host)
+    try:
+        assert page.meme_check.isChecked() is False
+        assert folder.name in page.meme_hint.text()
+        assert "2" in page.meme_hint.text()
+        page.meme_check.setChecked(True)
+        assert host.config.get("ai_meme_reply_enabled") is True
     finally:
         page.close()

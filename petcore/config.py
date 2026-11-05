@@ -27,6 +27,10 @@ ALIAS_MAX_CHARS = 24
 #: 99 是能保证「身份空间足够大」又让碰撞拍仍能守住 16ms 的实测上限（见 L126）。
 MAX_PETS = 99
 
+#: 系统提示词上限（字符）：`ai_system_prompt` 与人设卡共用。设置页必须显式
+#: 计数/截断，不能让 `Config.set` 静默砍尾。
+MAX_AI_SYSTEM_PROMPT = 20000
+
 MIGRATION_STATUSES = frozenset({
     "not_needed",
     "migrated",
@@ -215,6 +219,7 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "asr_max_seconds",
         "asr_timeout",
         "ai_voice_reply",
+        "ai_meme_reply_enabled",
         "voice_chime_enabled",
         "voice_chime_schedule",
         "voice_chime_times",
@@ -549,6 +554,7 @@ DEFAULTS: dict[str, Any] = {
     "asr_max_seconds": 30,
     "asr_timeout": 30.0,
     "ai_voice_reply": False,
+    "ai_meme_reply_enabled": False,
     "menu_hidden": [],
     "menu_order": [],
     "menu_layout": None,
@@ -899,7 +905,7 @@ def _agent_links(value: Any) -> list[dict]:
 
 
 _CLICK_SOUND_KINDS = frozenset({"builtin", "file", "folder"})
-_CLICK_SOUND_BUILTINS = frozenset({"default", "duck"})
+_CLICK_SOUND_BUILTINS = frozenset({"default", "duck", "Deep!Seek!", "to鲸wu"})
 _CLICK_SOUND_PATH_MAX = 500
 
 #: 语音合成的可选后端（与 ``petcore.net.tts.PROVIDER_SPECS`` 的 id 对应；这里不
@@ -1701,6 +1707,9 @@ class Config:
             normalized.get("asr_timeout"), 30.0, 5.0, 120.0
         )
         normalized["ai_voice_reply"] = _bool(normalized.get("ai_voice_reply"), False)
+        normalized["ai_meme_reply_enabled"] = _bool(
+            normalized.get("ai_meme_reply_enabled"), False
+        )
         frameseq = str(normalized.get("frameseq") or "auto")
         normalized["frameseq"] = frameseq if frameseq in {"auto", "off", "only"} else "auto"
         normalized["allow_feature_mods"] = _bool(normalized.get("allow_feature_mods"), False)
@@ -1716,7 +1725,14 @@ class Config:
             normalized[hotkey_key] = hotkey_spec.normalize(normalized.get(hotkey_key))
         normalized["ai_service"] = str(normalized.get("ai_service") or "").strip()
         normalized["ai_model"] = str(normalized.get("ai_model") or "").strip()
-        normalized["ai_system_prompt"] = str(normalized.get("ai_system_prompt") or "")[:20000]
+        raw_prompt = str(normalized.get("ai_system_prompt") or "")
+        if len(raw_prompt) > MAX_AI_SYSTEM_PROMPT:
+            logger.warning(
+                "ai_system_prompt truncated: %s -> %s chars",
+                len(raw_prompt),
+                MAX_AI_SYSTEM_PROMPT,
+            )
+        normalized["ai_system_prompt"] = raw_prompt[:MAX_AI_SYSTEM_PROMPT]
         normalized["ai_persona"] = str(normalized.get("ai_persona") or "").strip()[:64]
         normalized["ai_vision_enabled"] = _bool(
             normalized.get("ai_vision_enabled"), True

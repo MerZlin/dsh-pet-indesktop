@@ -4,9 +4,10 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
-from . import __version__, paths
+from . import BOOT_T0, __version__, paths
 from .config import Config
 from .log import get_logger, setup_logging
 from .performance import runtime_metrics
@@ -117,6 +118,17 @@ def _speech_report(root: Path, config: Config) -> dict:
         }
     except Exception as exc:  # noqa: BLE001 - 诊断不能把 --check 拖垮
         return {"error": f"{type(exc).__name__}: {exc}"[:200]}
+
+
+def _credentials_report() -> dict:
+    """`--check` 的凭据后端证据：只读探针，不写任何条目。"""
+    from .api.credentials import KeyringCredentials
+
+    credentials = KeyringCredentials()
+    return {
+        "backend": credentials.backend_name(),
+        "available": bool(credentials.available()),
+    }
 
 
 def _self_talk_daily_report(path: Path | None = None) -> dict:
@@ -262,6 +274,7 @@ def _check(
         },
         "self_talk_daily": _self_talk_daily_report(),
         "speech": _speech_report(root, config),
+        "credentials": _credentials_report(),
         "update": UpdateService(root).diagnose(),
         # 运行时计数器只写不读就是死代码：`--check` 是它们的读出口。
         "performance": runtime_metrics.snapshot().as_dict(),
@@ -530,7 +543,9 @@ def main(argv: list[str] | None = None) -> int:
     logger = get_logger("cli")
     # `--check` 是诊断命令，必须只读：它会算出与正常启动一致的合并结果，但不备份、
     # 不写 config.json、不迁 slot（否则一次排障就改了用户数据并绕开迁移标记）。
+    config_t0 = time.perf_counter()
     config = Config.load(root, portable=args.portable, persist=not args.check)
+    config_ms = (time.perf_counter() - config_t0) * 1000.0
     if args.scale is not None:
         config.set("scale", args.scale)
     if args.character:
@@ -554,4 +569,6 @@ def main(argv: list[str] | None = None) -> int:
         mod_dirs=mod_dirs,
         instance=args.instance,
         cache_root=paths.cache_root() or root,
+        boot_t0=BOOT_T0,
+        config_ms=config_ms,
     )

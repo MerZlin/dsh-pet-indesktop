@@ -26,9 +26,18 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from .icons import tool_button, tool_icon
+from .inline_images import (
+    INLINE_IMAGE_MAX_SIDE,
+    MAX_INLINE_IMAGES,
+    InlineImage,
+    clear_stickers,
+    create_sticker,
+    extract_inline_images,
+)
 from .markdown_view import markdown_to_html
 
 #: 附件上限（与发送逻辑共用，超限时明确提示而非静默跳过）
@@ -39,6 +48,14 @@ MAX_TEXT_TOTAL_CHARS = 200_000  # 文本总长 20 万字符上限
 _TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".py", ".log", ".yaml", ".yml", ".xml"}
 
 _logger = logging.getLogger("petcore.ui.chat")
+
+
+def _alive(widget: QWidget) -> bool:
+    try:
+        widget.objectName()
+    except RuntimeError:
+        return False
+    return True
 
 
 def _attachment_is_image(path: Path) -> bool:
@@ -331,14 +348,24 @@ class MessageBubble(QFrame):
         self._raw_text = ""
         self._markdown = False
         self._render_cost_ms = 0.0
+        self._inline_refs: list[InlineImage] = []
+        self._image_widgets: list[QWidget] = []
+        #: 只有最新一条回复起播 GIF；历史消息画首帧，避免整条时间线同时解码。
+        self._animate_images = False
+        self.body.setMinimumWidth(360 if role == "assistant" else 0)
+        surface_layout.addWidget(self.body)
+        self.image_host = QWidget(self.surface)
+        self.image_layout = QVBoxLayout(self.image_host)
+        self.image_layout.setContentsMargins(0, 6, 0, 0)
+        self.image_layout.setSpacing(4)
+        self.image_host.hide()
+        surface_layout.addWidget(self.image_host)
         # 流式输出时 Markdown 重排的节流：长回答单次渲染 + 排版可达 20ms 以上，
         # 渲染变慢时合并到定时器里做。
         self._render_timer = QTimer(self)
         self._render_timer.setSingleShot(True)
         self._render_timer.timeout.connect(self._render_body)
         self.set_content(content)
-        self.body.setMinimumWidth(360 if role == "assistant" else 0)
-        surface_layout.addWidget(self.body)
         panel.addWidget(self.surface)
 
         self.tools = QFrame(self)
@@ -417,15 +444,54 @@ class MessageBubble(QFrame):
 
     def _render_body(self) -> None:
         self._render_timer.stop()
+        refs: list[InlineImage] = []
         if self._markdown and self._raw_text:
+            text = self._raw_text
+            if self.state != self.STATE_STREAMING:
+                text, refs = extract_inline_images(text)
             started = time.perf_counter()
             self.body.setTextFormat(Qt.TextFormat.RichText)
-            self.body.setText(markdown_to_html(self._raw_text))
+            self.body.setText(markdown_to_html(text))
             self.body.heightForWidth(max(1, self.body.width()))
             self._render_cost_ms = (time.perf_counter() - started) * 1000.0
         else:
             self.body.setTextFormat(Qt.TextFormat.PlainText)
             self.body.setText(self._raw_text)
+        self._inline_refs = refs
+        self._rebuild_images(refs)
+
+    # ---- 内联图片 ----
+    @property
+    def has_inline_images(self) -> bool:
+        return bool(self._inline_refs)
+
+    def inline_image_widgets(self) -> list[QWidget]:
+        return [widget for widget in self._image_widgets if _alive(widget)]
+
+    def set_animate_images(self, animate: bool) -> None:
+        """只让最新一条回复起播 GIF；切换会重建贴纸（旧 QMovie 立即释放）。"""
+        animate = bool(animate)
+        if animate == self._animate_images:
+            return
+        self._animate_images = animate
+        if self._inline_refs:
+            self._render_body()
+
+    def _rebuild_images(self, refs: list[InlineImage]) -> None:
+        clear_stickers(self.image_layout)
+        self._image_widgets = []
+        for ref in list(refs)[:MAX_INLINE_IMAGES]:
+            widget = create_sticker(
+                ref,
+                self.image_host,
+                INLINE_IMAGE_MAX_SIDE,
+                animate=self._animate_images,
+            )
+            if widget is None:
+                continue
+            self.image_layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignLeft)
+            self._image_widgets.append(widget)
+        self.image_host.setVisible(bool(self._image_widgets))
 
     # ---- 思考 / 联网过程 ----
     @property
@@ -506,10 +572,16 @@ class MessageBubble(QFrame):
     def set_state(self, state: str) -> None:
         # 流式每一拍都会调本方法：状态未变时全部视觉副作用都是冗余
         # （unpolish/polish 是重活），直接短路。
-        if state == self.state:
+        previous = self.state
+        if state == previous:
             return
         self.state = state
-        if self._render_timer.isActive():  # 离开流式状态：立刻渲染最终内容，不等节流
+        if (
+            self._render_timer.isActive()
+            or previous == self.STATE_STREAMING
+        ):
+            # 离开流式状态必须重渲染一次：`finish_stream` 先 set_content 再
+            # set_state，图片抽取只在非流式态做，漏这一步 GIF/贴纸会不出现。
             self._render_body()
         self.setProperty("state", state)
         self.surface.setProperty("state", state)

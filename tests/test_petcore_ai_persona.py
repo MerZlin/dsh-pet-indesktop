@@ -42,6 +42,50 @@ def test_persona_preset_files_are_complete() -> None:
     assert {"whale_maid", "gentle", "tsundere", "genki", "calm", "cat"} <= ids
 
 
+#: 后加的「现代角色」人格卡：统一带角色扮演约定与 6–8 句回复口径。
+MODERN_PERSONA_IDS = frozenset(
+    {
+        "chizuru",
+        "elysia",
+        "emilia",
+        "lin_pianpian",
+        "mom",
+        "rem",
+        "zhuang_fangyi",
+        "bobo",
+        "anon",
+        "soyo",
+        "tomori",
+        "taki",
+        "rana",
+        "sakiko",
+        "sakiko_cs",
+    }
+)
+
+
+def test_modern_persona_cards_are_role_play_ready() -> None:
+    """后加的人格卡必须是「能直接开演」的角色扮演卡，而不是桌宠陪聊稿。"""
+    folder = ai_mod.MOD_DIR / "persona_presets"
+    docs = {
+        path.stem: json.loads(path.read_text(encoding="utf-8"))
+        for path in folder.glob("*.json")
+    }
+    assert not MODERN_PERSONA_IDS - set(docs)
+
+    for persona_id in sorted(MODERN_PERSONA_IDS):
+        doc = docs[persona_id]
+        prompt = str(doc.get("prompt") or "")
+        assert len(str(doc.get("description") or "")) <= 160, persona_id
+        assert prompt.count("{") == 1 and prompt.count("}") == 1, persona_id
+        assert "{name}" in prompt, persona_id
+        assert "角色扮演约定" in prompt, persona_id
+        assert "六到八句" in prompt, persona_id
+        assert len(prompt) >= 3500, (persona_id, len(prompt))
+        assert "角色扮演约定" in prompt.split("九、示例对白")[0], persona_id
+        prompt.format(name="桌宠")  # 唯一的 {name} 必须能被 format 吃掉
+
+
 def test_runtime_default_persona_uses_the_preset(tmp_path: Path) -> None:
     runtime, _context = _runtime(tmp_path)
     prompt = runtime._prompt()
@@ -56,7 +100,9 @@ def test_runtime_resolves_preset_custom_and_unknown(tmp_path: Path) -> None:
 
     context.host.config.set("ai_persona", "custom")
     context.host.config.set("ai_system_prompt", "你是{name}的测试人格。")
-    assert runtime._prompt() == "你是鲸鱼娘的测试人格。"
+    prompt = runtime._prompt()
+    assert prompt.startswith("你是鲸鱼娘的测试人格。")
+    assert "没有工具" in prompt
 
     context.host.config.set("ai_persona", "missing-preset")
     assert "鲸鱼娘" in runtime._prompt()
@@ -296,3 +342,23 @@ def test_settings_search_reaches_memory_and_chat_font_rows(qt_app, tmp_path: Pat
         assert reveal_text(page, "对话窗字体") is True
     finally:
         page.close()
+
+
+def test_ai_system_prompt_uses_the_shared_cap(tmp_path: Path, caplog) -> None:
+    from petcore.config import MAX_AI_SYSTEM_PROMPT
+
+    config = Config(tmp_path)
+    config.set("ai_system_prompt", "字" * (MAX_AI_SYSTEM_PROMPT + 500))
+
+    assert len(config.get("ai_system_prompt")) == MAX_AI_SYSTEM_PROMPT
+    assert any("truncated" in record.message for record in caplog.records)
+
+
+def test_persona_cap_matches_the_core_cap(tmp_path: Path) -> None:
+    import sys
+
+    from petcore.config import MAX_AI_SYSTEM_PROMPT
+
+    ai_mod._create_host(ai_mod._context(tmp_path))
+    personas = sys.modules["petcore_feature_ai_chat.persona_presets"]
+    assert personas.MAX_PROMPT == MAX_AI_SYSTEM_PROMPT

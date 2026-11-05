@@ -97,8 +97,13 @@ def parse_pointer(payload: object, *, base_dir: Path) -> Pointer:
     if not isinstance(payload, dict):
         raise RootsError("指针文件不是 JSON 对象")
     schema = payload.get("schema")
-    if schema is not None and int(schema) != LOCATION_SCHEMA:
-        raise RootsError(f"指针版本不支持：{schema!r}")
+    if schema is not None:
+        try:
+            version = int(schema)
+        except (TypeError, ValueError):
+            raise RootsError(f"指针版本不是数字：{schema!r}") from None
+        if version != LOCATION_SCHEMA:
+            raise RootsError(f"指针版本不支持：{schema!r}")
     data_root = _absolute(payload.get("data_root"), base_dir=base_dir)
     cache_root = _absolute(payload.get("cache_root"), base_dir=base_dir)
     for label, path in (("data_root", data_root), ("cache_root", cache_root)):
@@ -426,6 +431,12 @@ def cleanup_moved_source(root: Path) -> bool:
         clear_journal(root)
         return False
     old_root = Path(raw_old)
+    # journal 是磁盘上的外部输入：相对路径会按进程工作目录解析，盘符根只有一段。
+    # 这两种都不可能是搬迁写出的旧根，绝不能交给下面的 rmtree。
+    if not old_root.is_absolute() or len(old_root.parts) < 2:
+        logger.warning("忽略不可信的旧根记录：%r", raw_old)
+        clear_journal(root)
+        return False
     pointer = Path(str(journal.get("pointer") or "").strip())
     try:
         if old_root.resolve() == root.resolve():

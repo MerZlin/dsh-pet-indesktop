@@ -182,6 +182,16 @@ IMAGE_NAME_FILTER = "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tif *
 
 AUDIO_NAME_FILTER = "音频文件 (*.wav *.mp3 *.ogg *.flac *.m4a)"
 
+#: 内置点击音效包：id 必须与 ``pet/config.py::_CLICK_SOUND_BUILTINS`` 一致
+#: （``default`` = ``assets/sounds/click.wav``，其余 id 即 ``assets/sounds/<id>``）。
+BUILTIN_CLICK_PACKS = (
+    ("default", "默认包"),
+    ("duck", "小黄鸭包"),
+    ("Deep!Seek!", "Deep!Seek!"),
+    ("to鲸wu", "to鲸wu"),
+)
+
+
 class ClickSoundPackPicker(QWidget):
     """点击音效包选择器（内置默认/小黄鸭/自定义单文件/自定义文件夹）。"""
 
@@ -190,8 +200,8 @@ class ClickSoundPackPicker(QWidget):
     def __init__(self, pack: dict | None = None, parent=None):
         super().__init__(parent)
         self.mode_select = ModernSelect(self, width=170)
-        self.mode_select.addItem("默认包", "builtin:default")
-        self.mode_select.addItem("小黄鸭包", "builtin:duck")
+        for pack_id, label in BUILTIN_CLICK_PACKS:
+            self.mode_select.addItem(label, "builtin:" + pack_id)
         self.mode_select.addItem("自定义单文件", "file")
         self.mode_select.addItem("自定义文件夹（随机）", "folder")
 
@@ -247,10 +257,10 @@ class ClickSoundPackPicker(QWidget):
         path = str(pack.get("path") or "")
 
         if kind == "builtin":
-            if pack_id == "duck":
-                self.mode_select.setCurrentData("builtin:duck")
-            else:
-                self.mode_select.setCurrentData("builtin:default")
+            key = "builtin:" + pack_id
+            if self.mode_select.findData(key) < 0:
+                key = "builtin:default"
+            self.mode_select.setCurrentData(key)
             self.stack.setCurrentIndex(0)
             self.stack.hide()
         elif kind == "file":

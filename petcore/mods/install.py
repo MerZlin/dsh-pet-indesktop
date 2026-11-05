@@ -7,6 +7,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import time
 import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -249,6 +250,26 @@ def _trash_path(mods_root: Path, mod_id: str) -> Path:
         index += 1
 
 
+def _replace_with_retry(
+    source: Path, target: Path, *, attempts: int = 5, delay: float = 0.05
+) -> None:
+    """替换并对 Windows 上的短暂占用退避（杀软/索引/资源管理器预览句柄）。
+
+    ``os.replace`` 在 POSIX 上首次即成功；Windows 上目标被占用时抛
+    ``PermissionError``（WinError 5/32），通常几十毫秒到一两秒就释放。
+    """
+    last: OSError | None = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError as exc:
+            last = exc
+            if attempt + 1 < attempts:
+                time.sleep(delay * (attempt + 1))
+    raise last if last is not None else OSError(f"replace failed: {target}")
+
+
 def _install_json(manifest_id: str, version: str, files: dict[str, str]) -> str:
     payload = {
         "schema": INSTALL_SCHEMA,
@@ -318,11 +339,11 @@ def install(
                     staging = None
                     return False, f"already installed: {target} (use --force to replace)"
                 trash = _trash_path(mods_root, manifest.id)
-                os.replace(target, trash)
+                _replace_with_retry(target, trash)
                 try:
-                    os.replace(staging, target)
+                    _replace_with_retry(staging, target)
                 except OSError:
-                    os.replace(trash, target)
+                    _replace_with_retry(trash, target)
                     raise
                 staging = None
                 try:
@@ -332,7 +353,7 @@ def install(
                     # name the residual backup rather than invite a failed retry.
                     cleanup_note = f"; cleanup failed for {trash}: {exc}"
             else:
-                os.replace(staging, target)
+                _replace_with_retry(staging, target)
                 staging = None
 
             suffix = f" ({len(problems)} warning(s))" if problems else ""

@@ -33,7 +33,7 @@
 | 直播捕获 | `stream_capture_mode` 切普通顶层 Window（含气泡），OBS/直播姬可枚举 | `platform/win.py`、`test_petcore_stream_mode.py` |
 | 字号与气泡缩放 | 界面字号 10–18、气泡字号 50–300%、自语配图概率/大小可调 | `config.py`、`bubble.py`、`test_petcore_self_talk.py` |
 | 彩蛋 | 菜单首行头像 + 标题 + 「请点击」、气泡内显示图片、独立窗口模式、目录/标题/开关可配 | `ui/easter_egg_entry.py`、`test_petcore_easter_egg.py` |
-| 音效 | 点击音效包（默认/小黄鸭/自定义文件/文件夹），碰撞/碰边复用 | `media/click_sound.py` |
+| 音效 | 点击音效包（默认/小黄鸭/Deep!Seek!/to鲸wu/自定义文件/文件夹），碰撞/碰边复用 | `media/click_sound.py` |
 | 扩展体系 | mod manifest/授信 `.trusted`/安装卸载/CLI、设置页聚合、加载诊断 | `mods/`、`test_petcore_loader.py` |
 | 安装与自启 | 单实例锁、开机自启、托盘、多实例数据根、安装向导选装扩展 | `platform/`、`packaging/petcore.iss` |
 | 角色资源 | WebM/GIF/帧序列、`body_box`/`head_box`、`move_strides`/`move_curves`、`pack-character` CLI | `content/`、`tests/test_petcore_character_pack.py` |

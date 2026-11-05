@@ -286,6 +286,12 @@ def test_keyring_credentials_without_module_use_memory(monkeypatch) -> None:
     credentials.set("core.api", "svc", "sk-3")
     assert credentials.get("core.api", "svc") == "sk-3"
     assert credentials.persisted("core.api", "svc") is False
+    assert credentials.backend_name() == ""
+
+
+def test_keyring_credentials_reports_the_backend_name() -> None:
+    credentials = KeyringCredentials(backend=_FakeBackend())
+    assert credentials.backend_name().endswith("_FakeBackend")
 
 
 # ------------------------------------------------------------------- probe

@@ -47,11 +47,22 @@ def _tasks_of(line: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def _is_existing_only_refresh(line: str) -> bool:
+    """已装扩展的升级同步行：DirExists + 未勾选 Task，只在既有目录上刷新。"""
+    return (
+        "Check:" in line
+        and "DirExists(ExpandConstant('{app}\\mods\\" in line
+        and "not IsTaskSelected('mod_" in line
+    )
+
+
 def test_every_bundled_mod_needs_an_explicit_task() -> None:
     mod_sources = [line for line in _source_lines() if r"{app}\mods" in line]
     assert mod_sources, "安装包应当还带着随附扩展（勾选才装）"
 
     for line in mod_sources:
+        if _is_existing_only_refresh(line):
+            continue
         tasks = _tasks_of(line)
         assert tasks.startswith("mod_"), f"这条扩展没绑 Task，会绕过勾选：{line}"
 

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QColor, QGuiApplication, QPalette
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -21,10 +21,40 @@ from PySide6.QtWidgets import (
 )
 
 from .icons import tool_icon
+from .inline_images import (
+    MAX_INLINE_IMAGES,
+    QUICK_IMAGE_MAX_SIDE,
+    InlineImage,
+    clear_stickers,
+    create_sticker,
+    extract_inline_images,
+)
 from .markdown_view import markdown_to_html
 
 FOLLOW_COALESCE_MS = 40
 _MARGIN = 8
+
+
+def quick_chat_palette() -> QPalette:
+    """快速对话自己的浅色调色板。
+
+    外观在 QSS 里是写死的浅色，但 QScrollArea 的 viewport 与普通 QWidget 子控件
+    会用系统 ``QPalette`` 涂底：Windows 深色模式下 ``Base/Window`` 变成近黑色，
+    而正文颜色写死 ``#1f2328`` → 黑底黑字（用户截图里的黑框）。这里显式给整套
+    角色上浅色值，子控件继承，系统主题不再透进来。
+    """
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor("#fcfcfe"))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor("#1d2129"))
+    palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#f5f6f8"))
+    palette.setColor(QPalette.ColorRole.Text, QColor("#1f2328"))
+    palette.setColor(QPalette.ColorRole.Button, QColor("#eef0f3"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#1d2129"))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#8a8f99"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#1677e8"))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    return palette
 
 
 def _clamp_to_screen(rect: QRect, anchor: QRect) -> QRect:
@@ -65,6 +95,9 @@ class QuickChatBubble(QWidget):
         self._follow_timer.timeout.connect(self.position_near_pet)
         self._streaming = False
         self._text = ""
+        self._inline_refs: list[InlineImage] = []
+        self._image_widgets: list[QWidget] = []
+        self.setPalette(quick_chat_palette())
         self._build()
 
     # ---------------------------------------------------------------- 构建
@@ -102,6 +135,22 @@ class QuickChatBubble(QWidget):
             | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
         self.output.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.output_host = QWidget(self.surface)
+        self.output_host.setObjectName("quick-chat-output-host")
+        self.output_host.setAutoFillBackground(False)
+        output_layout = QVBoxLayout(self.output_host)
+        output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.setSpacing(4)
+        output_layout.addWidget(self.output)
+        self.image_host = QWidget(self.output_host)
+        self.image_host.setObjectName("quick-chat-image-host")
+        self.image_host.setAutoFillBackground(False)
+        self.image_layout = QVBoxLayout(self.image_host)
+        self.image_layout.setContentsMargins(0, 2, 0, 0)
+        self.image_layout.setSpacing(4)
+        self.image_host.hide()
+        output_layout.addWidget(self.image_host)
+        output_layout.addStretch(1)
         self.scroll = QScrollArea(self.surface)
         self.scroll.setObjectName("quick-chat-scroll")
         self.scroll.setWidgetResizable(True)
@@ -109,7 +158,10 @@ class QuickChatBubble(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setMinimumHeight(70)
         self.scroll.setMaximumHeight(200)
-        self.scroll.setWidget(self.output)
+        self.scroll.setWidget(self.output_host)
+        # viewport 默认按调色板 Base 铺底：深色系统下就是那块黑底。
+        self.scroll.viewport().setAutoFillBackground(False)
+        self.scroll.viewport().setStyleSheet("background: transparent;")
         layout.addWidget(self.scroll)
 
         footer = QHBoxLayout()
@@ -147,6 +199,7 @@ class QuickChatBubble(QWidget):
             "QLabel#quick-chat-title { font-size: 13px; font-weight: 600; color: #1d2129; }"
             "QLabel#quick-chat-hint { font-size: 11px; color: #8a8f99; }"
             "QLabel#quick-chat-output { font-size: 13px; color: #1f2328; background: transparent; }"
+            "QWidget#quick-chat-output-host, QWidget#quick-chat-image-host { background: transparent; }"
             "QScrollArea#quick-chat-scroll { background: transparent; border: none; }"
             "QPushButton {"
             "  border: none; border-radius: 6px; padding: 4px 10px;"
@@ -178,6 +231,10 @@ class QuickChatBubble(QWidget):
         self._streaming = True
         self._text = ""
         self.output.clear()
+        clear_stickers(self.image_layout)
+        self._image_widgets = []
+        self._inline_refs = []
+        self.image_host.hide()
         self.send_button.setEnabled(False)
         self.input.setEnabled(False)
         self.set_hint("正在想…")
@@ -212,11 +269,47 @@ class QuickChatBubble(QWidget):
         self.set_hint("")
         self.send_button.setEnabled(True)
         self.input.setEnabled(True)
+        clear_stickers(self.image_layout)
+        self._image_widgets = []
+        self._inline_refs = []
+        self.image_host.hide()
         self.output.setText(f"<span style='color:#c0392b'>{self._escape(self._text)}</span>")
 
+    def inline_image_widgets(self) -> list[QWidget]:
+        alive: list[QWidget] = []
+        for widget in self._image_widgets:
+            try:
+                widget.objectName()
+            except RuntimeError:
+                continue
+            alive.append(widget)
+        return alive
+
     def _render(self) -> None:
-        self.output.setText(markdown_to_html(self._text) if self._text else "")
+        text = self._text
+        refs: list[InlineImage] = []
+        if text:
+            text, refs = extract_inline_images(text)
+        self.output.setText(markdown_to_html(text) if text else "")
+        self._inline_refs = refs
+        self._rebuild_images(refs)
         self.output.adjustSize()
+
+    def _rebuild_images(self, refs: list[InlineImage]) -> None:
+        clear_stickers(self.image_layout)
+        self._image_widgets = []
+        for ref in list(refs)[:MAX_INLINE_IMAGES]:
+            widget = create_sticker(
+                ref,
+                self.image_host,
+                QUICK_IMAGE_MAX_SIDE,
+                animate=True,
+            )
+            if widget is None:
+                continue
+            self.image_layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignLeft)
+            self._image_widgets.append(widget)
+        self.image_host.setVisible(bool(self._image_widgets))
 
     @staticmethod
     def _escape(text: str) -> str:

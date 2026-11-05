@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QRegularExpression, QTimer, QUrl
+from PySide6.QtCore import QRegularExpression, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -35,6 +35,7 @@ from .constants import OWNER
 from .persona_presets import (
     CUSTOM_PERSONA,
     DEFAULT_PERSONA,
+    MAX_PROMPT,
     PersonaPreset,
     PersonaStore,
     new_user_id,
@@ -62,6 +63,7 @@ class AiChatPage(SettingsPage):
         "ai_animation_thinking",
         "ai_animation_min_seconds",
         "ai_voice_reply",
+        "ai_meme_reply_enabled",
         "ai_memory_enabled",
         "ai_memory_inject",
         "ai_memory_max_entries",
@@ -191,15 +193,26 @@ class AiChatPage(SettingsPage):
             expand=True,
         )
 
-        self.prompt_edit = QPlainTextEdit(self)
+        self.prompt_box = QWidget(self)
+        prompt_layout = QVBoxLayout(self.prompt_box)
+        prompt_layout.setContentsMargins(0, 0, 0, 0)
+        prompt_layout.setSpacing(4)
+        self.prompt_count = QLabel("", self.prompt_box)
+        self.prompt_count.setObjectName("settingHint")
+        self.prompt_count.setAlignment(Qt.AlignmentFlag.AlignRight)
+        prompt_layout.addWidget(self.prompt_count)
+        self.prompt_edit = QPlainTextEdit(self.prompt_box)
         self.prompt_edit.setPlaceholderText("留空使用默认人格")
+        self.prompt_edit.textChanged.connect(self._limit_prompt)
         self.prompt_edit.textChanged.connect(self._on_changed)
+        prompt_layout.addWidget(self.prompt_edit)
         card2.add_row(
             "系统提示词",
-            self.prompt_edit,
-            "每次对话开头发给模型；支持 {name} 占位。编辑后点「保存人格卡」才写入用户卡。",
+            self.prompt_box,
+            "每次对话开头发给模型；支持 {name} 占位。上限 20000 字，超出会当场截断并提示。",
             expand=True,
         )
+        self._limit_prompt()
         persona = str(self._initial.get("ai_persona") or "").strip()
         if not persona:
             persona = (
@@ -280,6 +293,25 @@ class AiChatPage(SettingsPage):
             "朗读回复",
             self.voice_reply_check,
             "回复完成后按句朗读（去 Markdown；单句超长会拆，整条最多 4000 字/40 句）。",
+        )
+
+        self.meme_check = make_checkbox(self)
+        self.meme_check.setChecked(
+            bool(self._initial.get("ai_meme_reply_enabled", False))
+        )
+        self.meme_check.toggled.connect(self._on_changed)
+        meme_row = card_anim.add_row(
+            "回复时附带表情包",
+            self.meme_check,
+            self._meme_hint_text(),
+        )
+        meme_hints = [
+            label
+            for label in meme_row.findChildren(QLabel)
+            if label.objectName() == "settingHint"
+        ]
+        self.meme_hint = (
+            meme_hints[0] if meme_hints else QLabel(self._meme_hint_text(), self)
         )
 
         card_mem = self.section("长期记忆", level=3)
@@ -1000,6 +1032,54 @@ class AiChatPage(SettingsPage):
             dark=bool(self.dark_check.isChecked()),
         )
 
+    def _meme_hint_text(self) -> str:
+        try:
+            from petcore.mods import meme_images
+
+            folder = meme_images.directory(
+                self.config().get("easter_egg_image_dir") or ""
+            )
+            count = meme_images.catalog(folder).total
+        except Exception:  # noqa: BLE001 - 设置页不能因为扫目录失败打不开
+            folder, count = "", 0
+        return (
+            f"图片目录跟随「互动与物理 → 彩蛋与配图」的彩蛋目录：{folder}"
+            f"（{count} 张）。开启后每条回复会挑一张最合适的表情包附在末尾，"
+            "GIF 会动；文件名/说明会发给模型挑选。"
+        )
+
+    def _limit_prompt(self) -> None:
+        """把编辑框卡在共享上限内，并把计数/截断状态显式写给用户。
+
+        `Config._normalize` 自己也会截断，但那是静默的；设置页必须先截断并
+        说明，避免用户以为全文已经保存。
+        """
+        text = self.prompt_edit.toPlainText()
+        limit = int(MAX_PROMPT)
+        if len(text) > limit:
+            cursor = self.prompt_edit.textCursor()
+            position = min(cursor.position(), limit)
+            self.prompt_edit.blockSignals(True)
+            self.prompt_edit.setPlainText(text[:limit])
+            cursor = self.prompt_edit.textCursor()
+            cursor.setPosition(position)
+            self.prompt_edit.setTextCursor(cursor)
+            self.prompt_edit.blockSignals(False)
+            text = self.prompt_edit.toPlainText()
+            self.prompt_count.setProperty("state", "error")
+            self.prompt_count.setStyleSheet("color:#c0392b;")
+            self.prompt_count.setToolTip(
+                f"系统提示词上限 {limit} 字，超出部分已截断。"
+            )
+            self.prompt_count.setText(f"{len(text)} / {limit}（已截断）")
+        else:
+            self.prompt_count.setProperty("state", "")
+            self.prompt_count.setStyleSheet("")
+            self.prompt_count.setToolTip("")
+            self.prompt_count.setText(f"{len(text)} / {limit}")
+        self.prompt_count.style().unpolish(self.prompt_count)
+        self.prompt_count.style().polish(self.prompt_count)
+
     def _on_changed(self, *_args) -> None:
         config = self.config()
         config.set("ai_service", str(self.service_combo.currentData() or ""))
@@ -1021,6 +1101,9 @@ class AiChatPage(SettingsPage):
         )
         config.set("ai_animation_min_seconds", float(self.anim_min_spin.value()))
         config.set("ai_voice_reply", bool(self.voice_reply_check.isChecked()))
+        config.set(
+            "ai_meme_reply_enabled", bool(self.meme_check.isChecked())
+        )
         config.set("ai_memory_enabled", bool(self.memory_check.isChecked()))
         config.set(
             "ai_memory_share_channels", bool(self.memory_share_check.isChecked())
@@ -1158,6 +1241,9 @@ class AiChatPage(SettingsPage):
         self.voice_reply_check.blockSignals(True)
         self.voice_reply_check.setChecked(bool(config.get("ai_voice_reply", False)))
         self.voice_reply_check.blockSignals(False)
+        self.meme_check.blockSignals(True)
+        self.meme_check.setChecked(bool(config.get("ai_meme_reply_enabled", False)))
+        self.meme_check.blockSignals(False)
 
     def _persona(self, persona_id: str | None = None) -> PersonaPreset | None:
         key = str(persona_id or self.persona_combo.currentData() or "")
@@ -1589,6 +1675,10 @@ class AiChatPage(SettingsPage):
             "人格",
             "人格卡",
             "自定义人设",
+            "表情包",
+            "斗图",
+            "梗图",
+            "GIF",
             "字体",
             "字号",
             "对话窗字体",

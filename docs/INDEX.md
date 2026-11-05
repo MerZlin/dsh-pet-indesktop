@@ -144,6 +144,14 @@
 
 ## PR 报告存档
 
+- [QQ 桥接修复 + 两份外部产物审查（2026-11-05）](PR-REPORT-QQ-BRIDGE-AND-UPSTREAM-AUDIT-2026-11-05.md)：QQ 设置页真正的 token 断点是读 `host.credentials` 而非 `api_credentials`（运行时能生成、设置页看不见），改为 `api_credentials` + `persisted()` 回读；webhook 接受裸 `Authorization`/`?access_token=`/尾斜杠，`?token=` 的「query 算进路径」说法被真实 loopback 回归否定；采纳补丁包 4 个缺陷修复，拒绝其护栏、明文 `secret_store.py`、8792 代理与加固版整体重构。**改 QQ 互通、webhook 鉴权、钥匙串凭据或搬迁旧根前必读**。
+
+- [快速对话深色模式黑底 + 人设卡角色扮演化与 MyGO/祥子扩卡（2026-11-04）](PR-REPORT-QUICKCHAT-PERSONAS-2026-11-04.md)：`QuickChatBubble` 自带浅色调色板并让scroll viewport / output_host / image_host 透明，修 Windows 深色模式下「黑底黑字」（像素级回归测试）；15 张现代人格卡统一 11 节骨架、新增「角色扮演约定」与默认六到八句话，升级 8 张并新增 MyGO 5 张与 `sakiko` / `sakiko_cs`；ai.chat 已安装时安装器同步刷新包内文件。**改快速对话样式或人格卡骨架前必读**。
+
+- [内置点击音效包 / 自启首帧后装扩展 / 点击反馈抗阻塞（2026-11-03）](PR-REPORT-CLICK-PACKS-STARTUP-2026-11-03.md)：新增 `Deep!Seek!` / `to鲸wu` 两个内置点击音效包（目录名即包名、mp3+转码 wav、解析器去 duck 硬编码）；`attach` 段拆成 shell + 三拍`feature_load_steps`，首帧后 120ms 起加载并补 `bootstrap/config/features` 分段日志；松手不再内联播音效、素材失败仍 Q 弹、Q 弹起点改为首帧绘制时锚定；修 `is_transparent_at` 镜像命中（朝右有一片点不到）与拖拽阈值跟系统走；内置/folder 候选缓存 + folder OSError 兜底。**改点击音效包/启动接线/点击反馈路径前必读**。
+
+- [4.4.0 反馈三项修复 + AI 表情包回复（2026-11-03）](PR-REPORT-AI-TOOLS-PROMPT-MEME-2026-11-03.md)：core 流式层剥离工具调用文本并把 `finish_reason="tool_calls"` 标成非完整回答（`ai.chat` 显示能力说明，不留空气泡）；`MAX_AI_SYSTEM_PROMPT=20000` 单一常量 + 设置页计数器/硬截断；聊天窗把本地/data 图片渲染成内联贴纸（GIF 只有最新一条起播、历史首帧、远程占位、图片-only 围栏解包）；新增全局 `ai_meme_reply_enabled` + 彩蛋目录/可选 `meme-manifest.json` 白名单取图（`[表情:]` 标记，绝不当路径）+ 24 张默认清单。**改 `petcore/api/chat.py` 的结束语义、聊天图片渲染、AI 提示词上限或表情包取图前必读**。
+
 - [每日播放池循环 / 点击台词初始句 / 人设卡扩容与重写（2026-11-03）](PR-REPORT-PERSONA-PLAYBACK-2026-11-03.md)：每日 12 句说完后与候选台词合并成播放池、按 `(day, slot, cycle)` 逐轮重洗（champion 不推进游标、配图 caption 按说过推进）；自言自语/点击台词编辑框补进内置初始句（保留用户内容，保存才写入），点击台词初始句扩到 12 条并加「恢复内置」；人设卡提示词上限 8000→20000、`ai_system_prompt` 4000→20000；爱莉希雅按两张参考卡重写（去 QQ bot 化）、新增鲸鱼厨娘波波、其余 6 张角色卡扩到 3k 字级。**改每日句/自语播放池、点击台词编辑框或人设卡上限/内容前必读**。
 
 - [AI 对话：联网失败纯 API 兜底 / 记忆页下拉配色 / 7 张角色人设卡（2026-11-02）](PR-REPORT-AI-CHAT-FALLBACK-PERSONAS-2026-11-02.md)：`QComboBox` 弹出列表是独立 `QAbstractItemView`，补 `QComboBox QAbstractItemView` 浅/深色规则（白字白底根因）；planner `_post_json` 改 `pollute=False`，不再污染进程级固定直连；正式回答传输层 `network` 且未吐字时用检索前原始消息 + 网络说明重发纯 API，并让模型说明「网络不可达、未联网核实」；新增妈妈/爱莉希雅/艾米莉亚/蕾姆/水原千鹤/林翩翩/庄方宜 7 张人设卡（默认 6–10 句）。**改对话窗下拉样式、`api/chat.py` 的重试/兜底、或角色人设卡前必读**。

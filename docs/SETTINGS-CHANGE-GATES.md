@@ -83,6 +83,23 @@ recovery
 
 ## 变更记录
 
+### 2026-11-03 — AI 表情包回复（`ai_meme_reply_enabled`）+ 提示词上限可见
+
+| 项 | 本刀口径 |
+|---|---|
+| setting_id / 键 | `ai_meme_reply_enabled`（bool，默认 False）；`MAX_AI_SYSTEM_PROMPT=20000` 是代码常量（不是键） |
+| 归属 | 扩展管理 → AI 对话 →「对话动作」卡，「朗读回复」之后 |
+| 为什么准入 | 是否让桌宠用表情包接梗只有用户知道；默认关 = 不改变存量行为；提示词上限是既有 20000 契约的可见化，不新增键 |
+| 明确不加键 | 目录、清单上限（60）、贴纸边长（240/160）、GIF 起播策略都是实现参数，不暴露 |
+| 作用域 | `ai_meme_reply_enabled` 是全局键（与既有 `ai_*` 一致），所有宠共用同一份设置与彩蛋目录 |
+| migration / recovery | 新键：旧配置无它 → `_normalize` 补 False；无迁移、无删除路径；提示词超限由设置页当场截断，`Config` 仍兜底截断并 warning |
+| 语义 | 开启后主对话/快速对话追加清单，模型写 `[表情: …]`；runtime 只在清单内匹配并改成 Markdown 图片；历史消息剥掉图片语法；OCR/翻译/截图问答不受影响 |
+| 版式与可达性 | 新增 1 行勾选 + 说明（含当前目录与张数）；沿用 `make_checkbox`/`add_row`，窄窗可换行；提示词编辑框上方计数器不新增行 |
+| 搜索 | 行文案自动进索引；`keywords()` 补「表情包/斗图/梗图/GIF」 |
+| 测试 | `tests/test_petcore_meme_images.py`（目录/清单/白名单/路径穿越）、`test_petcore_ai_mod.py`（prompt/收尾/历史/设置行）、`test_petcore_chat_ui.py`（本地图/GIF/围栏/远程）、`test_petcore_quick_chat.py`、`test_petcore_api_chat_stream.py`（工具调用）、`test_petcore_ai_persona.py`（上限常量/计数） |
+| 未验证 | 真机 150%/200% DPI 下的 GIF 观感与多屏；大目录（>1000 张）清单扫描耗时只做本地探针，未在低配机实测 |
+
+
 ### 2026-11-01 — 数据目录 / 缓存目录可配置 + 素材包应用内下载
 
 用户需求原文：「所有缓存、存放信息的路径要求可以可选存放位置，调整后自动将对应缓存移动到

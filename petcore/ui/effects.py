@@ -34,7 +34,8 @@ class EffectController(QObject):
         self._timer.timeout.connect(self._tick)
 
         self._squash_active = False
-        self._squash_started = 0.0
+        self._squash_started: float | None = None
+        self._squash_requested = 0.0
         self._squash_duration_ms = 220.0
         self._squash_strength = 1.0
         self._squash_bounces = 1
@@ -60,6 +61,10 @@ class EffectController(QObject):
     def squash_progress(self) -> float:
         if not self._squash_active:
             return 1.0
+        if self._squash_started is None:
+            # 起点在第一次绘制（``squash_rect``）时才锚定：点击处理里排在后面的
+            # 台词/气泡再慢，也不会让脉冲按墙钟先走完、首帧直接变成原尺寸。
+            return 0.0
         elapsed_ms = max(0.0, self._clock() - self._squash_started) * 1000.0
         return min(1.0, elapsed_ms / max(1.0, self._squash_duration_ms))
 
@@ -82,6 +87,10 @@ class EffectController(QObject):
         return self.spin_angle() + (self._throw_egg_angle if self._throw_egg_active else 0.0)
 
     def squash_rect(self) -> tuple[int, int, int, int]:
+        if self._squash_active and self._squash_started is None:
+            # 第一次真正绘制（paintEvent 走这里）才起表：点击处理里的后续工作
+            # 再久，Q 弹也不会被跳过。
+            self._squash_started = self._clock()
         return squash_geometry(
             self.window.width(),
             self.window.height(),
@@ -101,7 +110,8 @@ class EffectController(QObject):
             return
         config = self.window.config
         self._squash_active = True
-        self._squash_started = self._clock()
+        self._squash_started = None
+        self._squash_requested = self._clock()
         self._squash_duration_ms = float(
             duration_ms or config.get("click_squash_ms", 220) or 220
         )
@@ -225,7 +235,11 @@ class EffectController(QObject):
     def _tick(self) -> None:
         now = self._clock()
         if self._squash_active:
-            if self.squash_progress() >= 1.0:
+            if self._squash_started is None:
+                # 隐藏/最小化时不会绘制；给上限，别让 16ms 表为一次没画出来的脉冲空转。
+                if now - self._squash_requested > 1.0:
+                    self._squash_active = False
+            elif self.squash_progress() >= 1.0:
                 self._squash_active = False
         self._update_spin(now)
         if not self.any_active():

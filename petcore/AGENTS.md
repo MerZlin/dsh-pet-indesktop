@@ -442,6 +442,16 @@
   原生子窗口（WebView）不吃圆角裁剪，靠 `CHAT_VIEW_INSET=12` 让位。
 - **流式传输只在 core**：SSE/代理兜底/取消/错误分类都在 `petcore/api/chat.py`；
   扩展与 `petcore/chat/` 不得 import `petcore.net`/`petcore.api`（架构守卫）。
+- **工具调用兜底**：core 不声明 tools；`api/chat.py` 的 `strip_tool_call_text` 剥离
+  正文里的 `<tool_call>`/函数调用 JSON，原生 `tool_calls` 或清理后无正文返回
+  `end_reason="tool_calls"` + `incomplete`；调用方必须显示可见说明，不能留空气泡。
+- **系统提示词上限**：`config.MAX_AI_SYSTEM_PROMPT` 是唯一上限（20000）；设置页必须
+  显式计数与硬截断，不许让 `Config.set` 静默砍尾（截断只记长度 warning）。
+- **聊天图片/表情包**：本地文件与 `data:` 图片走 `ui/chat/inline_images.py` 的内联贴纸
+  （GIF 用 `AnimatedImage`，只有最新一条助手消息起播，历史画首帧）；`http(s)` 不自动
+  下载，显示 `[图片：alt]`。表情包只在彩蛋目录清单内解析（`mods/meme_images.py`，
+  可选 `meme-manifest.json`），**模型给的标记绝不直接当路径**；OCR/翻译/截图问答
+  不追加表情包指令。
 - **截图动作条**：core 只提供框选、四动作条（提取文字/翻译/问问肥鱼/复制图像）、
   结果窗与剪贴板；OCR 引擎、翻译提示词、AI 问答全在 mod。`ScreenAskPort.on_action`
   按 `priority` 从小到大调用、空串/异常即换下一个，「本地优先、AI 兜底」由注册顺序

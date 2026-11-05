@@ -10,6 +10,7 @@ mod 通过端口注册「用户发送 / 停止」回调，窗口关闭只隐藏�
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,9 @@ from .styles import safe_accent
 from .window import ChatWindow
 
 logger = logging.getLogger("petcore.ui.chat")
+
+#: 记忆只存文字：表情包/图片的 Markdown 语法不进检索与提示词。
+_IMAGE_MARKUP = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 
 #: ASR 失败原因 → 用户能读的一行（不显示异常文本）。
 _ASR_REASON_TEXT = {
@@ -297,6 +301,9 @@ class ChatController(QObject):
     ) -> None:
         memory = getattr(self.host, "memory", None)
         if memory is None:
+            return
+        text = _IMAGE_MARKUP.sub("", str(text or "")).strip()
+        if not text:
             return
         try:
             memory.append_message(

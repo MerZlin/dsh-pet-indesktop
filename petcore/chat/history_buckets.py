@@ -39,11 +39,16 @@ class HistoryBucket:
     sessions: tuple
 
 
-def _session_day(session) -> date | None:
+def _stamp(session) -> float:
+    """排序/分区共用的时间戳兜底：坏数据按 0，任何一处都不抛。"""
     try:
-        stamp = float(getattr(session, "updated_at", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return None
+        return float(getattr(session, "updated_at", 0.0) or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+
+
+def _session_day(session) -> date | None:
+    stamp = _stamp(session)
     if stamp <= 0:
         return None
     try:
@@ -88,9 +93,6 @@ def buckets(
     for key, items in grouped.items():
         if not items:
             continue
-        items.sort(
-            key=lambda item: float(getattr(item, "updated_at", 0.0) or 0.0),
-            reverse=True,
-        )
+        items.sort(key=_stamp, reverse=True)
         result.append(HistoryBucket(key, BUCKET_LABELS[key], tuple(items)))
     return tuple(result)

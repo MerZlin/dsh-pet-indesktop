@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import zipfile
 from pathlib import Path
+
+import pytest
 
 from petcore.mods.install import install, remove, remove_at, validate
 
@@ -310,3 +313,46 @@ def test_successful_replacement_reports_old_pack_cleanup_warning(tmp_path, monke
     assert "cleanup failed" in message and "old pack still in use" in message
     assert json.loads((root / "mods/character.demo/mod.json").read_text())["version"] == "2.0.0"
     assert list((root / "mods").glob(".trash-*/old.txt"))
+
+
+def test_replace_with_retry_recovers_from_a_transient_permission_error(
+    tmp_path, monkeypatch
+) -> None:
+    import importlib
+
+    module = importlib.import_module("petcore.mods.install")
+    source = tmp_path / "a.txt"
+    target = tmp_path / "b.txt"
+    source.write_text("x", encoding="utf-8")
+    real = os.replace
+    calls: list[str] = []
+
+    def flaky(src, dst):
+        calls.append(str(dst))
+        if len(calls) < 3:
+            raise PermissionError(13, "busy", str(dst))
+        return real(src, dst)
+
+    monkeypatch.setattr(module.os, "replace", flaky)
+    module._replace_with_retry(source, target, delay=0.0)
+    assert target.read_text(encoding="utf-8") == "x"
+    assert len(calls) == 3
+
+
+def test_replace_with_retry_reraises_the_last_permission_error(tmp_path, monkeypatch) -> None:
+    import importlib
+
+    module = importlib.import_module("petcore.mods.install")
+    source = tmp_path / "a.txt"
+    target = tmp_path / "b.txt"
+    source.write_text("x", encoding="utf-8")
+    calls: list[str] = []
+
+    def deny(src, dst):
+        calls.append(str(dst))
+        raise PermissionError(13, "busy", str(dst))
+
+    monkeypatch.setattr(module.os, "replace", deny)
+    with pytest.raises(PermissionError):
+        module._replace_with_retry(source, target, attempts=2, delay=0.0)
+    assert len(calls) == 2

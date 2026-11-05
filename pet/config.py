@@ -276,6 +276,10 @@ def _default_click_sound_pack() -> dict:
     return {"kind": "builtin", "id": "default", "path": ""}
 
 
+#: 点击音效内置包 id：目录名即包名（``default`` = ``assets/sounds/click.wav``）。
+_CLICK_SOUND_BUILTINS = frozenset({"default", "duck", "Deep!Seek!", "to鲸wu"})
+
+
 def _clean_click_sound_pack(value: Any) -> dict:
     defaults = _default_click_sound_pack()
     if not isinstance(value, dict):
@@ -284,7 +288,7 @@ def _clean_click_sound_pack(value: Any) -> dict:
     if kind not in {"builtin", "file", "folder"}:
         return dict(defaults)
     pack_id = str(value.get("id") or ("default" if kind == "builtin" else "custom")).strip()
-    if kind == "builtin" and pack_id not in {"default", "duck"}:
+    if kind == "builtin" and pack_id not in _CLICK_SOUND_BUILTINS:
         pack_id = "default"
     path = str(value.get("path") or "").strip()[:500]
     return {

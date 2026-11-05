@@ -12,9 +12,15 @@
 
 from __future__ import annotations
 
+import html as html_lib
 import re
 
 from PySide6.QtGui import QTextDocument
+
+#: 内联图片的默认显示宽度（逻辑像素）；高度由 Qt 等比算。
+INLINE_IMAGE_WIDTH = 240
+_IMG_TAG = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_IMG_ATTR = re.compile(r'([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*"([^"]*)"')
 
 _FENCE = re.compile(r"^\s{0,3}(```|~~~)")
 _BODY_STYLE = re.compile(r'<body style="[^"]*">')
@@ -71,6 +77,28 @@ def preserve_line_breaks(text: str) -> str:
     return "\n".join(out)
 
 
+def _rewrite_images(html_text: str) -> str:
+    """本地/data 图注入宽度；远程图改成可读占位（UI 线程不联网）。
+
+    ``QTextDocument`` 对 ``https`` 图片不加载，QLabel 会显示一个 16×16 破图；
+    这里换成文字占位，至少让用户知道模型给了图、并把 alt/链接语义保住。
+    """
+    def _replace(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        attrs = {
+            name.lower(): value for name, value in _IMG_ATTR.findall(tag)
+        }
+        source = str(attrs.get("src") or "")
+        alt = html_lib.unescape(str(attrs.get("alt") or "")).strip() or "远程图片"
+        if source.lower().startswith(("http://", "https://")):
+            return f"[图片：{html_lib.escape(alt)}]"
+        if "width" in attrs:
+            return tag
+        return re.sub(r"\s*/?>$", f' width="{INLINE_IMAGE_WIDTH}" />', tag)
+
+    return _IMG_TAG.sub(_replace, html_text)
+
+
 def markdown_to_html(text: str, *, link_color: str = "#3994ff") -> str:
     doc = QTextDocument()
     doc.setMarkdown(preserve_line_breaks(text), _features())
@@ -82,4 +110,4 @@ def markdown_to_html(text: str, *, link_color: str = "#3994ff") -> str:
     html = head + _FONT_DECL.sub(_MONO_STYLED, body)
     html = _HEADING_SIZE.sub(lambda m: f"font-size:{_HEADING_MAP[m.group(1)]};", html)
     html = _LINK_COLOR.sub(lambda m: f'{m.group(1)}<span style=" color:{link_color};">', html)
-    return html
+    return _rewrite_images(html)

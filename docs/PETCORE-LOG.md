@@ -6378,3 +6378,363 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
 - 未实机安装（会覆盖当前安装/数据目录），未做安装向导/卸载/升级路径验收。
 - 未签名包在本机可运行（`VerifiedAndReputablePolicyState=0`）；其他机器可能弹
   SmartScreen，正式分发应换 CA 证书签名。
+
+
+## L166 — 2026-11-03 — 4.4.0 反馈三项（工具兜底/提示词上限/聊天图片）+ AI 表情包回复
+
+**背景**：4.4.0 用户反馈三条——模型以为能调工具、长提示词被截断、Markdown 图片
+语法被当代码输出。当前 petcore 的现状分别是：不声明 tools 但也不处理 `tool_calls`、
+`ai_system_prompt` 在 20000 字静默砍尾、聊天窗把本地图按原尺寸铺开/远程图破图/
+GIF 只有首帧。本轮同时新增可选「AI 表情包回复」，图片来自彩蛋目录（用户改过就用
+改后的路径），参考 dsh-meme 的 `[表情: …]` 标记 + caption/tags 清单取图。
+
+**改动**
+
+- `petcore/api/chat.py`（+118/−6）：`strip_tool_call_text()` 剥离正文
+  `<tool_call>`/函数调用形状 JSON；`_extract_tool_calls()` 读原生 `tool_calls`；
+  `finish_reason="tool_calls"` 或无正文时 `end_reason="tool_calls"` +
+  `incomplete=True`；普通 JSON 代码块不误删。
+- `petcore/config.py`（+17/−1）：`MAX_AI_SYSTEM_PROMPT=20000`；
+  `ai_system_prompt` 截断记长度 warning；新增全局 `ai_meme_reply_enabled`（默认关）。
+- `petcore/ui/chat/inline_images.py`（新建 186 行）：本地/data 图片抽取与贴纸控件，
+  GIF 走 `AnimatedImage`；围栏里只有一张本地图片时解包；远程图留给 Markdown 占位。
+- `petcore/ui/chat/markdown_view.py`（+29/−1）：远程 `<img>` 换成 `[图片：alt]`，
+  其余注入 `width="240"`。
+- `petcore/ui/chat/widgets.py`（+77/−5）：`MessageBubble` 内联贴纸、GIF 只有最新
+  一条起播；`set_state` 离开流式态强制重渲染。
+- `petcore/ui/chat/quick.py`（+64/−2）：快速对话同一套贴纸（≤160）。
+- `petcore/ui/chat/window.py`（+13）：`_animate_latest_images()`。
+- `petcore/ui/chat/controller.py`：记忆只存文字，剥掉图片 Markdown。
+- `petcore/mods/meme_images.py`（新建 237 行）：彩蛋目录解析、可选
+  `meme-manifest.json`、60 张上限、白名单解析（绝不把模型标记当路径）、标记消费。
+- `examples/petcore-mods/ai.chat/host/{runtime,prompts,persona_presets,constants,settings_page}.py`
+  （+238/−18）：能力边界、`[表情:]` 清单/收尾、历史剥图片语法、设置行与提示词计数器。
+- `examples/petcore-mods/ai.chat/mod.json`：1.5.0 → 1.6.0。
+- `assets/big_blue_fat_fish/meme-manifest.json`（新建）：24 张 caption/tags/keywords。
+- 测试：`tests/test_petcore_meme_images.py`（新建 149 行）、
+  `test_petcore_api_chat_stream.py`（+86）、`test_petcore_ai_mod.py`（+236）、
+  `test_petcore_ai_persona.py`（+23）、`test_petcore_chat_ui.py`（+78）、
+  `test_petcore_quick_chat.py`（+21）。
+
+**验证**
+
+- 聚焦：`pytest tests/test_petcore_{api_chat,api_chat_stream,ai_mod,ai_persona,meme_images,chat_ui,quick_chat,images,animated_image,settings,config_scope,architecture}.py -q`
+  → `283 passed in 53.49s`（最新一轮）。
+- `ruff check petcore/ examples/petcore-mods/ tests/` → All checks passed。
+- `python -m petcore --check --strict` → 退出 0，`strict.problems == []`，
+  `builtin_readable=24`。
+- 文档门：`tests/test_petcore_docs.py tests/test_pr_report_discipline.py` → 361 passed。
+- **全量 pytest 在本机两次被 Windows 原生异常打断**（72% 的旧 `pet/` 测试
+  `test_proactive.py`、30% 的 petcore 子集；无 summary），改动落点由上述 283 个
+  focused 覆盖；合并前应在干净环境重跑全量。
+- 真机 / 性能数字见
+  [`PR-REPORT-AI-TOOLS-PROMPT-MEME-2026-11-03.md`](PR-REPORT-AI-TOOLS-PROMPT-MEME-2026-11-03.md)。
+
+**未验证 / 风险**
+
+- 4.4.0 旧线提示词截断的原始根因未复现；本轮只保证 petcore 的 20000 上限可见且不再静默。
+- 远程 Markdown 图不自动下载（隐私/分层选择）；需要真实远程图渲染时要另开 `HttpPort` 方案。
+- GIF 在 150%/200% DPI 的观感、超大目录（>1000 张）清单扫描耗时需真机/探针确认。
+- 原生工具执行未实现；本轮只兜底「模型误输出工具调用」。
+
+## L167 — 2026-11-03 — 两个内置点击音效包 + 自启首帧后装扩展 + 点击反馈抗阻塞
+
+**背景**：用户三项反馈——(1) 把 `Deep!Seek!` / `to鲸wu` 两个音频文件夹做成内置点击音效包；
+(2) 开机自启慢；(3) 个别用户点击桌宠 Q 弹/动画/气泡全不出现，换回内置音效后动画与气泡
+恢复但没有 Q 弹。
+
+**根因（实测/代码确认）**
+
+- 音效包解析器硬编码 `pack_id == "duck"`；内置 id 白名单在 `petcore/config.py` 与
+  `pet/config.py` 各写一份，设置页两条 UI 各自枚举。
+- `attach` 段（7 个内置 feature + 用户 mod 导入 + 灵动岛构造）在 `app.exec()` 之前同步跑：
+  本机 24 次真实启动 `attach` 中位 **688ms、最慢 3777ms**，而窗口在 381ms 已 `show()`
+  → 桌面出现后有一段「点不动」。
+- `mouseReleaseEvent` **先同步解析并播放音效**再 `_on_click`：folder 包每次点击 `iterdir`
+  + ≤128 次 stat（网络盘/OneDrive 无上限），首个 mp3 播放要新建 `QMediaPlayer`
+  （本机实测 **185ms**）；异常还会把整个松手处理打断（Q 弹/动画/气泡一起消失）。
+- Q 弹用墙钟计时（`monotonic()` 起算），点击处理里排在其后的点击台词/气泡只要拖过
+  `click_squash_ms`，首帧就已经是进度 1.0 → **Q 弹被直接跳过**，动画/气泡照常出现。
+- `is_transparent_at()` 没有做 `paintEvent` 的镜像反变换：朝右的宠物有一片可见身体被判
+  透明，`PerPixelInputController` 会把整窗设成 `WS_EX_TRANSPARENT`，点击落到下层窗口。
+- 拖拽阈值 `DRAG_THRESHOLD=5`（manhattan）比系统 `SM_CXDRAG` 还紧，手抖点击被吃掉。
+
+**改动**
+
+- `assets/sounds/Deep!Seek!/`、`assets/sounds/to鲸wu/`（新增 32 个文件，6.61 MB）：
+  11 + 5 组素材，mp3 原样保留 + QtMultimedia 离线转出的 44.1kHz/16-bit PCM wav
+  （同名，wav 优先；转换脚本 `.scratch/click-packs-2026-11-03/convert.py`，不入库）。
+- `petcore/media/click_sound.py`（+47/−14）：`BUILTIN_PACK_DIRS` 注册表；
+  builtin 分支改成「`default` → `click.wav`，其余 id → `assets/sounds/<id>` 目录」；
+  内置目录候选进程级缓存（7–12µs/次）；folder 分支补 `OSError` 兜底 + 按目录 mtime
+  缓存（首扫 0.29ms → 17.5µs）。
+- `pet/click_sound.py`（+56/−14）：同款泛化 + folder 缓存/兜底；`_duck_candidates`
+  改成 wav 优先（与 petcore 同口径），`_reset_caches_for_tests` 一并清 folder 缓存。
+- `petcore/config.py`（+1/−1，另有 L166 未提交的 17/1）、`pet/config.py`（+5/−1）：
+  内置 id 白名单加 `Deep!Seek!` / `to鲸wu`；`pet/config.py` 新增 `_CLICK_SOUND_BUILTINS`。
+- `petcore/ui/settings/page_interaction.py`（+19/−10）、`pet/settings_widgets.py`
+  （+16/−6）：下拉/标签由同一份注册表生成（`内置 · <文件夹名>`），`_sound_path_text`
+  泛化，搜索词补两个包名；未知 builtin id 不再误落 default。
+- `petcore/ui/pet_window.py`（+51/−16）：松手不再内联播放音效（token 只做 cancel，
+  `_on_click` 里 `singleShot(0)` 播）；`_play_spec` 失败不影响 `start_squash`；
+  `is_transparent_at` 走「基准帧矩形 + 镜像」；拖拽阈值 `max(5, startApplicationDragDistance)`；
+  预热限量 8 个候选且 `click_sound` 关闭时跳过；`_on_click` 的闸门写 debug 日志。
+- `petcore/ui/effects.py`（+17/−3）：Q 弹起点改为「第一次绘制时锚定」，隐藏窗口
+  1s 后自动收表（不让 16ms 表空转）。
+- `petcore/ui/app.py`（+103/−33）：`attach_window` 拆成 `attach_window_shell` +
+  `feature_load_steps()`（内置 feature → 用户 mod → 菜单/灵动岛三拍）；`run()` 在
+  首帧后 120ms 起分批加载，`bootstrap`/`config` 两个新分段 + `features` 子段日志。
+- `petcore/cli.py`（+6/−1）、`petcore/__init__.py`（+5）：`BOOT_T0` 与 `config_ms` 传入
+  `run()`。
+- `scripts/build_petcore.ps1`（+4）：`--add-data THIRD_PARTY_NOTICES.md` 与 `LICENSE`
+  到包根——此前 petcore 构建不带许可声明，点击音效（duck MIT 正文、两个用户提供包）
+  等于裸分发。
+- `tests/test_petcore_click_sound.py`（+81）、`tests/test_petcore_interaction.py`（+80）、
+  `tests/test_click_sound.py`（+4/−3）：新包解析、两套白名单一致、设置页枚举、
+  folder 缓存/异常、Q 弹首帧锚定、松手不内联解析音效、素材失败仍 Q 弹、镜像命中、
+  预热限量。
+- `THIRD_PARTY_NOTICES.md`（+15）、`docs/PETCORE-SPEC.md`（+1/−1）：新增第 10 节
+  登记两个目录的来源与「未附带第三方许可声明」；SPEC 音效包清单同步。
+
+**验证**
+
+- `ruff check petcore/ pet/ tests/...`：All checks passed。
+- 相关单测（分组执行）全绿：`test_petcore_click_sound / test_click_sound /
+  test_petcore_interaction / test_petcore_click_listeners / test_effects_integration /
+  test_petcore_settings_coverage / test_petcore_architecture / test_petcore_config_scope /
+  test_config_schema / test_pr_report_discipline / test_petcore_docs`。
+- 全量 4 分片并行（597 文件，按 CI 口径忽略 4 个 webm 生命周期文件）：
+  **11,570 passed / 10 failed**；10 个失败逐条复核——`test_bundle_slim` ×4 与
+  `build_onedir.ps1` BOM ×1 在 HEAD 上本来就红（`slim_bundle.py:112` 要求
+  `Qt6WebView.dll` 而测试假 bundle 不生成；BOM 已不在库里），其余 5 个单独重跑全过
+  （4 进程并行下的时序抖动）。详见 PR 报告 §3.4。
+- 真机 headless 启动（`--root .scratch/run-root`）：
+  `启动耗时 bootstrap=392ms config=12ms qapp=51ms lock=54ms host=294ms
+  character=303ms attach=304ms restore=314ms`，随后 `扩展加载耗时 features=35ms`；
+  复制真实配置/扩展目录（`.scratch/real-root`）：`character=280ms attach=281ms
+  restore=296ms` + `features=103ms`。改前同机 24 次真实启动：`attach` 累计中位
+  1177ms（窗口 381ms）→ attach 段阻塞中位 688ms、最慢 3777ms。
+- 音效解析开销（本机，页缓存热）：内置包缓存后 7–12µs/次；folder 首扫 0.29ms、
+  缓存后 17.5µs/次（11 个文件）。
+- 播放探针（offscreen，QtMultimedia）：4 个内置包各前 3 个候选 `prepare → True`、
+  `play → True`；选中包后 `SoundPlayer._cache` 11 个 `QSoundEffect`、`_players` **0**
+  （确认走 wav，不再建 `QMediaPlayer`）。
+
+**构建（setup）**
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
+  -Clean -Installer -OutputRoot rel-storage-2026-11-03d `
+  -SignThumbprint 217337C099EC8624AC481BFC9F3E1664D0A442E1
+```
+
+- 产物：`rel-storage-2026-11-03d/dsh-pet-core-setup.exe`
+  - 大小 **310,460,024 B**（296.08 MiB；较 L165 的 307,985,983 B 多 2,474,041 B，
+    即两个音效包的 mp3+wav）
+  - SHA-256 `35D4A325018CFB42F65EF527880D77C889817B014F265018239CD945E6B21488`
+  - 签名 `Valid`（`CN=DSH Pet Core Dev`，主 exe 同）
+- 构建内 `--check --strict`：`menu_template=json characters=1 builtin_images=24
+  daily_lines=1200 strict=True`、`diagnostics=[]`、退出 0。
+- 包内确认：`_internal/assets/sounds/{Deep!Seek!(22),to鲸wu(10),duck,agent,click.wav}`；
+  `_internal/THIRD_PARTY_NOTICES.md` 与 `_internal/LICENSE` 已随包（本轮补的
+  `--add-data`，此前 petcore 构建没有分发声明，点击音效素材等于裸分发）。
+- 打包产物真机启动（`--root .scratch/pkg-root-d`，12s）：
+  `启动耗时 bootstrap=176ms config=9ms qapp=34ms lock=36ms host=262ms
+  character=279ms attach=280ms restore=298ms` + `扩展加载耗时 features=922ms`；
+  窗口在 279ms 出现，扩展加载在首帧后分三拍完成，无 Traceback/ERROR。
+
+**未验证 / 风险**
+
+- 未在真实桌面（有音频端点）点击试听；`QSoundEffect`/`QMediaPlayer` 的首次设备
+  打开耗时只有代码口径（本机 offscreen 无端点）。setup 交付后由用户实测。
+- 自启耗时的「解释器引导 + 杀软扫描 977MB 安装目录」段只补了埋点，未做目录精简。
+- 用户机器上「有动画有气泡没有 Q 弹」若仍复现，优先看新 debug 日志
+  （`click squash disabled by click_squash_enabled` / 飞行状态）与「点击时跳过点击动画」。
+- 点击台词/气泡仍留在 `_on_click` 同步路径；Q 弹已不依赖它们，但极端卡顿下点击
+  反馈整体仍会晚一拍。
+
+## L168 — 2026-11-04 — 快速对话深色模式黑底修复 + 人设卡角色扮演化与 MyGO/祥子扩卡
+
+**背景**：用户反馈 (1) 快速对话窗口纯黑看不见文字（截图：白 surface 里一块黑色输出区）；
+(2) 后加的人设卡回复太短、更像桌宠陪聊，不是「AI 读卡直接角色扮演」；同时新增
+5 张 MyGO 卡（千早爱音/长崎素世/高松灯/椎名立希/要乐奈）与 2 张丰川祥子卡
+（客服小祥 / 正剧向）。
+
+**根因**
+
+- `QuickChatBubble` 的浅色外观只写在 QSS 里，没有自己的调色板：Windows 深色模式下
+  `QScrollArea` viewport / `output_host` 按 `QPalette.Base/Window` 涂底（本机复现：
+  `#000000` / `#141414` / `#1e1e1e`），正文颜色写死 `#1f2328` → 黑底黑字。
+- 短卡长度段写的是「默认三到八句话」，且缺少角色扮演约束，模型默认走陪聊助理口吻。
+
+**改动**
+
+- `petcore/ui/chat/quick.py`（+96/−3）：新增 `quick_chat_palette()`（Window/WindowText/
+  Base/Text/Button/PlaceholderText/Highlight 全量浅色），`QuickChatBubble.__init__`
+  `setPalette`；`scroll.viewport()` / `output_host` / `image_host` 关掉自动填底 +
+  QSS 透明，保留半透明白 surface。
+- `tests/test_petcore_quick_chat.py`（+71）：深色调色板下 grab 像素——输出区亮度 >200、
+  文字区存在 <120 的暗像素（属性断言之外的真实渲染检查）。
+- `examples/petcore-mods/ai.chat/persona_presets/`：
+  - 新增 7 张：`anon`（千早爱音）、`soyo`（长崎素世）、`tomori`（高松灯）、`taki`（椎名立希）、
+    `rana`（要乐奈）、`sakiko`（丰川祥子）、`sakiko_cs`（客服小祥），4.1k–4.9k 字/张。
+  - 升级 8 张：`chizuru`/`elysia`/`emilia`/`lin_pianpian`/`mom`/`rem`/`zhuang_fangyi`/`bobo`，
+    补 `二、角色扮演约定`、长度段改「默认六到八句话」、加厚口癖与场景反应。
+  - 统一 11 节骨架；`{name}` 各出现一次且无其它花括号（`str.format` 安全）。
+- `tests/test_petcore_ai_persona.py`（+67）：`MODERN_PERSONA_IDS` 15 张 + 角色扮演段/
+  六到八句/长度/描述上限/format 安全。
+- `packaging/petcore.iss`（+3）：ai.chat **已安装**时升级安装同步包内文件
+  （`Check: DirExists(...) and not IsTaskSelected('mod_aichat')`）；未安装仍不写盘。
+- `docs/PETCORE-MOD-FORMAT.md`（+29）、`docs/PETCORE-SPEC.md`（+27/−1）：人格卡口径
+  （11 节骨架、角色扮演约定、6–8 句、现代卡清单）。
+
+**调研来源**：WebSearch 工具 403、浏览器与 Wikipedia 超时；改用本机可访问的
+`moegirl.icu`（萌娘百科镜像）与 Bing 快照，取学校/生日/喜好/口癖/乐队关系/家变经过；
+未使用整句原作台词。
+
+**验证**
+
+- `ruff`：All checks passed。
+- 相关单测 224 项全绿：`test_petcore_quick_chat / test_petcore_ai_persona /
+  test_petcore_ai_mod / test_petcore_chat_ui / test_petcore_chat_views /
+  test_petcore_settings / test_petcore_settings_search / test_quick_chat`。
+- 深色模式复现（offscreen，QApplication 换深色调色板）：改前 scroll=`#000000`、
+  output_host=`#141414`、label 背景=`#1e1e1e`；改后三者均 `#fcfcfe`，文字区最暗像素
+  lightness=36（可见）。
+- 21 张人格卡逐张校验：JSON 可解析、id 唯一、description ≤160、`{name}` 唯一且
+  `format()` 可执行；15 张现代卡 ≥3500 字、11 节齐全。
+- 长度口径收紧：6 张升级卡与 anon/taki/rana/sakiko 里「闲聊两三句也行 / 一句就够 /
+  只回一句」这类退路已逐条改写为「仍按六到八句走」；bobo 允许一两声「？」但整段仍要 6–8 句。
+
+**构建（setup）**
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
+  -Clean -Installer -OutputRoot rel-storage-2026-11-04a `
+  -SignThumbprint 217337C099EC8624AC481BFC9F3E1664D0A442E1
+```
+
+- 产物：`rel-storage-2026-11-04a/dsh-pet-core-setup.exe`
+  - 大小 **310,520,704 B**（296.14 MiB）
+  - SHA-256 `3274DDE571F270B549F47EFB80751635ACAAF68999CFDEE9EF4D89B967959B55`
+  - 签名 `Valid`（`CN=DSH Pet Core Dev`，主 exe 同）
+- 构建内 `--check --strict`：`menu_template=json characters=1 builtin_images=24
+  daily_lines=1200 strict=True`、`diagnostics=[]`、退出 0。
+- Inno 日志确认 22 个 `persona_presets` 文件全部压缩进包（7 张新卡 + 14 张旧卡 + loader）。
+- 打包产物真机启动 12s（`--root .scratch/pkg-root-11-04`）：
+  `启动耗时 bootstrap=176ms config=8ms qapp=36ms lock=39ms host=245ms
+  character=263ms attach=264ms restore=285ms` + `扩展加载耗时 features=1061ms`，无异常。
+
+**未验证 / 风险**
+
+- 未在真实深色模式桌面上截图确认（offscreen 像素级复现已覆盖同一代码路径）。
+- 新卡的实际对话质量取决于所选模型；未做多轮真实模型试聊。
+- 调研为镜像资料 + 模型知识，未逐条对照官方设定集；若发现设定偏差按用户反馈再改。
+- 客服小祥是社区梗向卡（客服话术 + 本人），不是官方剧情角色。
+
+## L169 — 2026-11-05 — QQ 桥接修复 + 两份外部产物审查
+
+**背景**：用户给来《桌宠5.0完整实录-脱敏版》（`.md`/`.docx` 同一份）与两个 zip：
+`petcore-补丁包-20261104`、`petcore-加固版源码-20261104`。要求修 QQ 桥接，并评估
+两份产物「择善而从」。
+
+**根因**
+
+- 实录 Bug 1 的真正断点不是 Windows 凭据管理器同 TargetName 覆盖，而是
+  `QqSettingsPage._credentials()` 读 `host.credentials`；`CoreHost` 只暴露
+  `api_credentials`（`petcore/ui/app.py:420`），设置窗代理转发后仍是 `None`。设置页
+  永远走「钥匙串不可用」分支，点「生成/保存」什么都不写；运行时
+  `HostPorts.credentials` 是同一个实例，token 实际能生成，只是设置页看不见、复制
+  不了。实录的明文 `secret_store.py` 是误诊后的绕过，不采纳。
+- 实录 Bug 2 的裸 `Authorization: <token>` 是真缺口（NapCat HTTP 客户端形态）；
+  `?token=` 的「路径把 query 算进去」不成立：`WebhookServer` 用
+  `urlsplit(self.path).path` 比较，query 已剥离。
+- 实录 Bug 3 是全屏自动隐藏的既定语义（`set_visible(False)`，气泡随宿主收起）；
+  不改行为，只补设置页提示与 debug。
+
+**改动**
+
+- `examples/petcore-mods/im.qq/host/settings_page.py`（+51/−14）：`_credentials()`
+  改为 `api_credentials` 优先；新增 `_store_credential()` 写入后 `persisted()` 回读；
+  `_save_token`/`_rotate_webhook_token` 失败时明确报「未持久化」，不再谎报成功；
+  `_refresh_status` 补钥匙串可用性；补四种鉴权形式与全屏气泡提示。
+- `examples/petcore-mods/im.qq/host/runtime.py`（+16）：生成 token 后 `persisted()`
+  校验；未持久化时 warning（不打印 token 值），已存在 token 不重复生成。
+- `petcore/net/webhook.py`（+9/−4）：接受裸 `Authorization` 与 `?access_token=`；
+  POST/GET 路径容忍一个尾斜杠；仍常量时间比较、不记 token/查询串。
+- `petcore/api/credentials.py`（+11）：只读 `backend_name()`。
+- `petcore/cli.py`（+11）：`--check` 增 `credentials: {backend, available}`。
+- `petcore/ui/app.py`（+8/−1）：气泡因窗口隐藏/设置窗打开被丢弃时记 debug。
+- 采纳补丁包 4 修：`petcore/storage/roots.py`（+13/−2，schema 非数字转 `RootsError`、
+  旧根必须是绝对路径且 ≥2 段）、`petcore/mods/install.py`（+25/−4，四处
+  `os.replace` 统一退避）、`petcore/chat/history_buckets.py`（+10/−8，坏时间戳统一
+  按 0，排序不炸）。
+- 测试：新增 `tests/test_petcore_qq_settings.py`；`test_petcore_webhook/qq_mod/
+  roots/history_buckets/install/api/cli` 各补回归。
+- `tests/test_petcore_installer.py`（+10/−1）、`tests/test_petcore_installer_mods_opt_in.py`
+  （+11/−0）：L168 的 ai.chat「已装升级同步」行带 `DirExists + not IsTaskSelected`，
+  按既有安装例外放行，修掉两条「扩展未绑 Task」误报（该行不会让全新安装多装东西）。
+
+**审查结论**
+
+- 补丁包 4 个缺陷在当前 HEAD 全部复现并采纳；`guardrails/` 不采纳：基线按另一棵树
+  生成（本树 `ui/chat/quick.py` 455 行 / `QuickChatBubble` 26 方法未登记；卫生基线 0
+  vs 本树 325 处 `time.sleep`、74 处 `sys.modules[...]`；分层规则把
+  `top -> petcore.contracts.*` 判成反向依赖）。
+- 加固版源码整体不采纳：起点 `d098a5f`、本树多 5 个提交、579 vs 254 个 py、308 个
+  文件不同、`ui/app.py` 1963→612 行重写、不含 `mods/`/`examples/`、QQ 链路零修复。
+- 实录的明文文件凭据与 8792 代理不采纳。
+
+**验证**
+
+- 聚焦 8 文件：`126 passed in 21.29s`；修前新增 13 条回归红（`?token=` 端到端那条
+  修前即绿，证明 query 路径本来就通）。
+- `ruff check petcore tests examples/petcore-mods/im.qq`：All checks passed。
+- 真实 loopback：裸 `Authorization` / `Bearer` / `?token=` / `?access_token=` /
+  尾斜杠均 200，错误裸头 401，handler 4 次；真实 Windows 凭据后端双条目往返
+  （临时 service）两条都读回并删除；`--check` 报
+  `WinVaultKeyring / available=true`。
+- 全量 `pytest -q` 在 73% 处原生崩溃（`EXIT:139`，两次同点），崩点为 legacy
+  `tests/test_quick_chat.py::test_switch_character_moves_session_and_prompt_to_new_character`；
+  该用例单独 9 passed、与本次新增测试组合 13 passed。按本仓库既有登记（**L137**）
+  这是旧套件顺序性环境问题，与本次改动无关。
+- petcore 门禁：`pytest -q tests/test_petcore_*.py tests/test_architecture.py
+  tests/test_pr_report_discipline.py tests/test_ci_workflows.py` =
+  **3559 passed, 1 skipped in 229.68s（EXIT 0）**；修前那两条
+  `tests/test_petcore_installer*.py` 误报已按上面的既有安装例外修掉。
+- 未验证：本机无 NapCat/QQ，真实 OneBot 网关整链未端到端；全屏游戏上气泡隐藏依赖
+  既有 `fullscreen_hide` 语义。
+
+**文档**：`docs/PETCORE-MOD-FORMAT.md` §8.2；
+`docs/PR-REPORT-QQ-BRIDGE-AND-UPSTREAM-AUDIT-2026-11-05.md`（含修改文件/性能/实机三节）。
+
+## L170 — 2026-11-05 — 0.5.0 签名安装包（含 L166–L169）
+
+**背景**：用户要求「编译一个 setup」并推送。工作树含 L166–L169 的未提交改动；
+本条目只记录构建产物与门禁，不改代码。
+
+**构建**
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
+  -Clean -Installer -OutputRoot rel-storage-2026-11-05a `
+  -SignThumbprint 217337C099EC8624AC481BFC9F3E1664D0A442E1
+```
+
+- 产物：`rel-storage-2026-11-05a/dsh-pet-core-setup.exe`
+  - 大小 **315,747,992 B**（301.12 MiB）
+  - SHA-256 `5d9abf14f25d00823a3cefca2ffec7a418efaee379a598747ff56eabe4b42077`
+  - 签名 `Valid`（`CN=DSH Pet Core Dev, O=DSH Pet, C=CN`，NotAfter 2029-10-22）
+- 构建内 `--check --strict`：`menu_template=json characters=1 builtin_images=24
+  daily_lines=1200 strict=True`，退出 0。
+- Inno 编译成功（117.188 s）；`IsTaskSelected` 有 Inno 6 的改名提示
+  （`WizardIsTaskSelected`），不阻断构建。
+- 未实机安装；setup 与 onedir 均留在 `rel-storage-2026-11-05a/`（`rel-*/` 已在
+  `.gitignore`，不入库）。
+
+**验证**
+
+- petcore 门禁：`3559 passed, 1 skipped in 229.68s（EXIT 0）`。
+- `ruff check petcore tests examples/petcore-mods/im.qq`：All checks passed。
+- 仓库全量仍在 legacy `tests/test_quick_chat.py::test_switch_character...` 原生崩溃
+  （`EXIT:139`，L137 已登记的旧套件顺序性问题）；该用例单独 9 passed。

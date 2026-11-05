@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from .prompts import DEFAULT_PROMPT
+from .prompts import DEFAULT_PROMPT, with_capability_boundary
 
 DEFAULT_PERSONA = "whale_maid"
 CUSTOM_PERSONA = "custom"
@@ -103,12 +103,12 @@ def resolve_prompt(
         chosen = CUSTOM_PERSONA if custom else DEFAULT_PERSONA
     if chosen == CUSTOM_PERSONA:
         if not custom:
-            return DEFAULT_PROMPT.format(name=character_name)
-        return _format_prompt(custom, character_name)
+            return with_capability_boundary(DEFAULT_PROMPT.format(name=character_name))
+        return with_capability_boundary(_format_prompt(custom, character_name))
     preset = preset_for(chosen, pool) or (pool[0] if pool else None)
     if preset is None:
-        return DEFAULT_PROMPT.format(name=character_name)
-    return _format_prompt(preset.prompt, character_name)
+        return with_capability_boundary(DEFAULT_PROMPT.format(name=character_name))
+    return with_capability_boundary(_format_prompt(preset.prompt, character_name))
 
 
 def _format_prompt(text: str, character_name: str) -> str:

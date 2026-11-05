@@ -1012,3 +1012,99 @@ def test_chat_view_receives_the_window_pet_slot(app) -> None:
     finally:
         window.close()
         _settle(app)
+
+
+# ---------------------------------------------------------------- Markdown 图片
+
+
+def _write_png(path: Path, width: int = 64, height: int = 32) -> Path:
+    image = QImage(width, height, QImage.Format.Format_ARGB32)
+    image.fill(QColor("#3d8ef0"))
+    assert image.save(str(path))
+    return path
+
+
+def test_assistant_message_renders_a_local_image_as_a_sticker(controller, tmp_path: Path) -> None:
+    path = _write_png(tmp_path / "meme.png")
+    controller.open("ai.chat", pet_slot=0)
+    window = controller.window_for("ai.chat")
+    assert window is not None
+
+    controller.append("ai.chat", "assistant", f"看看这个\n\n![表情包](<{path}>)")
+    bubble = window.bubbles()[-1]
+    assert "看看这个" in bubble.body.text()
+    assert "![" not in bubble.body.text()
+    widgets = bubble.inline_image_widgets()
+    assert len(widgets) == 1
+    assert 0 < widgets[0].width() <= 240
+    assert 0 < widgets[0].height() <= 240
+
+
+def test_gif_sticker_is_animated_only_for_the_latest_message(controller, tmp_path: Path) -> None:
+    from PySide6.QtTest import QTest
+
+    from petcore.ui.animated_image import AnimatedImage
+    from tests.test_petcore_animated_image import _ANIMATED_GIF
+
+    gif = tmp_path / "meme.gif"
+    gif.write_bytes(_ANIMATED_GIF)
+    controller.open("ai.chat", pet_slot=0)
+    window = controller.window_for("ai.chat")
+    assert window is not None
+
+    controller.append("ai.chat", "assistant", f"![表情包](<{gif}>)")
+    bubble = window.bubbles()[-1]
+    widgets = bubble.inline_image_widgets()
+    assert len(widgets) == 1
+    assert isinstance(widgets[0], AnimatedImage)
+    assert widgets[0].movie_path == str(gif)
+    QTest.qWait(50)
+    assert widgets[0].is_running is True
+
+    controller.append("ai.chat", "assistant", "下一条")
+    old = bubble.inline_image_widgets()
+    assert old, "历史消息仍要保留首帧"
+    assert not isinstance(old[0], AnimatedImage)
+
+
+def test_image_only_fenced_block_is_unwrapped(controller, tmp_path: Path) -> None:
+    path = _write_png(tmp_path / "meme.png")
+    controller.open("ai.chat", pet_slot=0)
+    window = controller.window_for("ai.chat")
+    assert window is not None
+
+    controller.append(
+        "ai.chat", "assistant", f"```markdown\n![表情包](<{path}>)\n```"
+    )
+    bubble = window.bubbles()[-1]
+    assert len(bubble.inline_image_widgets()) == 1
+    assert "```" not in bubble.body.text()
+
+
+def test_remote_markdown_image_shows_a_placeholder(controller) -> None:
+    controller.open("ai.chat", pet_slot=0)
+    window = controller.window_for("ai.chat")
+    assert window is not None
+
+    controller.append("ai.chat", "assistant", "![猫](https://example.com/cat.png)")
+    bubble = window.bubbles()[-1]
+    assert "[图片：猫]" in bubble.body.text()
+    assert bubble.inline_image_widgets() == []
+
+
+def test_image_inside_a_code_block_with_other_content_stays_code(
+    controller, tmp_path: Path
+) -> None:
+    path = _write_png(tmp_path / "meme.png")
+    controller.open("ai.chat", pet_slot=0)
+    window = controller.window_for("ai.chat")
+    assert window is not None
+
+    controller.append(
+        "ai.chat",
+        "assistant",
+        f"示例：\n\n```markdown\n![x](<{path}>)\nprint(1)\n```",
+    )
+    bubble = window.bubbles()[-1]
+    assert bubble.inline_image_widgets() == []
+    assert "print(1)" in bubble.body.text()

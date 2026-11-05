@@ -9,7 +9,17 @@ SUPPORTED_SUFFIXES = frozenset({".wav", ".mp3", ".ogg", ".flac", ".m4a"})
 #: 自定义文件夹一次最多取多少个候选（防止用户误选巨大目录）。
 MAX_FOLDER_CANDIDATES = 128
 
+#: 进程内 folder 包候选缓存条目上限（点击路径每兜底重解析一次都付目录扫描）。
+_FOLDER_CACHE_LIMIT = 8
+
+#: 自带音效包 id 白名单：目录名即包名，新增素材 = 放目录 + 在 ``petcore/config.py``
+#: 的 ``_CLICK_SOUND_BUILTINS`` 登记（``default`` 是单文件 ``click.wav``，不在此表）。
+BUILTIN_PACK_DIRS = frozenset({"duck", "Deep!Seek!", "to鲸wu"})
+
 _DEFAULT_PACK = {"kind": "builtin", "id": "default", "path": ""}
+
+_folder_cache: dict[tuple[str, int], tuple[Path, ...]] = {}
+_builtin_cache: dict[str, tuple[Path, ...]] = {}
 
 
 def _pack_fields(pack) -> tuple[str, str, str]:
@@ -22,23 +32,63 @@ def _pack_fields(pack) -> tuple[str, str, str]:
 
 
 def _duck_candidates(duck_dir: Path) -> list[Path]:
-    """小黄鸭音效：wav 优先，同名 mp3 只在缺 wav 时补位（转码后不会重复播两遍）。"""
-    if not duck_dir.is_dir():
-        return []
+    """内置音效包候选：wav 优先，同名 mp3 只在缺 wav 时补位（转码后不会重复播两遍）。
+
+    包内素材是打包资源，运行期不会变；点击与碰撞每次命中都会走到这里，
+    不缓存就是 GUI 线程上每次一次目录扫描。返回副本，调用方的改动不污染缓存。
+    """
+    key = str(duck_dir)
+    cached = _builtin_cache.get(key)
+    if cached is not None:
+        return list(cached)
+    candidates: list[Path] = []
+    if duck_dir.is_dir():
+        try:
+            entries = sorted(duck_dir.iterdir())
+        except OSError:
+            entries = []
+        wavs = [path for path in entries if path.is_file() and path.suffix.lower() == ".wav"]
+        covered = {path.stem.lower() for path in wavs}
+        mp3s = [
+            path
+            for path in entries
+            if path.is_file()
+            and path.suffix.lower() == ".mp3"
+            and path.stem.lower() not in covered
+        ]
+        candidates = wavs + mp3s
+    _builtin_cache[key] = tuple(candidates)
+    return candidates
+
+
+def _folder_candidates(folder: Path) -> list[Path]:
+    """用户自定义文件夹候选（带进程内缓存 + 目录不可读兜底）。
+
+    点击路径每次松手都会解析候选；网络盘 / OneDrive 占位 / 休眠 U 盘上的目录
+    ``iterdir`` 会阻塞 GUI 线程。缓存键取目录 mtime：增删文件后自动失效，
+    读不到目录只返回空表，绝不让异常打断点击反馈。
+    """
     try:
-        entries = sorted(duck_dir.iterdir())
+        stamp = folder.stat().st_mtime_ns
     except OSError:
         return []
-    wavs = [path for path in entries if path.is_file() and path.suffix.lower() == ".wav"]
-    covered = {path.stem.lower() for path in wavs}
-    mp3s = [
-        path
-        for path in entries
-        if path.is_file()
-        and path.suffix.lower() == ".mp3"
-        and path.stem.lower() not in covered
-    ]
-    return wavs + mp3s
+    key = (str(folder), stamp)
+    cached = _folder_cache.get(key)
+    if cached is not None:
+        return list(cached)
+    try:
+        files = sorted(
+            path
+            for path in folder.iterdir()
+            if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
+        )
+    except OSError:
+        return []
+    files = files[:MAX_FOLDER_CANDIDATES]
+    if len(_folder_cache) >= _FOLDER_CACHE_LIMIT:
+        _folder_cache.pop(next(iter(_folder_cache)))
+    _folder_cache[key] = tuple(files)
+    return files
 
 
 
@@ -92,10 +142,12 @@ def resolve_click_sound_candidates(pack, asset_root: Path) -> list[Path]:
     kind, pack_id, path_text = _pack_fields(pack)
     sounds = Path(asset_root) / "sounds"
     if kind == "builtin":
-        if pack_id == "duck":
-            return _duck_candidates(sounds / "duck")
-        click = sounds / "click.wav"
-        return [click] if click.is_file() else []
+        if pack_id == "default":
+            click = sounds / "click.wav"
+            return [click] if click.is_file() else []
+        if pack_id not in BUILTIN_PACK_DIRS:
+            return []
+        return _duck_candidates(sounds / pack_id)
     if kind == "file":
         if not path_text:
             return []
@@ -109,15 +161,7 @@ def resolve_click_sound_candidates(pack, asset_root: Path) -> list[Path]:
         folder = Path(path_text).expanduser()
         if not folder.is_dir():
             return []
-        try:
-            files = sorted(
-                path
-                for path in folder.iterdir()
-                if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
-            )
-        except OSError:
-            return []
-        return files[:MAX_FOLDER_CANDIDATES]
+        return _folder_candidates(folder)
     return []
 
 

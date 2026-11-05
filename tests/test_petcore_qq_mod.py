@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
+import urllib.request
 from types import SimpleNamespace
 
 
@@ -37,6 +39,14 @@ class _Credentials:
 
     def delete(self, owner, key):
         self.data.pop((owner, key), None)
+
+    def persisted(self, owner, key):
+        return bool(self.data.get((owner, key)))
+
+
+class _VolatileCredentials(_Credentials):
+    def persisted(self, owner, key):
+        return False
 
 
 class _Webhook:
@@ -94,7 +104,7 @@ class _Api:
         return SimpleNamespace(text="你好呀", incomplete=False)
 
 
-def _runtime(**config):
+def _runtime(*, credentials=None, **config):
     module = _runtime_module()
     values = {
         "im_qq_enabled": True,
@@ -113,7 +123,7 @@ def _runtime(**config):
     values.update(config)
     ports = SimpleNamespace(
         config=_Config(**values),
-        credentials=_Credentials(),
+        credentials=credentials or _Credentials(),
         webhook=_Webhook(),
         chat=_Chat(),
         presentation=_Presentation(),
@@ -196,6 +206,92 @@ def test_ai_reply_sends_and_records_assistant() -> None:
             time.sleep(0.01)
         assert any(record["role"] == "assistant" for _owner, record in ports.chat.ingested)
         assert ports.http.requests
+    finally:
+        runtime.stop()
+
+
+def _post_json(url: str, body: dict, headers: dict[str, str] | None = None):
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", **(headers or {})},
+        method="POST",
+    )
+    return urllib.request.urlopen(request, timeout=5)
+
+
+def _real_webhook(runtime):
+    from petcore.net.webhook import WebhookServer
+
+    return WebhookServer(
+        owner="im.qq",
+        port=0,
+        path="/onebot",
+        token="secret",
+        handler=runtime._on_webhook,
+    ).start()
+
+
+def _group_event(message_id: int, text: str) -> dict:
+    return {
+        "post_type": "message",
+        "message_type": "group",
+        "group_id": 123,
+        "user_id": 42,
+        "self_id": 999,
+        "message_id": message_id,
+        "time": time.time(),
+        "sender": {"card": "小明"},
+        "message": [{"type": "text", "data": {"text": text}}],
+    }
+
+
+def test_real_webhook_accepts_raw_authorization_and_ingests() -> None:
+    runtime, ports = _runtime()
+    server = _real_webhook(runtime)
+    try:
+        with _post_json(
+            server.url, _group_event(501, "裸头"), {"Authorization": "secret"}
+        ) as response:
+            assert response.status == 200
+            assert json.loads(response.read()) == {"ok": True}
+        assert [record["text"] for _owner, record in ports.chat.ingested] == ["裸头"]
+    finally:
+        server.stop()
+        runtime.stop()
+
+
+def test_real_webhook_accepts_the_query_token_and_ingests() -> None:
+    runtime, ports = _runtime()
+    server = _real_webhook(runtime)
+    try:
+        with _post_json(server.url + "?token=secret", _group_event(502, "查询串")) as response:
+            assert response.status == 200
+        assert [record["text"] for _owner, record in ports.chat.ingested] == ["查询串"]
+    finally:
+        server.stop()
+        runtime.stop()
+
+
+def test_existing_webhook_token_is_reused() -> None:
+    credentials = _Credentials()
+    credentials.set("im.qq", "webhook_token", "existing-token")
+    runtime, ports = _runtime(credentials=credentials)
+    try:
+        assert ports.webhook.started[0][3] == "existing-token"
+        assert credentials.data[("im.qq", "webhook_token")] == "existing-token"
+    finally:
+        runtime.stop()
+
+
+def test_generated_token_warns_when_not_persisted(caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="petcore.im.qq")
+    runtime, ports = _runtime(credentials=_VolatileCredentials())
+    try:
+        assert len(ports.webhook.started[0][3]) == 32
+        assert any(
+            "not persisted" in record.message for record in caplog.records
+        ), [record.message for record in caplog.records]
     finally:
         runtime.stop()
 

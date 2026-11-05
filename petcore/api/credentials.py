@@ -37,6 +37,17 @@ class KeyringCredentials:
             self._usable = self._probe()
         return bool(self._usable)
 
+    def backend_name(self) -> str:
+        """当前解析到的后端类名；不可用时返回空串。只读，不写任何条目。"""
+        backend = self._resolve()
+        if backend is None:
+            return ""
+        try:
+            resolved = backend.get_keyring() if hasattr(backend, "get_keyring") else backend
+        except Exception:  # noqa: BLE001 - 探不到就是「没有后端」
+            return ""
+        return f"{type(resolved).__module__}.{type(resolved).__name__}"
+
     def get(self, owner: str, key: str) -> str | None:
         entry = self._entry(owner, key)
         cached = self._memory.get(entry)

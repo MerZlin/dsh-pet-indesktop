@@ -36,6 +36,12 @@ log = logging.getLogger("pet.click_sound")
 
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
 
+#: 自带音效包 id 白名单：目录名即包名（``default`` 是单文件 ``click.wav``）。
+BUILTIN_PACK_DIRS = frozenset({"duck", "Deep!Seek!", "to鲸wu"})
+
+#: 自定义文件夹候选缓存条目上限（点击路径每兜底重解析一次都付目录扫描）。
+_FOLDER_CACHE_LIMIT = 8
+
 
 class ClickSoundPool:
     """模块级单例音效池：收编全部 QtMultimedia 音效对象与缓存状态（A14）。
@@ -937,6 +943,7 @@ def resolve_builtin_sound(sound_id: str) -> Path | None:
 
 
 _duck_candidates_cache: dict[str, tuple[Path, ...]] = {}
+_folder_candidates_cache: dict[tuple[str, int], tuple[Path, ...]] = {}
 
 #: 音源根目录缓存：键 = sys._MEIPASS 的当前值（None = 源码运行）
 _SOUNDS_ROOT_MEMO: dict[object, Path] = {}
@@ -962,13 +969,14 @@ def _sounds_root() -> Path:
 def _reset_caches_for_tests() -> None:
     """仅测试用：清空模块级解析缓存（生产进程内缓存随包静态，无需失效）。"""
     _duck_candidates_cache.clear()
+    _folder_candidates_cache.clear()
     _SOUNDS_ROOT_MEMO.clear()
     global _SOUND_CACHE_DIR
     _SOUND_CACHE_DIR = None
 
 
 def _duck_candidates(duck_dir: Path) -> list[Path]:
-    """内置小鸭包候选列表（带进程级缓存）。
+    """内置音效包候选列表（带进程级缓存）。
 
     包内素材是打包资源，运行期不会变；但点击（window 每次按下/确认点击）与
     碰撞命中（sprite 世界 / 岛墙每次真撞）都会走到这里，
@@ -981,11 +989,52 @@ def _duck_candidates(duck_dir: Path) -> list[Path]:
         return list(cached)
     candidates: list[Path] = []
     if duck_dir.is_dir():
-        candidates = sorted(
-            p for p in duck_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS
-        )
+        try:
+            entries = sorted(duck_dir.iterdir())
+        except OSError:
+            entries = []
+        # wav 优先，同名 mp3 只在缺 wav 时补位（转码后不会重复播两遍）。
+        wavs = [p for p in entries if p.is_file() and p.suffix.lower() == ".wav"]
+        covered = {p.stem.lower() for p in wavs}
+        mp3s = [
+            p
+            for p in entries
+            if p.is_file()
+            and p.suffix.lower() == ".mp3"
+            and p.stem.lower() not in covered
+        ]
+        candidates = wavs + mp3s
     _duck_candidates_cache[key] = tuple(candidates)
+    return candidates
+
+
+def _folder_candidates(folder: Path) -> list[Path]:
+    """自定义文件夹候选（带进程内缓存 + 目录不可读兜底）。
+
+    点击/碰撞每次命中都会解析候选；网络盘、OneDrive 占位或休眠 U 盘上的目录
+    ``iterdir`` 会把 GUI 线程拖住。缓存键取目录 mtime（增删文件即失效），
+    读不到目录只返回空表。
+    """
+    try:
+        stamp = folder.stat().st_mtime_ns
+    except OSError:
+        return []
+    key = (str(folder), stamp)
+    cached = _folder_candidates_cache.get(key)
+    if cached is not None:
+        return list(cached)
+    try:
+        candidates = sorted(
+            path
+            for path in folder.iterdir()
+            if path.is_file() and path.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS
+        )
+    except OSError:
+        return []
+    candidates = candidates[:128]
+    if len(_folder_candidates_cache) >= _FOLDER_CACHE_LIMIT:
+        _folder_candidates_cache.pop(next(iter(_folder_candidates_cache)))
+    _folder_candidates_cache[key] = tuple(candidates)
     return candidates
 
 
@@ -1000,8 +1049,8 @@ def resolve_click_sound_candidates(pack: dict | None, data_dir: Path | None = No
     sounds_dir = root / "assets" / "sounds"
 
     if kind == "builtin":
-        if pack_id == "duck":
-            return _duck_candidates(sounds_dir / "duck")
+        if pack_id in BUILTIN_PACK_DIRS:
+            return _duck_candidates(sounds_dir / pack_id)
         # default builtin
         candidates = []
         if data_dir is not None:
@@ -1025,14 +1074,7 @@ def resolve_click_sound_candidates(pack: dict | None, data_dir: Path | None = No
         if not path_str:
             return []
         p = Path(path_str).expanduser()
-        if p.is_dir():
-            candidates = [
-                f for f in p.iterdir()
-                if f.is_file() and f.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS
-            ]
-            candidates.sort()
-            return candidates[:128]
-        return []
+        return _folder_candidates(p)
 
     return []
 

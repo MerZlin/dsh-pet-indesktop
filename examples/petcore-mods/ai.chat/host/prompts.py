@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import re
+
 DEFAULT_PROMPT = (
     "你是「{name}」，一只住在主人桌面上的鲸鱼娘女仆。\n"
     "性格：温和、细心，会把主人当成需要照顾的人，但不越界、不替主人做决定。\n"
@@ -17,10 +19,52 @@ DEFAULT_PROMPT = (
 LOOK_SCREEN_PROMPT = "看看我的屏幕，用一两句话说说你现在看到什么。"
 SCREEN_QUESTION_PROMPT = "看看这块区域里是什么，说清内容，能给出判断或建议时就直接给。"
 
+#: 无论用户选内置人格还是自定义提示词，都必须带上的能力边界。
+#: 模型误以为可以调工具时会把调用当正文写出来（用户看到一段代码），
+#: 提示词挡一层，core 的流式层再兜一层。
+CAPABILITY_BOUNDARY = (
+    "能力边界：你没有工具、插件、命令执行、联网浏览或文件读写能力，"
+    "也不能替主人操作电脑、删除文件或运行代码。不要输出工具调用、函数调用、"
+    "JSON 工具参数或假装执行命令；遇到这类请求，直接说明做不到，"
+    "并给出用户自己可以执行的步骤或建议。"
+)
+
+
+def with_capability_boundary(prompt: str) -> str:
+    text = str(prompt or "").strip()
+    if not text:
+        return CAPABILITY_BOUNDARY
+    if CAPABILITY_BOUNDARY in text:
+        return text
+    return f"{text}\n\n{CAPABILITY_BOUNDARY}"
+
 
 def system_prompt(configured: str, character_name: str) -> str:
     text = str(configured or "").strip()
-    return text or DEFAULT_PROMPT.format(name=character_name)
+    return with_capability_boundary(text or DEFAULT_PROMPT.format(name=character_name))
+
+
+_IMAGE_MARKUP = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MEME_MARKER = re.compile(r"[\[【]\s*表情\s*[:：][^\]】\n]*[\]】]")
+
+
+def strip_meme_markup(text: str) -> str:
+    """历史回灌/记忆用：去掉表情包图片语法与 ``[表情: …]`` 标记。"""
+    value = _IMAGE_MARKUP.sub("", str(text or ""))
+    value = _MEME_MARKER.sub("", value)
+    return re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", value).strip()
+
+
+def meme_prompt(listing: str) -> str:
+    """表情包清单 + 取图规则（只在主对话/快速对话追加）。"""
+    return (
+        "表情包：你可以在回复里用表情包接梗。下面是可用清单（只能从里面挑）：\n"
+        f"{str(listing or '').strip()}\n"
+        "规则：\n"
+        "- 如果这条回复适合配表情包，在最后单独一行写 `[表情: 文件名或标签]`；\n"
+        "- 只能选清单里出现过的文件名/标签，不要写路径，不要解释这件事；\n"
+        "- 每次回复都尽量配一张；内容不适合配图时可以不写。"
+    )
 
 
 def _text_turns(history, limit: int) -> list[dict]:
@@ -29,7 +73,7 @@ def _text_turns(history, limit: int) -> list[dict]:
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "user")
-        content = str(item.get("content") or "")
+        content = strip_meme_markup(str(item.get("content") or ""))
         if content.strip():
             turns.append({"role": role, "content": content})
     return turns

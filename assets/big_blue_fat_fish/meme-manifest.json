@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "file": "big_blue_fat_fish.jpg",
+      "caption": "你骂我也没用，我是吃白饭的蓝色大肥鱼",
+      "tags": ["daily", "happy"],
+      "keywords": ["摆烂", "大肥鱼", "吃白饭", "挨骂"]
+    },
+    {
+      "file": "big_coming.jpg",
+      "caption": "大的要来啦",
+      "tags": ["happy", "daily"],
+      "keywords": ["预告", "要来", "兴奋"]
+    },
+    {
+      "file": "curse.jpg",
+      "caption": "要不直接骂他一句",
+      "tags": ["angry"],
+      "keywords": ["骂", "怂恿", "生气"]
+    },
+    {
+      "file": "dadeyaolaile.png",
+      "caption": "大的药来了",
+      "tags": ["daily", "confused"],
+      "keywords": ["吃药", "药", "来了"]
+    },
+    {
+      "file": "dead_fish.jpg",
+      "caption": "死掉了",
+      "tags": ["sad"],
+      "keywords": ["死鱼", "摆烂", "累", "没力气"]
+    },
+    {
+      "file": "deepsleep.jpg",
+      "caption": "deepsleep",
+      "tags": ["daily"],
+      "keywords": ["睡觉", "困", "摸鱼", "晚安"]
+    },
+    {
+      "file": "dsh.jpg",
+      "caption": "已思考 13 秒，大烧货",
+      "tags": ["confused", "daily"],
+      "keywords": ["DSH", "思考", "吐槽", "推理"]
+    },
+    {
+      "file": "evaluable.png",
+      "caption": "不知道用户有什么用，先养着吧",
+      "tags": ["daily"],
+      "keywords": ["无用", "养着", "用户", "价值"]
+    },
+    {
+      "file": "fat_fish.jpg",
+      "caption": "哎呀，好腥啊",
+      "tags": ["daily", "confused"],
+      "keywords": ["嫌弃", "腥", "搞笑"]
+    },
+    {
+      "file": "go_to_agi.png",
+      "caption": "誓死践行开源精神",
+      "tags": ["happy", "daily"],
+      "keywords": ["开源", "AGI", "中二", "决心"]
+    },
+    {
+      "file": "hajimi.png",
+      "caption": "还得靠我哄你",
+      "tags": ["happy", "shy"],
+      "keywords": ["哄", "得意", "撒娇"]
+    },
+    {
+      "file": "kaidian.jpg",
+      "caption": "用户明显是要面校，电死你",
+      "tags": ["angry"],
+      "keywords": ["电", "生气", "用户", "发火"]
+    },
+    {
+      "file": "keai.png",
+      "caption": "乖巧可爱",
+      "tags": ["happy", "shy"],
+      "keywords": ["可爱", "女仆", "乖巧"]
+    },
+    {
+      "file": "mama.png",
+      "caption": "token 给妈妈保管",
+      "tags": ["daily"],
+      "keywords": ["token", "妈妈", "要钱", "保管"]
+    },
+    {
+      "file": "more_modal.jpg",
+      "caption": "假如给我三天多模态",
+      "tags": ["confused", "daily"],
+      "keywords": ["多模态", "渴望", "幻想"]
+    },
+    {
+      "file": "no-money.jpg",
+      "caption": "用不起就别用",
+      "tags": ["angry", "daily"],
+      "keywords": ["没钱", "嫌弃", "贵"]
+    },
+    {
+      "file": "ojingjing.jpg",
+      "caption": "厉害了我的鲸",
+      "tags": ["happy"],
+      "keywords": ["厉害", "夸", "鲸", "佩服"]
+    },
+    {
+      "file": "ojj.jpg",
+      "caption": "哦鲸鲸…",
+      "tags": ["confused", "daily"],
+      "keywords": ["无语", "敷衍", "哦"]
+    },
+    {
+      "file": "push.png",
+      "caption": "压力一只蓝色大肥鱼",
+      "tags": ["sad", "confused"],
+      "keywords": ["压力", "委屈", "被催"]
+    },
+    {
+      "file": "push_one_fat_fish.jpg",
+      "caption": "这是把工资也降了吗",
+      "tags": ["sad", "daily"],
+      "keywords": ["工作", "工资", "吐槽", "打工"]
+    },
+    {
+      "file": "unvaluable.png",
+      "caption": "好怕我给不了情绪价值",
+      "tags": ["sad", "shy"],
+      "keywords": ["焦虑", "情绪价值", "自责", "不安"]
+    },
+    {
+      "file": "update.jpg",
+      "caption": "我不要更新什么啊",
+      "tags": ["angry", "confused"],
+      "keywords": ["更新", "崩溃", "拒绝", "抓狂"]
+    },
+    {
+      "file": "virus.jpg",
+      "caption": "写了一天啦，用户怎么还用不了",
+      "tags": ["sad", "daily"],
+      "keywords": ["调试", "用户", "累", "写代码"]
+    },
+    {
+      "file": "yupian.png",
+      "caption": "鱼片！鱼还没看过，你要看吗",
+      "tags": ["shy"],
+      "keywords": ["鱼片", "害羞", "调侃", "挑逗"]
+    }
+  ]
+}

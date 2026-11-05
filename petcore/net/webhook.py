@@ -67,12 +67,17 @@ class WebhookServer:
             def _authorized(self) -> bool:
                 header = str(self.headers.get("X-Webhook-Token") or "")
                 if not header:
-                    auth = str(self.headers.get("Authorization") or "")
+                    auth = str(self.headers.get("Authorization") or "").strip()
                     if auth.lower().startswith("bearer "):
                         header = auth[7:].strip()
+                    elif auth:
+                        # NapCat 的 HTTP 客户端发裸 token（没有 Bearer 前缀）。
+                        header = auth
                 if not header:
                     query = parse_qs(urlsplit(self.path).query)
-                    header = str((query.get("token") or [""])[0])
+                    header = str((query.get("token") or [""])[0]) or str(
+                        (query.get("access_token") or [""])[0]
+                    )
                 return bool(header) and hmac.compare_digest(header, owner.token)
 
             def _read(self) -> dict:
@@ -93,7 +98,7 @@ class WebhookServer:
 
             def do_POST(self):  # noqa: N802 - http.server API
                 split = urlsplit(self.path)
-                if split.path != owner.path:
+                if split.path.rstrip("/") != owner.path.rstrip("/"):
                     self._send(404, {"ok": False, "error": "not_found"})
                     return
                 if not self._authorized():
@@ -120,7 +125,7 @@ class WebhookServer:
 
             def do_GET(self):  # noqa: N802 - http.server API
                 split = urlsplit(self.path)
-                if split.path != owner.path:
+                if split.path.rstrip("/") != owner.path.rstrip("/"):
                     self._send(404, {"ok": False, "error": "not_found"})
                     return
                 if not self._authorized():

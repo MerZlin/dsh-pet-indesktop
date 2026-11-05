@@ -85,7 +85,7 @@ class QqSettingsPage(SettingsPage):
         card_api.add_row(
             "Webhook token",
             token_row,
-            "网关 POST 事件时带的 x-webhook-token / Bearer；只存系统钥匙串。生成后需重启桌宠让监听换新 token。",
+            "网关可带 x-webhook-token、Authorization（Bearer 或裸 token）、?token= / ?access_token=；只存系统钥匙串，写出后回读校验。生成后需重启桌宠让监听换新 token。",
             expand=True,
             search_keys=("webhook token", "密钥", "复制"),
         )
@@ -108,7 +108,7 @@ class QqSettingsPage(SettingsPage):
         card_reply.add_row(
             "气泡提醒",
             self.notify_bubble,
-            "收到 QQ 消息时在桌宠旁冒一条简短气泡；群聊只显示前 120 字。",
+            "收到 QQ 消息时在桌宠旁冒一条简短气泡；群聊只显示前 120 字。开启「全屏自动隐藏」时，全屏程序上方不会冒气泡（消息仍会入库）。",
         )
 
         self.allowed_groups = QLineEdit(self)
@@ -144,7 +144,7 @@ class QqSettingsPage(SettingsPage):
         card_token.add_row(
             "OneBot access token",
             self.token,
-            "只存系统钥匙串，不写 config.json；保存后即时生效。",
+            "只存系统钥匙串，不写 config.json；写出后会回读校验，保存后即时生效。",
             expand=True,
             search_keys=("token", "令牌", "密钥"),
         )
@@ -258,7 +258,27 @@ class QqSettingsPage(SettingsPage):
     # ---------------------------------------------------------------- 令牌
 
     def _credentials(self):
-        return getattr(self.host, "credentials", None)
+        # CoreHost 暴露的是 api_credentials；设置窗代理会把它转发过来。
+        return getattr(self.host, "api_credentials", None) or getattr(
+            self.host, "credentials", None
+        )
+
+    def _store_credential(self, key: str, value: str) -> bool:
+        """写入后回读校验：后端吞掉异常时，界面不能说「已保存」。"""
+        credentials = self._credentials()
+        if credentials is None:
+            return False
+        try:
+            credentials.set(OWNER, key, value)
+        except Exception:  # noqa: BLE001 - 后端失败由 persisted 回读兜底
+            return False
+        checker = getattr(credentials, "persisted", None)
+        if not callable(checker):
+            return True
+        try:
+            return bool(checker(OWNER, key))
+        except Exception:  # noqa: BLE001
+            return False
 
     def _save_token(self) -> None:
         credentials = self._credentials()
@@ -266,13 +286,19 @@ class QqSettingsPage(SettingsPage):
             self.token_status.setText("钥匙串不可用，无法保存令牌")
             return
         value = self.token.text()
-        try:
-            if value:
-                credentials.set(OWNER, "access_token", value)
-            else:
+        if not value:
+            try:
                 credentials.delete(OWNER, "access_token")
-        except Exception:
-            self.token_status.setText("令牌保存失败")
+            except Exception:
+                self.token_status.setText("令牌删除失败")
+                return
+            self.token.clear()
+            self._refresh_status()
+            return
+        if not self._store_credential("access_token", value):
+            self.token_status.setText(
+                "保存失败：钥匙串写入未持久化，重启后需要重填"
+            )
             return
         self.token.clear()
         self._refresh_status()
@@ -281,6 +307,7 @@ class QqSettingsPage(SettingsPage):
         credentials = self._credentials()
         configured = False
         webhook_token = ""
+        available = False
         if credentials is not None:
             try:
                 configured = bool(credentials.get(OWNER, "access_token"))
@@ -288,13 +315,21 @@ class QqSettingsPage(SettingsPage):
             except Exception:
                 configured = False
                 webhook_token = ""
+            checker = getattr(credentials, "available", None)
+            if callable(checker):
+                try:
+                    available = bool(checker())
+                except Exception:
+                    available = False
         self.token_status.setText("已配置" if configured else "未配置")
         if hasattr(self, "webhook_token"):
             self.webhook_token.setText(webhook_token)
+        keyring = "钥匙串可用" if available else "钥匙串不可用：token/访问令牌重启即丢"
         self.status.setText(
             "监听地址：http://127.0.0.1:"
             f"{self.webhook_port.value()}{self.webhook_path.text().strip() or '/onebot'}"
             + ("" if webhook_token else "（启用后自动生成 token）")
+            + f"；{keyring}"
         )
 
     def _copy_webhook_token(self) -> None:
@@ -309,10 +344,12 @@ class QqSettingsPage(SettingsPage):
             self.status.setText("钥匙串不可用，无法生成 webhook token")
             return
         value = secrets.token_hex(16)
-        try:
-            credentials.set(OWNER, "webhook_token", value)
-        except Exception:
-            self.status.setText("webhook token 保存失败")
+        if not self._store_credential("webhook_token", value):
+            self._refresh_status()
+            self.status.setText(
+                "webhook token 已生成，但钥匙串写入未持久化：当前进程可用，"
+                "重启后会变；请检查系统凭据服务。"
+            )
             return
         self._refresh_status()
         self.status.setText("已生成新 webhook token；重启桌宠后监听生效。")

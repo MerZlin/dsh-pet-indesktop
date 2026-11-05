@@ -55,8 +55,13 @@ class QqRuntime:
             webhook_token = secrets.token_hex(16)
             try:
                 credentials.set(OWNER, "webhook_token", webhook_token)
+                logger.info("qq webhook token generated")
             except Exception:
                 logger.warning("qq webhook token save failed")
+            if not self._credential_persisted(credentials, "webhook_token"):
+                logger.warning(
+                    "qq webhook token generated but not persisted; it will change after restart"
+                )
         try:
             self._server = webhook.start(
                 OWNER,
@@ -133,6 +138,17 @@ class QqRuntime:
             return str(credentials.get(OWNER, "access_token") or "")
         except Exception:
             return ""
+
+    @staticmethod
+    def _credential_persisted(credentials, key: str) -> bool:
+        """回读校验；没有 persisted() 的替身按已持久化处理。"""
+        checker = getattr(credentials, "persisted", None)
+        if not callable(checker):
+            return True
+        try:
+            return bool(checker(OWNER, key))
+        except Exception:  # noqa: BLE001 - 回读失败等于没持久化
+            return False
 
     # ---------------------------------------------------------------- 入站
 

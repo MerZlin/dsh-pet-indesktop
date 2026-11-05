@@ -357,3 +357,35 @@ def test_pack_download_dir_prefers_the_app_directory(tmp_path: Path) -> None:
     finally:
         page.dispose()
         page.deleteLater()
+
+
+def test_pointer_schema_that_is_not_a_number_is_a_roots_error() -> None:
+    with pytest.raises(storage_roots.RootsError):
+        storage_roots.parse_pointer({"schema": "v1"}, base_dir=Path("."))
+
+
+def test_cleanup_refuses_a_relative_old_root(tmp_path: Path, monkeypatch) -> None:
+    work = tmp_path / "work"
+    victim = work / "victim"
+    victim.mkdir(parents=True)
+    (victim / "keep.txt").write_text("x", encoding="utf-8")
+    root = tmp_path / "new"
+    root.mkdir()
+    storage_roots.write_journal(
+        root, old_root="victim", pointer_path=tmp_path / "p.json", kind="data"
+    )
+    monkeypatch.chdir(work)
+    assert storage_roots.cleanup_moved_source(root) is False
+    assert (victim / "keep.txt").read_text(encoding="utf-8") == "x"
+    assert storage_roots.read_journal(root) is None
+
+
+def test_cleanup_refuses_a_drive_root(tmp_path: Path) -> None:
+    root = tmp_path / "new"
+    root.mkdir()
+    storage_roots.write_journal(
+        root, old_root=Path(tmp_path.anchor), pointer_path=tmp_path / "p.json", kind="data"
+    )
+    assert storage_roots.cleanup_moved_source(root) is False
+    assert root.is_dir()
+    assert storage_roots.read_journal(root) is None

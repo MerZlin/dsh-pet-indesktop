@@ -1475,6 +1475,7 @@ class ChatWindow(QDialog):
             activity = item.get("activity") or []
             if reasoning or activity:
                 bubble.restore_thinking(reasoning, list(activity))
+        self._animate_latest_images()
         self._set_empty_state(not self._messages)
         self._set_busy(False)
         self._bottom()
@@ -1486,6 +1487,7 @@ class ChatWindow(QDialog):
         role = str(role or "user")
         self._messages.append({"role": role, "content": text})
         self._add_bubble(role, text)
+        self._animate_latest_images()
         self._bottom(always=role == "user")
 
     def begin_stream(self) -> None:
@@ -1562,6 +1564,7 @@ class ChatWindow(QDialog):
             bubble.finish_thinking()
             bubble.set_content(final)
             bubble.set_state(MessageBubble.STATE_NORMAL)
+        self._animate_latest_images()
         self._set_busy(False)
         self._bottom()
 
@@ -1651,6 +1654,16 @@ class ChatWindow(QDialog):
         QTimer.singleShot(0, self, self._update_conversation_height)
         self._bottom(always=role == "user")
         return bubble
+
+    def _animate_latest_images(self) -> None:
+        """只有最后一条助手消息的图起播 GIF；更早的消息画首帧。"""
+        latest = None
+        for bubble in self._bubbles:
+            if bubble.role == "assistant":
+                latest = bubble
+        for bubble in self._bubbles:
+            if bubble.has_inline_images:
+                bubble.set_animate_images(bubble is latest)
 
     def _clear_message_rows(self) -> None:
         # 首尾两个 spacer 保留：顶部负责短会话底部对齐，底部固定 0。

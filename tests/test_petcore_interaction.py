@@ -406,3 +406,83 @@ def test_classic_left_click_still_pets(window, monkeypatch):
     QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=QPoint(10, 10))
 
     assert len(clicks) == 1
+
+def _paint_half_image(window) -> None:
+    """左半不透明、右半透明的帧：用来验证镜像命中（朝右时左右应互换）。"""
+    from PySide6.QtGui import QImage, QPixmap
+
+    image = QImage(window.width(), window.height(), QImage.Format.Format_ARGB32)
+    image.fill(0)
+    half = window.width() // 2
+    for y in range(window.height()):
+        for x in range(half):
+            image.setPixelColor(x, y, Qt.GlobalColor.black)
+    window._image = image
+    window._pixmap = QPixmap.fromImage(image)
+
+
+def test_mirrored_pet_hit_test_follows_the_painted_frame(window) -> None:
+    _paint_half_image(window)
+    left = QPoint(window.width() // 4, window.height() // 2)
+    right = QPoint(window.width() * 3 // 4, window.height() // 2)
+
+    window.state.facing = "left"
+    assert window.is_transparent_at(left) is False
+    assert window.is_transparent_at(right) is True
+
+    window.state.facing = "right"
+    # 朝右时 paintEvent 做了水平翻转：可见的左半身体应该在右边命中。
+    assert window.is_transparent_at(left) is True
+    assert window.is_transparent_at(right) is False
+
+
+def test_squash_clock_starts_at_the_first_draw(window) -> None:
+    clock = [100.0]
+    window.effects._clock = lambda: clock[0]
+    window.effects.start_squash(220)
+    # 点击处理里后面的台词/气泡卡了 5 秒：墙钟过去多久都不算 Q 弹进度。
+    clock[0] += 5.0
+    assert window.effects.squash_progress() == 0.0
+    window.effects.squash_rect()
+    clock[0] += 0.11
+    assert 0.0 < window.effects.squash_progress() < 1.0
+    _, _, width, height = window.effects.squash_rect()
+    assert width > window.width() and height < window.height()
+
+
+def test_click_release_defers_sound_and_still_starts_squash(window, monkeypatch) -> None:
+    resolved: list[int] = []
+    monkeypatch.setattr(
+        window, "_click_sound_candidates", lambda: resolved.append(1) or []
+    )
+    QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=QPoint(200, 200))
+    QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=QPoint(200, 200))
+
+    # 音效解析/播放已经挪到点击反馈之后：松手当下不碰音源，Q 弹照常起表。
+    assert resolved == []
+    assert window.effects.squash_active is True
+
+
+def test_click_squash_survives_click_clip_failure(window, monkeypatch) -> None:
+    monkeypatch.setattr(window, "_pick_manual", lambda *args, **kwargs: object())
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("clip backend")
+
+    monkeypatch.setattr(window, "_play_spec", boom)
+    window._on_click()
+    assert window.effects.squash_active is True
+
+
+def test_warm_interaction_assets_respects_sound_toggle_and_cap(window, monkeypatch) -> None:
+    prepared: list = []
+    monkeypatch.setattr(window.sound, "prepare", lambda path: prepared.append(path) or True)
+
+    window.config.set("click_sound", False)
+    window._warm_interaction_assets()
+    assert prepared == []
+
+    window.config.set("click_sound", True)
+    window._warm_interaction_assets()
+    assert prepared
+    assert len(prepared) <= 1 + window._WARM_SOUND_LIMIT

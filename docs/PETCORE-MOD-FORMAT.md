@@ -268,6 +268,35 @@ register_search_terms(row, "每日一句", "今日台词", "连说")
 `persona_presets/*.json` 永远只读。人格提示词上限 20000 字；`ai_system_prompt`
 与人格卡共用同一上限，保存/归一化都按它校验。
 
+**人格卡口径（2026-11-04 起，现代角色卡）**：统一的十一节骨架——你是谁 / 角色扮演约定 /
+最高原则 / 说话方式（去 AI 味）/ 回答长度与节奏 / 人格内核 / 情绪与关系 / 梗与口癖 /
+示例对白 / 小习惯与彩蛋 / 边界。`二、角色扮演约定` 必须写明「你就是在过自己的日子」、
+第一人称、先接人再谈事、允许情绪与主动起话头、不复述/不总结/不解释自己是 AI；
+`五、回答长度与节奏` 默认 **六到八句话**。新增卡照此骨架写，
+`tests/test_petcore_ai_persona.py::test_modern_persona_cards_are_role_play_ready`
+会校验（含唯一的 `{name}`）。
+
+### 8.2 AI 表情包清单与图片消息（2026-11-03）
+
+`ai.chat` 的表情包目录跟随 `easter_egg_image_dir`（空 = `assets/big_blue_fat_fish`），
+与彩蛋菜单同口径；用户换目录后自动用新目录。目录里可放 `meme-manifest.json`：
+
+```json
+{"version": 1, "items": [
+  {"file": "happy.gif", "caption": "开心到转圈", "tags": ["happy", "daily"],
+   "keywords": ["开心", "转圈"]}
+]}
+```
+
+没有 manifest 时文件名 stem 当 caption；坏 JSON / 指向不存在文件的条目直接忽略。
+模型只拿到文件名 / caption / tags（最多 60 张，目录更大时等距抽样），回复末尾写
+`[表情: 文件名或标签]`；runtime 只在清单内解析，**绝不把模型给的名字当路径**，
+未命中时按回复关键词再退随机。开关是全局 `ai_meme_reply_enabled`（默认关）。
+
+聊天窗的 Markdown 图片：本地文件与 `data:` URL 走内联贴纸控件（逻辑边长 ≤240，
+GIF 用 `AnimatedImage`；历史消息只画首帧，最新一条起播）；`http(s)` 不自动下载，
+显示 `[图片：alt]`。图片语法被模型包进「只含这一张本地图」的围栏代码块时会解包。
+
 
 ## 9. Core 内置特性与 `host_page`（P8）
 
@@ -756,7 +785,14 @@ worker 只依赖这些签名，不改契约；主模型改契约必须同批更�
 - 会话：入站写 `ChatPort.ingest({channel:"qq", conversation_id:"group:<id>"|"private:<id>",
   role,text,sender,sender_id,external_id,ts})`；出站用 `ChatPort.register_channel("qq", on_submit)`。
 - 凭据：`im.qq/access_token`、`im.qq/webhook_token` 只进钥匙串；`config.extra` 只放
-  `im_qq_*` 偏好（白名单/端口/回复模式），单值 ≤4KB。
+  `im_qq_*` 偏好（白名单/端口/回复模式），单值 ≤4KB。设置页从宿主的
+  `api_credentials` 取共享实例（不是 `credentials`），写入后回读校验；未持久化时
+  明确提示「重启后会变」，不谎报成功。
+- 入站鉴权：`WebhookPort` 接受 `X-Webhook-Token`、`Authorization: Bearer <t>`、裸
+  `Authorization: <t>`（NapCat HTTP 客户端的实际形态）、`?token=` 与
+  `?access_token=`；路径容忍一个尾斜杠。仍只绑 `127.0.0.1`、常量时间比较。
+- 气泡：开启「全屏自动隐藏」时全屏程序上方不冒气泡（消息仍会入库）；这是用户设置
+  的既定语义，不是 QQ 链路丢消息。
 - `MemoryPort`（core）提供 `remember/recall/render_prompt/stats/clear/export`；
   `ai.chat` 在无端口时回退旧 JSONL。`WebhookPort.start(owner, port, path, token, handler)`
   只绑 `127.0.0.1`，空 token 拒绝启动，body ≤1MiB。

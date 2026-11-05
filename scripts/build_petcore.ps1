@@ -102,6 +102,10 @@ $pyiArgs = @(
     "--icon", "$root/assets/icon.ico",
     "--paths", $root,
     "--add-data", "$root/assets;assets",
+    # 点击音效的许可正文只写在 THIRD_PARTY_NOTICES.md：素材随包就必须带声明
+    # （duck 的 MIT 全文、Deep!Seek!/to鲸wu 的来源登记都在第 1/10 节）。
+    "--add-data", "$root/THIRD_PARTY_NOTICES.md;.",
+    "--add-data", "$root/LICENSE;.",
     # DSH 桥接/通道插件随包分发；设置页「安装/更新 DSH 通道」从这里拷贝。
     "--add-data", "$root/integrations;integrations",
     # 右键菜单默认布局随包分发；PyInstaller 只收集 .py，漏掉这份 JSON 会让

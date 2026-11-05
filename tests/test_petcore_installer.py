@@ -126,6 +126,15 @@ def test_build_collects_dynamic_festival_calendar_dependency():
     assert Solar.fromYmd(2032, 2, 29).getLunar().getSolar().toYmd() == '2032-02-29'
 
 
+def _is_existing_only_refresh(line: str) -> bool:
+    """已装扩展的升级同步行：Check 保证只在目录已存在时写，不会让全新安装多装。"""
+    return (
+        "Check:" in line
+        and "DirExists(ExpandConstant('{app}\\mods\\" in line
+        and "not IsTaskSelected('mod_" in line
+    )
+
+
 def test_every_bundled_mod_entry_is_gated_by_a_task() -> None:
     """每条 mod `[Files]` 行都必须带 `Tasks:`，否则「不勾选也写盘」（AUD-39）。"""
     text = _iss_text()
@@ -136,6 +145,6 @@ def test_every_bundled_mod_entry_is_gated_by_a_task() -> None:
             continue
         if "mods\\" not in stripped and "mods/" not in stripped:
             continue
-        if "Tasks:" not in stripped:
+        if "Tasks:" not in stripped and not _is_existing_only_refresh(stripped):
             offenders.append(stripped)
     assert not offenders, offenders

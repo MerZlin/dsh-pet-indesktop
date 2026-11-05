@@ -541,3 +541,89 @@ def test_no_retry_once_content_was_emitted(monkeypatch) -> None:
     assert result.text == "半条"
     assert result.end_reason == "interrupted"
     assert calls == [None]
+
+
+# ---------------------------------------------------------------- 工具调用兜底
+
+
+def _sse_tool_delta(*, content: str = "", finish: str = "") -> list[bytes]:
+    event: dict = {"choices": [{"delta": {}}]}
+    choices = event["choices"]
+    if content:
+        choices[0]["delta"]["content"] = content
+    choices[0]["delta"]["tool_calls"] = [
+        {
+            "index": 0,
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "run_command", "arguments": '{"cmd":"dir"}'},
+        }
+    ]
+    if finish:
+        choices[0]["finish_reason"] = finish
+    return [
+        f"data: {json.dumps(event, ensure_ascii=False)}\n".encode(),
+        b"\n",
+        b"data: [DONE]\n",
+        b"\n",
+    ]
+
+
+def test_native_tool_calls_without_content_are_flagged(monkeypatch) -> None:
+    """模型只回原生 tool_calls、没有正文：不能当成一条空回答 done。"""
+    calls = _fake_urlopen(monkeypatch, [lambda: _FakeStream(_sse_tool_delta(finish="tool_calls"))])
+    result = stream_chat(_request(1), [{"role": "user", "content": "hi"}], timeout=5.0)
+
+    assert result.text == ""
+    assert result.end_reason == "tool_calls"
+    assert result.incomplete is True
+    assert calls == [None]
+
+
+def test_textual_tool_call_only_reply_is_flagged(monkeypatch) -> None:
+    """正文里只有一段工具调用（模型把调用当文本写出来）：清理后算 tool_calls。"""
+    text = '<tool_call>{"name": "run_command", "arguments": {"cmd": "dir"}}</tool_call>'
+    _fake_urlopen(monkeypatch, [lambda: _FakeStream(_sse_text(text))])
+    result = stream_chat(_request(1), [{"role": "user", "content": "hi"}], timeout=5.0)
+
+    assert result.text == ""
+    assert result.end_reason == "tool_calls"
+    assert result.incomplete is True
+
+
+def test_textual_tool_call_mixed_with_prose_keeps_the_prose(monkeypatch) -> None:
+    text = (
+        "我先说说思路。\n"
+        '<tool_call>{"name": "read_file", "arguments": {"path": "a.txt"}}</tool_call>\n'
+        "结论是这样做。"
+    )
+    _fake_urlopen(monkeypatch, [lambda: _FakeStream(_sse_text(text))])
+    result = stream_chat(_request(1), [{"role": "user", "content": "hi"}], timeout=5.0)
+
+    assert "我先说说思路。" in result.text
+    assert "结论是这样做。" in result.text
+    assert "tool_call" not in result.text
+    assert result.end_reason == "done"
+    assert result.incomplete is False
+
+
+def test_tool_call_shaped_json_fence_is_removed(monkeypatch) -> None:
+    text = (
+        "```json\n"
+        '{"name": "search", "arguments": {"query": "x"}}\n'
+        "```"
+    )
+    _fake_urlopen(monkeypatch, [lambda: _FakeStream(_sse_text(text))])
+    result = stream_chat(_request(1), [{"role": "user", "content": "hi"}], timeout=5.0)
+
+    assert result.text == ""
+    assert result.end_reason == "tool_calls"
+
+
+def test_plain_json_code_block_is_not_mistaken_for_a_tool_call(monkeypatch) -> None:
+    text = '```json\n{"name": "Alice", "age": 3}\n```'
+    _fake_urlopen(monkeypatch, [lambda: _FakeStream(_sse_text(text))])
+    result = stream_chat(_request(1), [{"role": "user", "content": "hi"}], timeout=5.0)
+
+    assert "Alice" in result.text
+    assert result.end_reason == "done"

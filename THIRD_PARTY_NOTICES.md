@@ -336,3 +336,18 @@ headless，本机两个发行名同版本并存、都提供 `cv2` 顶层模块�
   `scripts/export_android_assets.py::copy_notices`，2026-10-17 起）。
 - 手机使用的 WebP 动画与图标由第 2 节角色素材派生，继续保留其署名和
   个人非商业使用限制。工具与验收说明见 [Android 文档](docs/ANDROID.md)。
+
+## 10. 用户提供的点击音效包（`Deep!Seek!` / `to鲸wu`）
+
+- **Files**（每个目录同时含原始 mp3 与转码后的同名 44.1kHz/16-bit PCM wav）：
+  - `assets/sounds/Deep!Seek!/`（11 组）
+  - `assets/sounds/to鲸wu/`（5 组）
+- **Origin**：文件由项目所有者从本机 QQ 音频片段目录（`音频片段/Deep!Seek!`、
+  `音频片段/to鲸wu`）提供，作为内置点击音效包随桌面产物分发。
+- **License / 权利口径**：素材随附方**未提供**第三方许可声明或来源授权文件；
+  本仓库仅记录来源，不对其可再分发性作任何陈述。若后续确认版权/授权限制，
+  应整体移除这两个目录并在 `petcore/config.py::_CLICK_SOUND_BUILTINS` 与
+  `pet/config.py::_CLICK_SOUND_BUILTINS` 同步撤下对应 id（解析器对未知 id 返回空表，
+  不会回退到别的包）。
+- **转码说明**：wav 由 QtMultimedia 的 `QAudioDecoder` 离线转出（统一 44.1kHz /
+  双声道 / Int16），只为免去每次点击新建 `QMediaPlayer`；mp3 原文件保留不动。

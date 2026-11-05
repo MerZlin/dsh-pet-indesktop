@@ -12,7 +12,7 @@
 | `reminder.todo` | 1.1.0 | 按宠物隔离的待办 CRUD、一次性/每日、提前/到期与下一条预览 |
 | `voice.chime` | 1.1.1 | 语音报时与节日让位（走 core `SpeechPort`：edge / SAPI / 豆包 / MiMo） |
 | `media.music` | 1.2.0 | Now Playing（SMTC）+ 歌词 + 唱跳动画 + 播放器启动 |
-| `ai.chat` | 1.4.0 | AI 对话 + 看图 + 截图提问 + 快速对话编排（需先配 API 服务与密钥） |
+| `ai.chat` | 1.6.0 | AI 对话 + 看图 + 截图提问 + 快速对话编排 + 可选表情包回复（彩蛋目录，GIF 会动；需先配 API 服务与密钥） |
 | `tool.ocr` | 1.0.0 | 截图 OCR（本地引擎 / 已配置 AI 兜底） |
 | `tool.weather` | 1.0.0 | 天气实况（中国天气网直连 + open-meteo 代理兜底） |
 | `tool.file-reader` | 1.0.0 | 拖文件解读（读文本类文件 → AI 摘要，只读不删） |

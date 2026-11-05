@@ -90,6 +90,9 @@ Source: "..\examples\petcore-mods\media.music\*"; DestDir: "{app}\mods\media.mus
 Source: "trust_marker.txt"; DestDir: "{app}\mods\media.music"; DestName: ".trusted"; Flags: ignoreversion; Tasks: mod_music
 Source: "..\examples\petcore-mods\ai.chat\*"; DestDir: "{app}\mods\ai.chat"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"; Tasks: mod_aichat
 Source: "trust_marker.txt"; DestDir: "{app}\mods\ai.chat"; DestName: ".trusted"; Flags: ignoreversion; Tasks: mod_aichat
+; ai.chat 已装过的机器：升级安装时同步包内文件（人格卡在包的只读目录，用户卡在数据目录，
+; 不会被覆盖）。没装过的机器仍然「不勾选完全不写盘」。
+Source: "..\examples\petcore-mods\ai.chat\*"; DestDir: "{app}\mods\ai.chat"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"; Check: DirExists(ExpandConstant('{app}\mods\ai.chat')) and not IsTaskSelected('mod_aichat')
 Source: "..\examples\petcore-mods\tool.ocr\*"; DestDir: "{app}\mods\tool.ocr"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"; Tasks: mod_ocr
 Source: "trust_marker.txt"; DestDir: "{app}\mods\tool.ocr"; DestName: ".trusted"; Flags: ignoreversion; Tasks: mod_ocr
 Source: "..\examples\petcore-mods\tool.weather\*"; DestDir: "{app}\mods\tool.weather"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"; Tasks: mod_weather

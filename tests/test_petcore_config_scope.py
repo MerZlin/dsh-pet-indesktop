@@ -162,3 +162,15 @@ def test_pack_mirror_policy_is_global_and_normalized(tmp_path: Path) -> None:
     scoped.set("pack_mirror_policy", "github")
     assert parent.get("pack_mirror_policy") == "github"
     assert child.get("pack_mirror_policy") == "auto"
+
+
+def test_ai_meme_reply_is_a_global_bool(tmp_path: Path) -> None:
+    from petcore.config import GLOBAL_CONFIG_KEYS
+
+    assert "ai_meme_reply_enabled" in GLOBAL_CONFIG_KEYS
+    config = Config(tmp_path)
+    assert config.get("ai_meme_reply_enabled") is False
+    config.set("ai_meme_reply_enabled", True)
+    assert config.get("ai_meme_reply_enabled") is True
+    config.set("ai_meme_reply_enabled", "not-a-bool")
+    assert config.get("ai_meme_reply_enabled") is False

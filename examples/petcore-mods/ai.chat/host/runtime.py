@@ -22,9 +22,17 @@ from pathlib import Path
 
 from petcore.contracts.api import WebSearchOptions
 from petcore.contracts.speech import SpeechRequest
+from petcore.mods import meme_images
 
 from .animation_semantics import choose_animation, choose_thinking
-from .constants import LOOK_SCREEN_COOLDOWN_S, MAX_HISTORY, OWNER, QUICK_HISTORY
+from .constants import (
+    LOOK_SCREEN_COOLDOWN_S,
+    MAX_HISTORY,
+    MEME_CATALOG_LIMIT,
+    OWNER,
+    QUICK_HISTORY,
+    TOOL_UNSUPPORTED_TEXT,
+)
 from .memory import MemoryStore, extract_memory, format_context
 from .persona_presets import load_presets, resolve_prompt
 from .proactive import PRE_CUE_MS, PRE_CUE_TEXT, ProactiveWatcher
@@ -33,6 +41,7 @@ from .prompts import (
     ask_messages,
     chat_messages,
     look_screen_messages,
+    meme_prompt,
     ocr_messages,
     translate_messages,
 )
@@ -89,6 +98,8 @@ class AiChatRuntime:
         self._last_look: dict[int, float] = {}
         self._proactive = ProactiveWatcher(self)
         self._chat_anim_rng = random.Random()
+        self._meme_rng = random.Random()
+        self._meme_cache = None
         self._last_chat_anim_at = 0.0
         self._last_chat_anim_name = ""
         self._reply_voices: dict[int, ReplyVoicePlayer] = {}
@@ -234,13 +245,64 @@ class AiChatRuntime:
         self._persona_cache = presets
         return presets
 
-    def _prompt(self) -> str:
-        return resolve_prompt(
+    def _prompt(self, *, meme: bool = False) -> str:
+        base = resolve_prompt(
             self._config_value("ai_persona", ""),
             self._config_value("ai_system_prompt", ""),
             self._character_name(),
             self._persona_presets(),
         )
+        if meme and self._meme_enabled():
+            catalog = self._meme_catalog()
+            if catalog.items:
+                base += "\n\n" + meme_prompt(meme_images.prompt_listing(catalog))
+        return base
+
+    def _meme_enabled(self) -> bool:
+        return bool(self._config_value("ai_meme_reply_enabled", False))
+
+    def _meme_catalog(self):
+        raw = self._config_value("easter_egg_image_dir", "")
+        folder = meme_images.directory(raw)
+        try:
+            mtime = float(folder.stat().st_mtime)
+        except OSError:
+            mtime = 0.0
+        try:
+            manifest_mtime = float(
+                (folder / meme_images.MANIFEST_NAME).stat().st_mtime
+            )
+        except OSError:
+            manifest_mtime = 0.0
+        key = (
+            str(folder),
+            mtime,
+            manifest_mtime,
+            MEME_CATALOG_LIMIT,
+        )
+        cached = getattr(self, "_meme_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        result = meme_images.catalog(folder, MEME_CATALOG_LIMIT)
+        self._meme_cache = (key, result)
+        return result
+
+    def _apply_meme_reply(self, text: str, slot: int) -> tuple[str, str]:
+        """把 [表情: …] 换成 Markdown 图片；返回 (显示文本, 朗读/记忆文本)。"""
+        del slot
+        if not self._meme_enabled():
+            return text, text
+        catalog = self._meme_catalog()
+        if not catalog.items:
+            return text, text
+        clean, image = meme_images.apply_meme(text, catalog, self._meme_rng)
+        if image is None:
+            return clean, clean
+        try:
+            path = image.path.resolve().as_posix()
+        except OSError:
+            path = image.path.as_posix()
+        return f"{clean}\n\n![表情包](<{path}>)", clean
 
     def _vision_enabled(self) -> bool:
         return bool(self._config_value("ai_vision_enabled", True))
@@ -709,7 +771,7 @@ class AiChatRuntime:
             if item.get("image_data_url")
         ]
         self._remember_text(text, slot)
-        messages = chat_messages(self._prompt(), history, text, images, limit=MAX_HISTORY)
+        messages = chat_messages(self._prompt(meme=True), history, text, images, limit=MAX_HISTORY)
         memory = self._memory_context(text, slot)
         if memory:
             messages.insert(1, {"role": "system", "content": memory})
@@ -734,7 +796,7 @@ class AiChatRuntime:
             history = []
         self._remember_text(text, slot)
         messages = chat_messages(
-            self._prompt(), history, text, [], limit=QUICK_HISTORY
+            self._prompt(meme=True), history, text, [], limit=QUICK_HISTORY
         )
         memory = self._memory_context(text, slot)
         if memory:
@@ -901,12 +963,21 @@ class AiChatRuntime:
                 self._request_callback(self._quick_cancels, slot, cancel, failed, final=True)
             else:
                 final = "".join(partial) if cancel.is_set() or getattr(result, "cancelled", False) else str(getattr(result, "text", "") or "".join(partial))
+                tool_only = (
+                    str(getattr(result, "end_reason", "") or "") == "tool_calls"
+                    and not final.strip()
+                )
+                if tool_only:
+                    final = TOOL_UNSUPPORTED_TEXT
+                spoken = final
+                if not cancel.is_set() and not tool_only and final.strip():
+                    final, spoken = self._apply_meme_reply(final, slot)
 
                 def finished():
                     quick.done(OWNER, final, pet_slot=slot)
                     if not cancel.is_set():
-                        self._play_chat_animation(final, user_text, force=True)
-                        self._speak_reply(final, slot)
+                        self._play_chat_animation(spoken, user_text, force=True)
+                        self._speak_reply(spoken, slot)
 
                 self._request_callback(self._quick_cancels, slot, cancel,
                     finished, final=True)
@@ -988,15 +1059,25 @@ class AiChatRuntime:
                 self._request_callback(self._cancels, slot, cancel, failed, final=True)
             else:
                 final = "".join(partial) if cancel.is_set() or getattr(result, "cancelled", False) else str(getattr(result, "text", "") or "".join(partial))
-                if getattr(result, "incomplete", False) and final:
+                tool_only = (
+                    str(getattr(result, "end_reason", "") or "") == "tool_calls"
+                    and not final.strip()
+                )
+                if tool_only:
+                    # core 不执行工具：不能让用户拿到一个被删掉的空气泡。
+                    final = TOOL_UNSUPPORTED_TEXT
+                elif getattr(result, "incomplete", False) and final:
                     # 半条回答必须让用户看得见（AUD-15）：否则下次翻会话会以为这就是全部。
                     final += "\n\n（这次回答没有正常结束，内容可能不完整。请重试或重新提问。）"
+                spoken = final
+                if not cancel.is_set() and not tool_only and final.strip():
+                    final, spoken = self._apply_meme_reply(final, slot)
 
                 def finished():
                     chat.done(OWNER, final, pet_slot=slot)
                     if not cancel.is_set():
-                        self._play_chat_animation(final, user_text, force=True)
-                        self._speak_reply(final, slot)
+                        self._play_chat_animation(spoken, user_text, force=True)
+                        self._speak_reply(spoken, slot)
 
                 self._request_callback(self._cancels, slot, cancel,
                     finished, final=True)
@@ -1039,10 +1120,13 @@ class AiChatRuntime:
                 publish(lambda: fail(reason))
                 return
             text = str(getattr(result, "text", "") or "").strip()
+            tool_only = str(getattr(result, "end_reason", "") or "") == "tool_calls"
+            if tool_only and not text:
+                text = TOOL_UNSUPPORTED_TEXT
             if not text:
                 publish(lambda: fail("empty_reply"))
                 return
-            if getattr(result, "incomplete", False):
+            if getattr(result, "incomplete", False) and not tool_only:
                 text += "\n\n（这次回答没有正常结束，内容可能不完整。）"
             publish(lambda: on_done(text))
 

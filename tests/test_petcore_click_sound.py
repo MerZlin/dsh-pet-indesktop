@@ -232,3 +232,84 @@ def test_interaction_page_writes_and_discards_the_sound_pack(app, tmp_path: Path
     assert page.sound_pack_combo.currentData() == "builtin:default"
     assert page.dirty() is False
     page.dispose()
+
+
+@pytest.mark.parametrize(
+    ("pack_id", "count"),
+    [("Deep!Seek!", 11), ("to鲸wu", 5)],
+)
+def test_new_builtin_packs_resolve_the_converted_wav_files(pack_id: str, count: int) -> None:
+    candidates = resolve_click_sound_candidates({"kind": "builtin", "id": pack_id}, ASSET_ROOT)
+    assert len(candidates) == count
+    assert all(path.suffix.lower() == ".wav" for path in candidates)
+    assert all(path.is_file() for path in candidates)
+
+
+def test_builtin_pack_registry_is_consistent_across_config_and_ui() -> None:
+    from petcore.config import _CLICK_SOUND_BUILTINS
+    from petcore.media.click_sound import BUILTIN_PACK_DIRS
+    from petcore.ui.settings.page_interaction import BUILTIN_SOUND_PACKS
+
+    ui_ids = {pack_id for pack_id, _label in BUILTIN_SOUND_PACKS}
+    assert ui_ids == set(_CLICK_SOUND_BUILTINS)
+    assert set(BUILTIN_PACK_DIRS) | {"default"} == set(_CLICK_SOUND_BUILTINS)
+
+
+def test_legacy_pack_registry_matches_petcore() -> None:
+    from pet.click_sound import BUILTIN_PACK_DIRS as legacy_dirs
+    from pet.config import _CLICK_SOUND_BUILTINS as legacy_ids
+    from pet.settings_widgets import BUILTIN_CLICK_PACKS as legacy_ui
+
+    from petcore.config import _CLICK_SOUND_BUILTINS
+
+    assert set(legacy_ids) == set(_CLICK_SOUND_BUILTINS)
+    assert set(legacy_dirs) | {"default"} == set(legacy_ids)
+    assert {pack_id for pack_id, _label in legacy_ui} == set(legacy_ids)
+
+
+def test_interaction_page_offers_every_builtin_pack(app, tmp_path: Path) -> None:
+    from petcore.ui.settings.page_interaction import BUILTIN_SOUND_PACKS, InteractionPage
+
+    page = InteractionPage(_StubHost(tmp_path))
+    for pack_id, _label in BUILTIN_SOUND_PACKS:
+        assert page.sound_pack_combo.findData("builtin:" + pack_id) >= 0
+
+    page.sound_pack_combo.setCurrentIndex(page.sound_pack_combo.findData("builtin:to鲸wu"))
+    assert page._sound_pack == {"kind": "builtin", "id": "to鲸wu", "path": ""}
+    assert "assets/sounds/to鲸wu" in page.sound_path_edit.text()
+    page.dispose()
+
+
+def test_folder_pack_survives_unreadable_directory(tmp_path: Path, monkeypatch) -> None:
+    folder = tmp_path / "clips"
+    _touch(folder / "a.wav")
+    calls: list[Path] = []
+
+    def explode(self: Path):
+        calls.append(self)
+        raise OSError("network path gone")
+
+    monkeypatch.setattr(Path, "iterdir", explode)
+    assert resolve_click_sound_candidates(
+        {"kind": "folder", "path": str(folder)}, tmp_path
+    ) == []
+    assert calls
+
+
+def test_folder_pack_candidates_are_cached(tmp_path: Path, monkeypatch) -> None:
+    folder = tmp_path / "clips"
+    _touch(folder / "a.wav")
+    pack = {"kind": "folder", "path": str(folder)}
+    first = resolve_click_sound_candidates(pack, tmp_path)
+    assert [path.name for path in first] == ["a.wav"]
+
+    scans: list[Path] = []
+    original = Path.iterdir
+
+    def counting(self: Path):
+        scans.append(self)
+        return original(self)
+
+    monkeypatch.setattr(Path, "iterdir", counting)
+    assert resolve_click_sound_candidates(pack, tmp_path) == first
+    assert scans == []

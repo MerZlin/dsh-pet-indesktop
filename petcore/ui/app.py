@@ -174,7 +174,15 @@ class _PresentationAdapter:
             return False
         window = self._window()
         settings = getattr(self._host, "settings_dialog", None)
-        if window is None or not window.isVisible() or (settings and settings.isVisible()):
+        hidden = window is None or not window.isVisible()
+        settings_open = bool(settings is not None and settings.isVisible())
+        if hidden or settings_open:
+            logger.debug(
+                "presentation dropped: hidden=%s settings=%s owner=%s",
+                hidden,
+                settings_open,
+                owner,
+            )
             return False
         kwargs = {"subtitle": subtitle} if subtitle else {}
         shown = window.say(text, duration_ms, **kwargs) is not False
@@ -686,44 +694,81 @@ class CoreHost:
         return _PresentationAdapter(self)
 
     def attach_window(self, window: PetWindow) -> None:
+        """完整接线：轻量挂窗 + 同步加载扩展/灵动岛（测试、脚本与重载走这里）。"""
+        self.attach_window_shell(window)
+        self.load_features()
+
+    def attach_window_shell(self, window: PetWindow) -> None:
+        """只做首帧前必须的接线：窗口引用与 HostPorts（重活在 load_features）。"""
         self.window = window
         self._active_window = window
         from .ports import build_ports
 
         ports = build_ports(self, window)
         self.ports = ports
+
+    def load_features(self) -> None:
+        """导入内置/用户扩展、注册扩展菜单、按配置建灵动岛（同步完整版）。
+
+        这些是 ``attach`` 段的主要开销（实机 24 次启动：attach 中位 1177ms、最慢
+        4140ms，窗口在 381ms 已 show）：``run()`` 用 :meth:`feature_load_steps`
+        把它们拆成三拍放到首帧之后，直接调用本方法的测试/脚本行为不变。
+        """
+        for step in self.feature_load_steps():
+            step()
+
+    def feature_load_steps(self):
+        """扩展加载的可分批步骤：内置 feature → 用户 mod → 菜单/灵动岛。
+
+        每一拍之间由 ``run()`` 插一次事件循环，让桌宠在加载期间仍能响应点击/
+        继续绘制（单拍阻塞从「整个 attach 段」降到最大的一批导入）。
+        """
+        ports = self.ports
+        if ports is None or self.window is None:
+            return ()
         self.features = FeatureManager(ports, host=self)
-        self.diagnostics.extend(self.features.load_builtin_features())
-        self.diagnostics.extend(self.features.load_builtin_demo())
-        # 是否允许加载已由 loader 判定（全局开关或安装器授信的 `.trusted` 包），
-        # 这里只认 ``mod.enabled``，否则随安装包投放的扩展永远激活不了。
-        user_mods_roots = tuple(path.resolve() for path in paths.user_mods_dirs(self.root))
-        for mod in getattr(self.load_result, "mods", ()) or ():
-            if mod.kind != "feature" or not mod.enabled:
-                continue
-            mod_path = mod.path.resolve()
-            if not any(
-                mod_path == base or base in mod_path.parents for base in user_mods_roots
-            ):
-                continue
-            if mod.manifest.execution != "host-only":
-                self.diagnostics.append(f"{mod.id}: worker feature is not supported yet")
-                continue
-            if not mod.manifest.entrypoint:
-                self.diagnostics.append(f"{mod.id}: missing entrypoint")
-                continue
-            self.diagnostics.extend(
-                self.features.load(
-                    pack=mod.path,
-                    owner=mod.id,
-                    entrypoint=mod.manifest.entrypoint,
-                    config={},
-                )
+        features = self.features
+
+        def load_builtins() -> None:
+            self.diagnostics.extend(features.load_builtin_features())
+            self.diagnostics.extend(features.load_builtin_demo())
+
+        def load_user_mods() -> None:
+            # 是否允许加载已由 loader 判定（全局开关或安装器授信的 `.trusted` 包），
+            # 这里只认 ``mod.enabled``，否则随安装包投放的扩展永远激活不了。
+            user_mods_roots = tuple(
+                path.resolve() for path in paths.user_mods_dirs(self.root)
             )
-        for message in self.diagnostics:
-            logger.warning("feature/mod diagnostic: %s", message)
-        self._register_feature_menus()
-        self.apply_island_settings()
+            for mod in getattr(self.load_result, "mods", ()) or ():
+                if mod.kind != "feature" or not mod.enabled:
+                    continue
+                mod_path = mod.path.resolve()
+                if not any(
+                    mod_path == base or base in mod_path.parents for base in user_mods_roots
+                ):
+                    continue
+                if mod.manifest.execution != "host-only":
+                    self.diagnostics.append(f"{mod.id}: worker feature is not supported yet")
+                    continue
+                if not mod.manifest.entrypoint:
+                    self.diagnostics.append(f"{mod.id}: missing entrypoint")
+                    continue
+                self.diagnostics.extend(
+                    features.load(
+                        pack=mod.path,
+                        owner=mod.id,
+                        entrypoint=mod.manifest.entrypoint,
+                        config={},
+                    )
+                )
+
+        def publish() -> None:
+            for message in self.diagnostics:
+                logger.warning("feature/mod diagnostic: %s", message)
+            self._register_feature_menus()
+            self.apply_island_settings()
+
+        return (load_builtins, load_user_mods, publish)
 
     def _register_feature_menus(self) -> None:
         if self.features is None:
@@ -1779,6 +1824,8 @@ def run(
     mod_dirs,
     instance: str | None = None,
     cache_root: Path | None = None,
+    boot_t0: float | None = None,
+    config_ms: float | None = None,
 ) -> int:
     setup_logging(paths.logs_dir(root))
     if cache_root is not None:
@@ -1788,8 +1835,16 @@ def run(
     started = time.perf_counter()
     stages: list[tuple[str, float]] = []
 
-    def mark(name: str) -> None:
-        stages.append((name, (time.perf_counter() - started) * 1000.0))
+    def mark(name: str, since: float | None = None) -> None:
+        origin = started if since is None else since
+        stages.append((name, (time.perf_counter() - origin) * 1000.0))
+
+    if boot_t0 is not None:
+        # 解释器引导 + 全部导入 + Config.load 之前的那段：以前完全没有埋点。
+        mark("bootstrap", boot_t0)
+    if config_ms is not None:
+        # Config.load 自身（不含之后 import ui.app 的时间；后者算在 bootstrap 里）。
+        stages.append(("config", float(config_ms)))
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(f"dsh-pet-core-{instance}" if instance else "dsh-pet-core")
@@ -1832,7 +1887,7 @@ def run(
     window = manager.create_primary(character)
     mark("character")
     host.window = window
-    host.attach_window(window)
+    host.attach_window_shell(window)
     mark("attach")
     host.memory.start()
     manager.restore()
@@ -1840,6 +1895,29 @@ def run(
     host.tray = _install_tray(host)
     host.install_hotkeys()
     mark("restore")
+
+    def load_features_after_start() -> None:
+        features_t0 = time.perf_counter()
+        steps = tuple(host.feature_load_steps())
+
+        def run_step(index: int = 0) -> None:
+            if index < len(steps):
+                try:
+                    steps[index]()
+                except Exception:  # noqa: BLE001 - 扩展加载失败不许拖垮启动
+                    logger.warning("feature load step failed", exc_info=True)
+                QTimer.singleShot(0, lambda: run_step(index + 1))
+                return
+            host.reload_menu()
+            elapsed = (time.perf_counter() - features_t0) * 1000.0
+            stages.append(("features", elapsed))
+            logger.info("扩展加载耗时 features=%.0fms", elapsed)
+
+        run_step()
+
+    # 首帧之后再做扩展导入与灵动岛构造：窗口已经能响应点击，菜单/岛稍后补齐。
+    # 120ms 是给事件循环先处理首帧绘制（0ms 定时器可能排在 paint 之前）。
+    QTimer.singleShot(120, load_features_after_start)
     # 全屏自动隐藏：单实例监视器，1 Hz 探测；配置门关闭时不建定时器。
     host.start_fullscreen_hide()
     if str(config.get("frameseq") or "auto") != "off":

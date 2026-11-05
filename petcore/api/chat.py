@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import ssl
 import threading
 import time
@@ -151,7 +152,9 @@ class ChatResult:
 
     ``end_reason`` 取值：``done``（收到 ``[DONE]``/``finish_reason``）、``eof``
     （流提前结束）、``empty``（没有正文也没有思维链）、``cancelled``（用户停止）、
-    ``interrupted``（已有正文后传输中断；``text`` 是保留的半条回答）。
+    ``interrupted``（已有正文后传输中断；``text`` 是保留的半条回答）、
+    ``tool_calls``（模型只回了工具调用，没有可展示正文；core 不执行工具，调用方
+    必须给用户一句能力说明，不能当空白回答丢掉）。
     """
 
     text: str
@@ -211,6 +214,99 @@ def _extract_delta(data: Mapping[str, Any]) -> tuple[str, str, str]:
         reasoning = ""
     finish = first.get("finish_reason") or ""
     return text, reasoning, str(finish or "")
+
+
+def _extract_tool_calls(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """读原生 ``tool_calls``（流式 delta 与一次性 message 两种形状）。
+
+    core 不声明 tools，但模型/网关仍可能回 ``finish_reason="tool_calls"``。
+    这里只用于判定「这条回复不是给用户看的正文」，参数不落盘、不拼接。
+    """
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return []
+    first = choices[0] if isinstance(choices[0], Mapping) else {}
+    delta = first.get("delta") if isinstance(first.get("delta"), Mapping) else {}
+    message = first.get("message") if isinstance(first.get("message"), Mapping) else {}
+    calls = delta.get("tool_calls") or message.get("tool_calls") or []
+    if not isinstance(calls, list):
+        return []
+    return [call for call in calls if isinstance(call, Mapping)]
+
+
+#: 模型把工具调用写进正文的常见外壳。``<|…|>`` 是 chat template 的特殊 token。
+_TOOL_BLOCK_PATTERNS = (
+    re.compile(r"<tool_calls?\b[^>]*>.*?</tool_calls?>", re.DOTALL | re.IGNORECASE),
+    re.compile(r"<function_calls?\b[^>]*>.*?</function_calls?>", re.DOTALL | re.IGNORECASE),
+    re.compile(r"<\|[^|\n]{1,80}\|>"),
+)
+_TOOL_FENCE = re.compile(r"(```|~~~)[ \t]*([A-Za-z0-9_-]*)[ \t]*\n(.*?)\1", re.DOTALL)
+_EMPTY_FENCE = re.compile(r"(```|~~~)[ \t]*[A-Za-z0-9_-]*[ \t]*\n\s*\1", re.DOTALL)
+_TOOL_FENCE_LANGS = frozenset({"", "json", "tool_call", "tool", "function"})
+
+
+def _is_tool_call_object(value: Any) -> bool:
+    """是不是一个「函数调用」形状的 JSON 对象（不误伤普通数据）。"""
+    if not isinstance(value, Mapping):
+        return False
+    if isinstance(value.get("tool"), str) or isinstance(value.get("tool_name"), str):
+        return True
+    function = value.get("function")
+    if isinstance(function, Mapping):
+        return isinstance(function.get("name"), str) and any(
+            key in function for key in ("arguments", "parameters", "args")
+        )
+    name = value.get("name")
+    return isinstance(name, str) and any(
+        key in value for key in ("arguments", "parameters", "args")
+    )
+
+
+def strip_tool_call_text(text: str) -> tuple[str, bool]:
+    """剥离正文里的工具调用外壳；返回 ``(清理后正文, 是否命中)``。
+
+    只删「工具调用形状」的内容：普通 JSON 代码块（没有 name+arguments）原样保留。
+    命中后若只剩空白，调用方据此判断这条回复没有可展示正文。
+    """
+    cleaned = str(text or "")
+    had = False
+    for pattern in _TOOL_BLOCK_PATTERNS:
+        cleaned, count = pattern.subn("", cleaned)
+        had = had or bool(count)
+
+    def _replace_fence(match: re.Match[str]) -> str:
+        nonlocal had
+        language = str(match.group(2) or "").strip().lower()
+        if language not in _TOOL_FENCE_LANGS:
+            return match.group(0)
+        body = str(match.group(3) or "").strip()
+        if not body:
+            return match.group(0)
+        try:
+            payload = json.loads(body)
+        except (TypeError, ValueError):
+            return match.group(0)
+        if not _is_tool_call_object(payload):
+            return match.group(0)
+        had = True
+        return ""
+
+    cleaned = _TOOL_FENCE.sub(_replace_fence, cleaned)
+    if had:
+        # 代码块里原本只有 <tool_call> 时，剥完会留下空围栏。
+        cleaned = _EMPTY_FENCE.sub("", cleaned)
+    stripped = cleaned.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            payload = json.loads(stripped)
+        except (TypeError, ValueError):
+            payload = None
+        if _is_tool_call_object(payload):
+            had = True
+            cleaned = ""
+    if had:
+        cleaned = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", cleaned).strip()
+    return cleaned, had
 
 
 def build_payload(
@@ -867,11 +963,12 @@ def _stream_once(
     plain_lines: list[str] = []
     saw_sse = False
     saw_done = False
+    saw_tool_calls = False
     cancelled = False
 
     def _apply(data_text: str) -> None:
         """处理一个完整 SSE 事件（多行 `data:` 已经按换行拼好）。"""
-        nonlocal finish_reason, saw_done, chunks
+        nonlocal finish_reason, saw_done, saw_tool_calls, chunks
         if data_text == STREAM_DONE:
             saw_done = True
             return
@@ -882,6 +979,8 @@ def _stream_once(
         if not isinstance(payload, Mapping):
             raise errors.NetworkError(reason=errors.PROTOCOL)
         _raise_for_error_frame(payload)
+        if _extract_tool_calls(payload):
+            saw_tool_calls = True
         delta, reasoning, finish = _extract_delta(payload)
         if finish:
             finish_reason = finish
@@ -959,8 +1058,9 @@ def _stream_once(
 
     if interrupted is not None:
         _status(on_status, f"回答被中断（{interrupted}），已保留前面的内容")
+        text, _had_tool_text = strip_tool_call_text("".join(parts))
         return ChatResult(
-            text="".join(parts),
+            text=text,
             chunks=chunks,
             finish_reason=finish_reason,
             reasoning="".join(reasoning_parts),
@@ -976,6 +1076,8 @@ def _stream_once(
         if not isinstance(body, Mapping):
             raise errors.NetworkError(reason=errors.PROTOCOL)
         _raise_for_error_frame(body)
+        if _extract_tool_calls(body):
+            saw_tool_calls = True
         text, reasoning, finish = _extract_delta(body)
         if reasoning:
             reasoning_parts.append(reasoning)
@@ -1005,22 +1107,32 @@ def _stream_once(
             "请换一个更小的思考强度或在服务端调大输出上限。"
         )
 
+    text, had_tool_text = strip_tool_call_text("".join(parts))
+    tool_reply = bool(
+        (finish_reason == "tool_calls" or saw_tool_calls or had_tool_text)
+        and not text.strip()
+        and not cancelled
+        and not _cancelled(cancel)
+    )
+
     if cancelled or _cancelled(cancel):
         end_reason = "cancelled"
+    elif tool_reply:
+        end_reason = "tool_calls"
     elif saw_done or finish_reason:
         end_reason = "done"
-    elif not parts and not reasoning_parts:
+    elif not text and not reasoning_parts:
         end_reason = "empty"
     else:
         end_reason = "eof"
 
     return ChatResult(
-        text="".join(parts),
+        text=text,
         chunks=chunks,
         finish_reason=finish_reason,
         cancelled=cancelled,
         reasoning="".join(reasoning_parts),
-        incomplete=end_reason in {"eof", "empty"},
+        incomplete=end_reason in {"eof", "empty", "tool_calls"},
         end_reason=end_reason,
     )
 

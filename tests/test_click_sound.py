@@ -225,12 +225,13 @@ def test_resolve_click_sound_candidates_and_choose(tmp_path):
     # 3. empty list
     assert click_sound.choose_sound([]) is None
 
-    # 4. builtin duck pack
+    # 4. builtin duck pack: 转码后的 wav 优先，同名 mp3 只做缺 wav 时的兜底
     pack_duck = {"kind": "builtin", "id": "duck", "path": ""}
     duck_candidates = click_sound.resolve_click_sound_candidates(pack_duck)
     assert len(duck_candidates) >= 2
-    assert any(c.name == "Ya1.mp3" for c in duck_candidates)
-    assert any(c.name == "Ya2.mp3" for c in duck_candidates)
+    assert any(c.name == "Ya1.wav" for c in duck_candidates)
+    assert any(c.name == "Ya2.wav" for c in duck_candidates)
+    assert not any(c.suffix.lower() == ".mp3" for c in duck_candidates)
 
 
 def test_window_play_click_sound_uses_pack(monkeypatch, tmp_path):
