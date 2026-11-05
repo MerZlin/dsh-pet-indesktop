@@ -408,6 +408,7 @@
 2. **`SETTINGS-INFORMATION-ARCHITECTURE-2026-08-27.md` 与 `SETTINGS-REDESIGN-Q4-CLASSIFICATION-RESEARCH.md`** — 两者都给出设置页的页面/侧栏归属方案：前者是 2026-08-27 已实现的归属表，后者是 2026-08-31 的分类调研结论（7 个稳定侧栏入口）。同一问题两个版本的答案并列存在。
 3. **`SETTINGS-REDESIGN-Q4-CLASSIFICATION-RESEARCH.md` 与 `SETTINGS-REDESIGN-Q6-Q7-DOMAIN-LAYOUT-DECISION.md`** — 重叠：Q6/Q7 文档第 1 节重复给出"能力域划分规则"（作用对象/用户意图/能力所有权/生命周期/平台差异五条），与 Q4 的结论范围重合；差异主要在布局系统与 skill 评估，可考虑收敛为一份。
 4. **三份 handover 并存**（`DEV-HANDOVER.md` / `HANDOVER_2026-09.md` / `PROJECT_HANDOFF.md`）— 职能相同（交接），基线各异（`feat/voice-chime` 2026-09-16 / `perf/stage-1` 2026-09-03 / v3.1.1 时期），且都未标注彼此取代关系，读者无法判断该读哪一份。
+5. **`PETCORE-FUNCTION-MATRIX-2026-10-22.md` 与 `PETCORE-V43-V44-PARITY-2026-11-05.md`** — 都是「主分支 ↔ petcore」功能矩阵；前者停在 v4.3.4（2026-10-22），后者覆盖到 v4.4.0 并补了 core/mod 归属与重写记录。**以 2026-11-05 快照为当前口径**，旧矩阵保留作历史对照，不删除。
 5. **`DSH-HUMAN-REQUEST-RESEARCH-2026-09-02.md` 与 `DSH-REQUEST-EVENT-CATALOG.md`** — 后者自述基于前者的调研结果，属"调研 + 速查表"的伴生关系，重叠度可控（一份叙述、一份字段表）。**不建议合并**，但建议在两份文档中互相显式标注"速查看 catalog、背景看 research"以消除歧义。
 6. **`PROACTIVE_SCREEN_PLAN.md` 与 `PROACTIVE_SCREEN_IMPLEMENTATION_MANUAL.md`** — 同一功能的"设计方案"与"实施手册"，内容范围大量重合（技术依据、验收清单），且两份都停留在"未动工"状态。建议合并为一份设计档案。
 
@@ -438,7 +439,8 @@
 | [`PETCORE-CHARACTER-PACKS.md`](PETCORE-CHARACTER-PACKS.md) | 角色包目录、动画分类、manifest、move_strides、WebP 帧序列采纳规则。 | 制作角色包、改 `content/legacy.py` 或帧序列采纳逻辑前必读；**打包与导入流程（放哪个目录、三条入口、`pack-character` 的真实产物）见 [PETCORE-MOD-DEVELOPMENT.md](PETCORE-MOD-DEVELOPMENT.md) §9**。 |
 | [`PETCORE-ROADMAP.md`](PETCORE-ROADMAP.md) | 本轮里程碑状态、历史批次 H1–H8.4、当前交付阶段 P0–P6、编号约定（§0）与延后项。 | 规划后续功能迁包、评估重构进度，或分不清「P1」指哪套编号时必读。 |
 | [`PETCORE-MAIN-PARITY-BACKLOG.md`](PETCORE-MAIN-PARITY-BACKLOG.md) | petcore ↔ 主分支功能差距台账：已对齐 / 部分 / 未做、默认安装口径、计划批次与验收方式。 | 回答「还差什么」「这个域算不算完成」「示例 mod 能不能算默认功能」前必读；每轮收口更新。 |
-| [`PETCORE-FUNCTION-MATRIX-2026-10-22.md`](PETCORE-FUNCTION-MATRIX-2026-10-22.md) | 2026-10-22 主分支 v4.3.4 与 petcore 的完整功能矩阵、阶段归属和有意差异。 | 做主分支对齐审查、判断某项是否已交付或分派迁移阶段前必读。 |
+| [`PETCORE-FUNCTION-MATRIX-2026-10-22.md`](PETCORE-FUNCTION-MATRIX-2026-10-22.md) | 2026-10-22 主分支 v4.3.4 与 petcore 的完整功能矩阵、阶段归属和有意差异。 | 做主分支对齐审查、判断某项是否已交付或分派迁移阶段前必读。**这是 4.3.4 时点的历史快照；当前 v4.3–v4.4 对照见 [`PETCORE-V43-V44-PARITY-2026-11-05.md`](PETCORE-V43-V44-PARITY-2026-11-05.md)**。 |
+| [`PETCORE-V43-V44-PARITY-2026-11-05.md`](PETCORE-V43-V44-PARITY-2026-11-05.md) | **2026-11-05 快照**：v4.3.0–v4.4.0 全部新增功能与 petcore 的对照（已做/core、已做/mod、未做、形态不同），7 个内置 feature + 12 个可安装 mod 的归属，以及多屏/多宠、聊天、AI、设置、素材、语音、识屏、记忆、扩展、灵动岛、QQ 的重写方式。 | 回答「4.3 以来还差什么」「这个功能算 core 还是 mod」「为什么我们和主分支实现不同」前必读；后续补齐缺口时在文末追加轮次，不要直接改旧表当现状。 |
 | [`PETCORE-HANDOFF-PLAN-2026-10-22.md`](PETCORE-HANDOFF-PLAN-2026-10-22.md) | P0–P6 的 AI 交接计划：每阶段边界、依赖、验收、用户效果和提交标题。 | 把 petcore 后续阶段交给另一个 AI 或开始一个新阶段前必读。 |
 | [`PR-REPORT-PETCORE-AUDIT-2026-10-22.md`](PR-REPORT-PETCORE-AUDIT-2026-10-22.md) | 2026-10-22 petcore 主分支对齐审查报告，含门禁结果、性能口径和实机限制。 | 引用本次审查结论、复核当前基线或决定 P1 开始条件前必读。 |
 | [`PR-REPORT-PETCORE-P1-SCOPE-2026-10-22.md`](PR-REPORT-PETCORE-P1-SCOPE-2026-10-22.md) | P1 每宠配置作用域、feature 宠物生命周期和 standalone/slot 基础迁移报告。 | 改设置作用域、slot 配置、旧数据迁移或 feature timer 生命周期前必读。 |

@@ -6738,3 +6738,25 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
 - `ruff check petcore tests examples/petcore-mods/im.qq`：All checks passed。
 - 仓库全量仍在 legacy `tests/test_quick_chat.py::test_switch_character...` 原生崩溃
   （`EXIT:139`，L137 已登记的旧套件顺序性问题）；该用例单独 9 passed。
+
+## L171 — 2026-11-05 — v4.3–v4.4 功能对照与重写记录
+
+**背景**：用户要求把 4.3 以来的功能对照、core/mod 归属、未做项与重写方式写成一份
+可查文档，供后续对齐与交接使用。
+
+**文档**
+
+- 新增 `docs/PETCORE-V43-V44-PARITY-2026-11-05.md`：v4.3.0–v4.4.0 功能矩阵
+  （已做/core、已做/mod、未做、形态不同）、7 个内置 feature + 12 个可安装 mod 清单、
+  多屏/多宠、聊天、AI、设置/菜单、素材、语音、识屏、记忆、扩展、灵动岛、QQ 的
+  重写记录，以及本轮 setup/提交证据。
+- `docs/INDEX.md` 登记；`PETCORE-FUNCTION-MATRIX-2026-10-22.md` 标为历史快照，
+  在「疑似重复」小节登记新旧关系（当前口径以 2026-11-05 快照为准）。
+- 无运行时代码改动。
+
+**结论摘要**
+
+- 真缺口：HDR 截图、AI 通用时间感知、foobar2000 窗口标题源、设置 Ctrl+F、
+  4.4 场景扮演、分层记忆 v2、聊天分页、非 Windows 平台层。
+- 形态不同：统一 16 项功能页（改为 12 mod + 7 内置 feature + 安装器任务）、
+  聊天窗关闭销毁（petcore 隐藏复用）、Android（独立 Java 应用）。
