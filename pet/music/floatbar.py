@@ -196,12 +196,19 @@ _RING_SEGMENTS = 180       # 共享轮廓的角度采样数（越多越圆滑）
 _RING_SMOOTH_W = 4         # 圆形滑动平均的半径（压掉逐段毛刺）
 _RING_FOLLOW = 0.38        # 每帧向目标形状靠近的比例（时间上也不会突跳）
 _RING_GLOW_ALPHA = 46      # 声波环柔光 alpha
-# 声波环：各层是同一条波轮廓的紧密嵌套副本（不是同心圆）
-_RING_WAVE_TOP = 0.62      # 最外层流线的基准半径（占盘半径）
-_RING_WAVE_GAP = 0.038     # 相邻两层之间的径向间距
+# 声波环：各层是同一条波轮廓的嵌套副本（不是同心圆），层与层之间留开几个像素
+_RING_WAVE_TOP = 0.74      # 最外层流线的基准半径（占盘半径）
+_RING_WAVE_GAP = 0.08      # 相邻两层的径向间距（≈2.5 px，稀疏可辨；5 层恰好落到 floor）
 _RING_WAVE_AMP = 0.10      # 波峰相对基准线的最大振幅
 _RING_WAVE_FLOOR = 0.42    # 波谷不能压过这里（标签在 0.34）
 _RING_BAR_LEN = 0.22       # 射线最长伸进盘内的长度（占盘半径）
+# 频谱幅度三档：小档是原始设计，每往上一档幅度约 ×3（超界由各风格的半径钳位兜住）
+_RING_GAINS = (
+    ("small", "小", 1.0),
+    ("mid", "中", 3.0),
+    ("large", "大", 9.0),
+)
+_RING_GAIN_DEFAULT = "small"
 
 # 呼吸灯：黑盘靠近边缘处挖出一圈镂空环带，灯就亮在这圈镂空里；
 # 不亮时 alpha=0，镂空处直接透出桌面（真透明）。
@@ -688,6 +695,7 @@ class MusicFloatBar(QWidget):
         self._ring_count = self._state_ring_count()
         self._ring_color = self._state_ring_color()
         self._ring_style = self._state_ring_style()
+        self._ring_gain = self._state_ring_gain()
         self._ring_prev: list[float] = []
         self._viz_hue = 0.0
         self._viz_phase = 0.0
@@ -795,6 +803,10 @@ class MusicFloatBar(QWidget):
     def _state_ring_style(self) -> str:
         value = str(self._state.get("ring_style", _RING_STYLE_DEFAULT))
         return value if value in {key for key, _label in _RING_STYLES} else _RING_STYLE_DEFAULT
+
+    def _state_ring_gain(self) -> str:
+        value = str(self._state.get("ring_gain", _RING_GAIN_DEFAULT))
+        return value if value in {key for key, _label, _f in _RING_GAINS} else _RING_GAIN_DEFAULT
 
     # ---------------------------------------------------------------- 子控件 / 定时器
 
@@ -1375,6 +1387,7 @@ class MusicFloatBar(QWidget):
             "ring_count": self._ring_count,
             "ring_color": self._ring_color.name(),
             "ring_style": self._ring_style,
+            "ring_gain": self._ring_gain,
             "_saved_w": self.width(),
             "_saved_h": self.height(),
         })
@@ -1481,8 +1494,23 @@ class MusicFloatBar(QWidget):
         self._persist()
         self.update()
 
+    def set_ring_gain(self, gain: str) -> None:
+        """频谱幅度档位：small（小）/ mid（中）/ large（大），逐档约 ×3。"""
+        if gain not in {key for key, _label, _f in _RING_GAINS} or gain == self._ring_gain:
+            return
+        self._ring_gain = gain
+        self._persist()
+        self.update()
+
+    def _ring_gain_factor(self) -> float:
+        """当前幅度档位的倍数（小 = 1 / 中 = 3 / 大 = 9）。"""
+        for key, _label, factor in _RING_GAINS:
+            if key == self._ring_gain:
+                return factor
+        return 1.0
+
     def _pick_ring_color(self) -> None:
-        col = QColorDialog.getColor(self._ring_color, None, "圆环频谱颜色")
+        col = QColorDialog.getColor(self._ring_color, None, "频谱颜色")
         if col.isValid():
             self._ring_color = col
             self._persist()
@@ -1645,7 +1673,9 @@ class MusicFloatBar(QWidget):
             return
         self._after_drag()
 
-    def contextMenuEvent(self, event) -> None:
+    def _build_context_menu(self) -> QMenu:
+        """构建右键菜单（不含退出项）。拆出来让测试能直接检查菜单树，
+        不必去 patch PySide6 的 QMenu.exec（Shiboken 层拦截不到）。"""
         menu = QMenu(self)
 
         fx_menu = menu.addMenu("灯效")
@@ -1704,17 +1734,8 @@ class MusicFloatBar(QWidget):
             act.triggered.connect(lambda _checked=False, v=pct: self.set_viz_alpha(v))
         alpha_menu.addAction("自定义…").triggered.connect(self._pick_viz_alpha)
 
-        extra_menu = menu.addMenu("附加功能")
-        act = extra_menu.addAction("显示当前曲名")
-        act.setCheckable(True)
-        act.setChecked(self._title_on)
-        act.triggered.connect(lambda checked: self.set_title_enabled(checked))
-        act = extra_menu.addAction("音乐可视化")
-        act.setCheckable(True)
-        act.setChecked(self._viz_on)
-        act.triggered.connect(lambda checked: self.set_viz_enabled(checked))
-
-        ring_menu = extra_menu.addMenu("黑胶圆环频谱")
+        viz_menu.addSeparator()
+        ring_menu = viz_menu.addMenu("黑胶圆环频谱")
         act = ring_menu.addAction("启用")
         act.setCheckable(True)
         act.setChecked(self._ring_on)
@@ -1725,15 +1746,35 @@ class MusicFloatBar(QWidget):
             act.setCheckable(True)
             act.setChecked(self._ring_style == key)
             act.triggered.connect(lambda _checked=False, k=key: self.set_ring_style(k))
-        count_label = "声波层数" if self._ring_style == "wave" else "密度"
+        gain_menu = ring_menu.addMenu("幅度")
+        for key, label, _factor in _RING_GAINS:
+            act = gain_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(self._ring_gain == key)
+            act.triggered.connect(lambda _checked=False, k=key: self.set_ring_gain(k))
+        # 三风格下这档的语义不同：声波=流线层数，圆点=同心圆环层数，射线=条数与粗细
+        count_label = {"wave": "声波层数", "dots": "圆点层数"}.get(self._ring_style, "密度")
         count_menu = ring_menu.addMenu(count_label)
         for count in (1, 2, 3, 4, 5):
             act = count_menu.addAction(f"{count} 档")
             act.setCheckable(True)
             act.setChecked(self._ring_count == count)
             act.triggered.connect(lambda _checked=False, c=count: self.set_ring_count(c))
-        ring_menu.addAction("圆环颜色…").triggered.connect(self._pick_ring_color)
+        ring_menu.addAction("频谱颜色…").triggered.connect(self._pick_ring_color)
 
+        extra_menu = menu.addMenu("附加功能")
+        act = extra_menu.addAction("显示当前曲名")
+        act.setCheckable(True)
+        act.setChecked(self._title_on)
+        act.triggered.connect(lambda checked: self.set_title_enabled(checked))
+        act = extra_menu.addAction("音乐可视化")
+        act.setCheckable(True)
+        act.setChecked(self._viz_on)
+        act.triggered.connect(lambda checked: self.set_viz_enabled(checked))
+        return menu
+
+    def contextMenuEvent(self, event) -> None:
+        menu = self._build_context_menu()
         menu.addSeparator()
         action = menu.addAction("退出悬浮控制器（下次启动恢复）")
         if menu.exec(event.globalPos()) == action:
@@ -2382,39 +2423,53 @@ class MusicFloatBar(QWidget):
         self, painter: QPainter, cu: float, cv: float, disc_r: float,
         shape: list[float], color: QColor, density: int,
     ) -> None:
-        """圆点环：一圈等距圆点，每颗的大小/亮度随所在角度的电平呼吸。"""
-        dots = 48 + 12 * (density - 1)
-        orbit = disc_r * 0.86
+        """圆点环：density 圈同心圆点环，每颗的大小/亮度随所在角度的电平呼吸。"""
+        gain = self._ring_gain_factor()
+        # 大档增益下满电平点半径会大到互相重叠并糊出盘面，钳在 0.085r
+        # （0.86 + 0.085 < 1.0，最外也不出盘）；低中电平仍严格按档位倍数
+        max_dot = disc_r * 0.085
         painter.setPen(Qt.NoPen)
-        for i in range(dots):
-            theta = 2.0 * math.pi * i / dots - math.pi / 2.0
-            level = self._sample_shape(shape, theta + math.pi / 2.0)
-            radius = disc_r * (0.014 + 0.020 * level)
-            col = QColor(color)
-            col.setAlpha(int(110 + 145 * level))
-            painter.setBrush(col)
-            painter.drawEllipse(
-                QPointF(cu + orbit * math.cos(theta), cv + orbit * math.sin(theta)),
-                radius, radius,
-            )
+        for ring in range(density):
+            # 最外一圈 0.86r，每往内一圈收 0.10r；最内 0.46r，仍避开 0.34r 的标签
+            orbit = disc_r * (0.86 - 0.10 * ring)
+            # 点数随周长缩放，任意一圈上的点距一致
+            dots = max(12, int(round(44 * orbit / (disc_r * 0.86))))
+            fade = 1.0 - 0.08 * ring
+            for i in range(dots):
+                theta = 2.0 * math.pi * i / dots - math.pi / 2.0
+                level = self._sample_shape(shape, theta + math.pi / 2.0)
+                radius = min(max_dot, disc_r * (0.014 + 0.020 * level * gain))
+                col = QColor(color)
+                col.setAlpha(int((110 + 145 * level) * fade))
+                painter.setBrush(col)
+                painter.drawEllipse(
+                    QPointF(cu + orbit * math.cos(theta), cv + orbit * math.sin(theta)),
+                    radius, radius,
+                )
 
     def _paint_ring_bars(
         self, painter: QPainter, cu: float, cv: float, disc_r: float,
         shape: list[float], color: QColor, density: int,
     ) -> None:
-        """射线环：一圈径向圆角频谱条；安静时退成小圆点。"""
-        bars = 44 + 8 * (density - 1)
+        """射线环：一圈径向圆角频谱条；安静时退成小圆点。
+
+        密度档同时决定条数与线条粗细：越高档条越密、线越粗。
+        """
+        bars = 28 + 7 * (density - 1)
+        # 线宽随密度加粗，但最密一档（56 条）的条距仍大于线宽，不会糊成一整圈
+        width = max(1.2, disc_r * (0.028 + 0.013 * (density - 1)))
         # 射线落在唱片纹槽区（标签 0.34 之外），从外圈向内生长，最响也不压标签
         r_out_base = disc_r * 0.84
         r_in_floor = disc_r * 0.50
+        gain = self._ring_gain_factor()
         painter.setBrush(Qt.NoBrush)
         for i in range(bars):
             theta = 2.0 * math.pi * i / bars - math.pi / 2.0
             level = self._sample_shape(shape, theta + math.pi / 2.0)
-            r_in = max(r_in_floor, r_out_base - disc_r * (0.03 + _RING_BAR_LEN * level))
+            r_in = max(r_in_floor, r_out_base - disc_r * (0.03 + _RING_BAR_LEN * gain * level))
             col = QColor(color)
             col.setAlpha(int(105 + 150 * level))
-            pen = QPen(col, max(1.3, disc_r * 0.05))
+            pen = QPen(col, width)
             pen.setCapStyle(Qt.RoundCap)
             painter.setPen(pen)
             painter.drawLine(
@@ -2430,7 +2485,7 @@ class MusicFloatBar(QWidget):
         cos_t = [math.cos(2.0 * math.pi * k / _RING_SEGMENTS) for k in range(_RING_SEGMENTS)]
         sin_t = [math.sin(2.0 * math.pi * k / _RING_SEGMENTS) for k in range(_RING_SEGMENTS)]
         painter.setBrush(Qt.NoBrush)
-        amp = disc_r * _RING_WAVE_AMP
+        amp = disc_r * _RING_WAVE_AMP * self._ring_gain_factor()
         # 所有层共享同一条波轮廓，只是基准半径依次向内收一点（紧密嵌套）
         for layer in range(layers_n):
             base = disc_r * (_RING_WAVE_TOP - _RING_WAVE_GAP * layer)

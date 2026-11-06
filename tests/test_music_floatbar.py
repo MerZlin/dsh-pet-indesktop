@@ -803,6 +803,48 @@ def test_ring_style_state_and_setter(bar, monkeypatch):
     assert bar._ring_style == "bars"
 
 
+def test_ring_gain_state_and_setter(bar, monkeypatch):
+    """幅度档位只认 small/mid/large，逐档 ×3；切换写入存档，非法值回落默认。"""
+    bar._state = {}
+    assert bar._state_ring_gain() == fb._RING_GAIN_DEFAULT
+    bar._state = {"ring_gain": "mid"}
+    assert bar._state_ring_gain() == "mid"
+    bar._state = {"ring_gain": "huge"}
+    assert bar._state_ring_gain() == fb._RING_GAIN_DEFAULT
+
+    factors = {key: factor for key, _label, factor in fb._RING_GAINS}
+    assert factors == {"small": 1.0, "mid": 3.0, "large": 9.0}
+
+    saved: dict = {}
+    monkeypatch.setattr(fb, "_save_state", lambda state: saved.update(state))
+    assert bar._ring_gain_factor() == 1.0
+    bar.set_ring_gain("large")
+    assert bar._ring_gain == "large"
+    assert bar._ring_gain_factor() == 9.0
+    assert saved.get("ring_gain") == "large"
+    bar.set_ring_gain("nonsense")
+    assert bar._ring_gain == "large"
+
+
+def test_ring_all_gains_paint_without_error(bar):
+    """三种风格 × 三档幅度都要能完整画一遍（防增益接线断裂）。"""
+    from PySide6.QtGui import QImage, QPainter
+
+    bar._playing = True
+    bar._spectrum_failed = True
+    bar._edge = "left"
+    bar._skin = fb._SKIN_VINYL
+    bar._apply_form(fb._FORM_EDGE_PANEL, move=False)
+    image = QImage(bar.size(), QImage.Format_ARGB32_Premultiplied)
+    painter = QPainter(image)
+    for key in ("dots", "wave", "bars"):
+        bar.set_ring_style(key)
+        for gain in ("small", "mid", "large"):
+            bar.set_ring_gain(gain)
+            bar._paint_ring_spectrum(painter, 128.0, 32.0, 31.0)
+    painter.end()
+
+
 def test_ring_all_styles_paint_without_error(bar):
     """三种风格在黑胶面板上都要能完整画一遍（防重构后分派断裂）。"""
     from PySide6.QtGui import QImage, QPainter
@@ -818,6 +860,108 @@ def test_ring_all_styles_paint_without_error(bar):
         bar.set_ring_style(key)
         bar._paint_ring_spectrum(painter, 128.0, 32.0, 31.0)
     painter.end()
+
+
+def _paint_ink(paint_fn):
+    """把一段绘制搬进透明 QImage，返回可按像素取 alpha 的图。"""
+    from PySide6.QtGui import QImage, QPainter
+
+    image = QImage(200, 200, QImage.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    painter = QPainter(image)
+    paint_fn(painter)
+    painter.end()
+    return image
+
+
+def test_ring_wave_layers_are_sparse_and_inside_label():
+    """声波层间距要达到「几个像素」量级；5 层基准都落在标签区之外，小档波峰不出盘。"""
+    disc_r = 31.0
+    assert fb._RING_WAVE_GAP * disc_r >= 2.0
+    assert fb._RING_WAVE_TOP - fb._RING_WAVE_GAP * 4 >= fb._RING_WAVE_FLOOR
+    assert fb._RING_WAVE_TOP + fb._RING_WAVE_AMP <= 0.84
+
+
+def test_ring_wave_density_places_layers_at_sparse_radii(bar):
+    """恒定 0.5 电平下各层基准 = TOP - GAP×n：1 层时内层位置必须空着，2 层时要有墨。"""
+    shape = [0.5] * fb._RING_SEGMENTS
+    color = QColor(222, 52, 52)
+
+    one = _paint_ink(lambda p: bar._paint_ring_wave(p, 100.0, 100.0, 100.0, shape, color, 1))
+    assert one.pixelColor(174, 100).alpha() > 0    # 最外层 0.74r
+    assert one.pixelColor(166, 100).alpha() == 0   # 0.66r 是第二层的位子，1 层时必须是空的
+
+    two = _paint_ink(lambda p: bar._paint_ring_wave(p, 100.0, 100.0, 100.0, shape, color, 2))
+    assert two.pixelColor(166, 100).alpha() > 0
+
+    five = _paint_ink(lambda p: bar._paint_ring_wave(p, 100.0, 100.0, 100.0, shape, color, 5))
+    assert five.pixelColor(142, 100).alpha() > 0   # 第 5 层恰好落在 floor 0.42r
+
+
+def test_ring_dots_density_is_concentric_layers(bar):
+    """圆点密度 = 同心环层数：1 档只有最外一圈，5 档时 0.46r 内圈也有墨。"""
+    shape = [1.0] * fb._RING_SEGMENTS
+    color = QColor(222, 52, 52)
+
+    one = _paint_ink(lambda p: bar._paint_ring_dots(p, 100.0, 100.0, 100.0, shape, color, 1))
+    assert one.pixelColor(186, 100).alpha() > 0    # 最外圈 0.86r
+    assert one.pixelColor(146, 100).alpha() == 0   # 0.46r 处没有内圈
+
+    five = _paint_ink(lambda p: bar._paint_ring_dots(p, 100.0, 100.0, 100.0, shape, color, 5))
+    assert five.pixelColor(146, 100).alpha() > 0   # 最内一圈 0.46r，仍避开 0.34r 标签
+    assert five.pixelColor(136, 100).alpha() == 0  # 标签区之外不进墨
+
+
+def test_ring_bars_density_changes_count_and_width(bar):
+    """射线密度同时改条数与线宽：5 档比 1 档条更密、线更粗。"""
+    shape = [1.0] * fb._RING_SEGMENTS
+    color = QColor(222, 52, 52)
+
+    one = _paint_ink(lambda p: bar._paint_ring_bars(p, 100.0, 100.0, 100.0, shape, color, 1))
+    five = _paint_ink(lambda p: bar._paint_ring_bars(p, 100.0, 100.0, 100.0, shape, color, 5))
+
+    # 两档在正右方向（θ=0）都有一条
+    assert one.pixelColor(170, 100).alpha() > 0
+    assert five.pixelColor(170, 100).alpha() > 0
+    # 条数：5 档 56 条时 θ≈6.4° 处有墨，1 档 28 条时该位置是空档
+    assert five.pixelColor(170, 108).alpha() > 0
+    assert one.pixelColor(170, 108).alpha() == 0
+    # 线宽：5 档半宽 4 px，离条中线 3 px 仍有墨；1 档半宽 1.4 px 则没有
+    assert five.pixelColor(170, 103).alpha() > 0
+    assert one.pixelColor(170, 103).alpha() == 0
+
+
+def test_ring_menu_integrated_into_viz_menu(bar):
+    """「黑胶圆环频谱」收进「音乐可视化」菜单；密度档菜单名随风格变化；颜色项叫「频谱颜色…」。
+
+    直接调 _build_context_menu 检查菜单树——PySide6/Shiboken 类的方法
+    （QMenu.exec）在 Python 层 patch 了也拦不住 C++ 调用，patch 了等于没 patch。
+    """
+
+    def submenu(menu, title):
+        for act in menu.actions():
+            if act.menu() is not None and act.text() == title:
+                return act.menu()
+        return None
+
+    menu = bar._build_context_menu()
+    viz = submenu(menu, "音乐可视化")
+    extra = submenu(menu, "附加功能")
+    assert viz is not None and extra is not None
+    ring = submenu(viz, "黑胶圆环频谱")
+    assert ring is not None                       # 整合进音乐可视化
+    assert submenu(extra, "黑胶圆环频谱") is None  # 附加功能里不再出现
+    labels = [act.text() for act in ring.actions()]
+    assert "频谱颜色…" in labels
+    assert "圆环颜色…" not in labels
+    assert "圆点层数" in labels                    # 默认风格 dots
+
+    bar.set_ring_style("wave")
+    ring = submenu(submenu(bar._build_context_menu(), "音乐可视化"), "黑胶圆环频谱")
+    assert any(act.text() == "声波层数" for act in ring.actions())
+    bar.set_ring_style("bars")
+    ring = submenu(submenu(bar._build_context_menu(), "音乐可视化"), "黑胶圆环频谱")
+    assert any(act.text() == "密度" for act in ring.actions())
 
 
 def test_ring_shape_is_smooth(bar):

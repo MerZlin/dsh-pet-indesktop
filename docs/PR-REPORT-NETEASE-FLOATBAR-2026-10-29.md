@@ -11,10 +11,10 @@
 
 | 文件 | 行数 | 动机 |
 | --- | --- | --- |
-| `pet/music/floatbar.py` | +1692 / -0 | 新增网易云悬浮控制器：四形态（胶囊 / 圆盘 / 贴边长条 / 贴边控制面板）、两套面板皮肤、播放控制、贴边吸附与开合动画、悬停自动展开、四类灯效、外框单色与两色渐变；后续迭代加入彩虹接缝修复、曲名循环滚动、真实频谱可视化、五档线条粗细、渐变配色、黑胶圆环频谱（圆点 / 声波 / 射线三种可选风格）、键帽背景、图标对齐与三个独立开关（第二~九轮合计 `+875 / -26`，全文件 2541 行） |
+| `pet/music/floatbar.py` | +1692 / -0 | 新增网易云悬浮控制器：四形态（胶囊 / 圆盘 / 贴边长条 / 贴边控制面板）、两套面板皮肤、播放控制、贴边吸附与开合动画、悬停自动展开、四类灯效、外框单色与两色渐变；后续迭代加入彩虹接缝修复、曲名循环滚动、真实频谱可视化、五档线条粗细、渐变配色、黑胶圆环频谱（圆点 / 声波 / 射线三种可选风格）、频谱幅度三档、三风格密度语义改造与菜单整合、键帽背景、图标对齐与三个独立开关（第二~十一轮合计 `+930 / -26`，全文件 2596 行） |
 | `pet/music/spectrum.py` | +321 / -0 | 新增系统音频频谱采集：ctypes WASAPI 回环 + numpy FFT，只依赖标准库与已随包分发的 numpy（不引入 soundcard / PyAudio 这类新二进制依赖），采到的是用户此刻听到的输出混音 |
 | `pet/app.py` | +8 / -0 | 在 `main()` 事件循环启动前创建悬浮条，仅在 Windows 且 music 功能已激活时接管 |
-| `tests/test_music_floatbar.py` | +377 / -0 | 覆盖灯效取色、两套皮肤的四边几何与按钮落位、皮肤持久化与非法值回落、悬停开合、外框笔刷、贴边拖动（含从控制键上拖）、平台分支；后续迭代补彩虹角度连续性、曲名循环滚动、频谱几何/配色/采集启停、五档粗细、黑胶圆环、图标对齐与三个开关、圆环三种风格状态切换与分派实画（第二~九轮合计 `+530 / -0`，共 54 个用例） |
+| `tests/test_music_floatbar.py` | +377 / -0 | 覆盖灯效取色、两套皮肤的四边几何与按钮落位、皮肤持久化与非法值回落、悬停开合、外框笔刷、贴边拖动（含从控制键上拖）、平台分支；后续迭代补彩虹角度连续性、曲名循环滚动、频谱几何/配色/采集启停、五档粗细、黑胶圆环、图标对齐与三个开关、圆环三种风格状态切换与分派实画、幅度三档、三风格密度语义与菜单整合（第二~十一轮合计 `+674 / -0`，共 61 个用例） |
 | `docs/INDEX.md` | +1 / -0 | 按新文档入场规则登记本报告 |
 
 形态与交互（本次新增，均走 300 ms 几何动画）：
@@ -191,6 +191,22 @@
 
 `d:\fileData\tmp\floatbar\viz_render6.py`（真实 `QT_QPA_PLATFORM=windows`，离屏 `grab()`，先推进 12 个心跳让时间平滑收敛）把三种风格 × 1/3/5 档共 9 张图全部重出并放大 3 倍核对：圆点 48~96 颗呼吸点清晰可辨；声波 3 层是三条带波瓣的独立流线、5 层是编织状嵌套带；射线 44~76 条长短分明、安静段退化为点；九张图全部收在唱片纹槽区，不压标签、不越上下盘沿。
 
+### 第十轮迭代（2026-11-03）：频谱幅度三档
+
+**18）圆环频谱新增「幅度」设置（小 / 中 / 大）。** 实测默认幅度在响度较低的曲目上几乎看不出起伏。新增 `_RING_GAINS = (small 1.0, mid 3.0, large 9.0)`，每往上一档幅度约 ×3，三风格共用同一个 `_ring_gain_factor()`：声波环只放大振幅（`_RING_WAVE_AMP × gain`），射线环只放大伸入深度（`_RING_BAR_LEN × gain`），圆点环放大点半径但钳在 `0.085r`（`0.86 + 0.085 < 1.0`，最外一圈也不糊出盘面）；超界由各风格既有的半径钳位兜住（波谷底板 `0.42r`、射线内端 `0.40r`），大档不会画穿标签或盘边。右键「黑胶圆环频谱 → 幅度」三选一，写进存档 `ring_gain`（默认 `small`），非法值回落默认。新增 2 个用例（54 → 56）：`test_ring_gain_state_and_setter`（默认 / 合法切换 / 非法回落 / 写存档）、`test_ring_all_gains_paint_without_error`（三风格 × 三幅度全部实画不抛异常）。
+
+### 第十一轮迭代（2026-11-03）：三风格密度语义改造与菜单整合
+
+**19）声波环层间距拉开到几个像素。** 旧版层距 `0.024r`（38 px 盘上只有 0.9 px），多层叠成实心软包，「层数」档位的区别根本看不出来。改为 `_RING_WAVE_TOP = 0.74` / `_RING_WAVE_GAP = 0.08`：最外层基准半径 0.74r，每往内一层收 0.08r（≈ 2.5~3 px，稀疏可辨），5 层时最内层恰好落到波谷底板 0.42r 附近，不再出现「密集成实心圆」的观感。新增 2 个用例：直接调用 `_paint_ring_wave` 验证各层基准半径单调递减、间距恰为 `0.08r` 且最内层不低于底板；`set_ring_count` 后实画的圆心像素命中对应层的流线。
+
+**20）圆点密度从「每圈点数」改为「同心圆环层数」。** 旧版 1~5 档只是每圈点数 48→96，稀疏档画面发空。改为 density = 层数：最外一圈 0.86r，每往内一圈收 0.10r，5 档铺满 0.86r~0.46r（仍避开 0.34r 标签）；每圈点数按周长缩放（`44 × orbit / 0.86r`），任意一圈上的点距一致；内层 alpha 逐圈 ×0.92 淡出，层叠有纵深。新增用例：各档实画的圆心按层分组，组数等于档数且各层半径逐层收 `0.10r`。
+
+**21）射线密度同时控制条数与线宽。** 旧版只加密条数（44→76），高密档细得像梳齿。现在条数 `28 + 7×(d−1)`（28~56），线宽同步放大 `max(1.2, disc_r × (0.028 + 0.013×(d−1)))`，稀疏档细而疏、密集档粗而密。新增用例：1 档与 5 档实画的 `drawLine` 调用数与笔宽均随档上升。
+
+**22）菜单整合与改名。** 「黑胶圆环频谱」从右键顶层菜单并入「音乐可视化」子菜单（与胶囊频谱的位置 / 粗细 / 配色同一处管理）；「圆环颜色…」改名「频谱颜色…」，取色逻辑与胶囊频谱的「可视化颜色…」一致（`QColorDialog` 持久化到 `ring_color`）；密度档菜单标题按当前风格显示「声波层数 / 圆点层数 / 密度」。新增用例：右键菜单树里「黑胶圆环频谱」确实挂在「音乐可视化」之下（56 → 61）。
+
+性能表第九轮的圆环绘制耗时为改动前所测：本轮后射线满档条数更少（56 < 76）、圆点满档为 5 圈约 180 颗，数量级未变，仍在亚毫秒级，未重新测量。
+
 ## 性能分析
 
 新增开销共五处，均为定频轻量调用。测量环境：Windows 11 x64、Python 3.11.9、单次进程枚举 20 次取平均。
@@ -233,6 +249,7 @@
 17. **实机安装验证 v23（低频死条修复）**：`dsh-pet-patched-v23.exe`（16 876 112 字节），覆盖安装（md5 `fdf5d07935567b5c985734b590eaaf7`），WMI 启动 `pid 42148`，日志 `create_bar: visible=True size=226x38 form=expanded edge=None` → `spectrum: capture started`。桌面连续抓两帧（间隔 0.9 s，只取胶囊最左侧 36 px 区域，对应前 4 根条）：平均像素差 `6.34`、最大 `83`，第 1、3 根条跟着音乐在动；修复前同一区域两帧几乎完全相同。
 18. **实机安装验证 v24（环形频谱平滑化）**：`dsh-pet-patched-v24.exe`（16 877 508 字节），覆盖安装（md5 `82fa095f6eec98c0158b4d9a024fda45`），WMI 启动 `pid 45596`，日志 `create_bar: visible=True size=12x96 form=edge_bar edge=left`。圆环的像素对照用 `viz_render4.py` 重出并放大 3 倍（`ring_vinyl_1/3/5_x3.png`）：三条、五条环都是圆滑闭合曲线，形状随电平起伏但没有折线毛刺。
 19. **实机安装验证 v25（圆点 / 声波 / 射线三种圆环风格）**：从 v16 备份重打包 `dsh-pet-patched-v25.exe`（16 880 488 字节、`pyvers 311`、`PYZ` 1894 个条目），符号表在原有基础上新增校验 `_paint_ring_dots` / `_paint_ring_wave` / `_paint_ring_bars` / `set_ring_style` 全部为 True；覆盖安装（md5 前后一致 `b5ff81a4137176a6e6f6547d57192c01`），WMI 启动 `pid 37364`，日志 `create_bar: visible=True size=12x96 form=edge_bar edge=left` → 播放时 `spectrum: capture started`、暂停后 `spectrum: capture stopped`（圆环采集线程随播放状态启停正常）。三种风格 × 1/3/5 档的像素对照用 `viz_render6.py` 在真实 `windows` 平台离屏生成 9 张图并放大 3 倍（`ring2_{dots,wave,bars}_{1,3,5}_3x.png`），结论见第九轮末尾；右键「圆环样式」菜单的实际点选沿用既有验证边界，由使用者手动确认（见「已知限制」左键/前台注入条）。
+20. **实机安装验证 v28（幅度三档 + 密度语义改造）**：`dsh-pet-patched-v28.exe`（16 869 043 字节、`pyvers 311`），模块符号校验 `install` / `_shim_create_bar` / `_SHIM_INSTALLED` / `v27-shim` / `create_bar: begin` 全部为 True；杀掉旧实例（pid 22460）、备份为 `dsh-pet-installed-pre-v28-backup.exe` 后覆盖安装，WMI 启动 `pid 48268`，日志 `install: QApplication.__init__ wrapped (v27-shim)` → `create_bar: visible=True size=12x96 form=edge_bar edge=left`（18:02:17），左缘截屏确认贴边长条与灯带正常。**踩坑记录**：v27 曾静默不显示悬浮条，根因是重打包脚本误用了仓库原版 `floatbar.py`（无 shim——仓库走 `pet/app.py main()` 接线，而 exe 的 PYZ 里是 v16 基线的 `pet.app`，没有该接线）；修复为向打包用模块尾部追加 v27-shim（包装 `QApplication.__init__`，`QTimer.singleShot(800ms)` 建条）后再打包。重打包链路必须保证注入 PYZ 的副本带 shim，直接拿仓库文件打包会得到「模块存在但从不安装」的静默失败。
 
 ## 测试门
 
@@ -240,9 +257,9 @@
 | --- | --- | --- |
 | 语法编译 | `python -m py_compile pet/music/floatbar.py pet/app.py` | PASS |
 | 静态检查（全仓） | `ruff check .` | PASS —— `All checks passed!` |
-| 新增单测 | `pytest tests/test_music_floatbar.py -q` | PASS —— `54 passed in 3.70s`（`QT_QPA_PLATFORM=offscreen`；第二~九轮共补 31 个用例） |
-| 交付纪律 + 架构守卫 | `pytest tests/test_pr_report_discipline.py tests/test_architecture.py tests/test_music_floatbar.py -q` | PASS —— `301 passed in 21.79s` |
-| 全量单测 | `pytest -q` | **8884 passed / 169 failed / 32 skipped**（1562 s）。169 个失败全部来自本机环境，与本次改动无关，见下。**注**：该次全量跑在第一轮；后续迭代只改了 `pet/music/floatbar.py`、新增 `pet/music/spectrum.py` 与对应测试，已重跑 `py_compile`、`ruff check .` 与上面三行门禁（第九轮后 `301 passed`），未再跑全量（改动不触及共享模型 / 生命周期 / 打包 / 平台分支之外的面） |
+| 新增单测 | `pytest tests/test_music_floatbar.py -q` | PASS —— `61 passed in 5.94s`（`QT_QPA_PLATFORM=offscreen`；第二~十一轮共补 38 个用例） |
+| 交付纪律 + 架构守卫 | `pytest tests/test_pr_report_discipline.py tests/test_architecture.py tests/test_music_floatbar.py -q` | PASS —— `308 passed` |
+| 全量单测 | `pytest -q` | **8884 passed / 169 failed / 32 skipped**（1562 s）。169 个失败全部来自本机环境，与本次改动无关，见下。**注**：该次全量跑在第一轮；后续迭代只改了 `pet/music/floatbar.py`、新增 `pet/music/spectrum.py` 与对应测试，已重跑 `py_compile`、`ruff check .` 与上面三行门禁（第十一轮后 `308 passed`），未再跑全量（改动不触及共享模型 / 生命周期 / 打包 / 平台分支之外的面） |
 
 全量失败归因（已做基线对照：`git stash push -- pet/app.py` 后复跑同族，失败数逐项相同）：
 
