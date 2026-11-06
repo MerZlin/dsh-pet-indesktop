@@ -2,7 +2,7 @@
 
 > **基线**：`34d810b`（chore(update): update.json 指向 v4.4.0）
 > **分支**：`claude/kind-thompson-lvicmz`　**日期**：`2026-11-06`
-> **范围**：19 个文件（实现 11 含新插件 3 个文件、测试 4、文档/工具 4）
+> **范围**：20 个文件（实现 12：pet/ 9 + 新插件 3；测试 4；文档 3 + 工具 1）
 > **关联**：[多 Agent 联动统一事件协议](AGENT_LINK_PROTOCOL.md) §3.1；先例
 > [Hermes Agent Link 桥接](PR-REPORT-HERMES-PET-BRIDGE-2026-10-17.md)
 
