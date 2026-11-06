@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""多 Agent 状态感知与动作联动监视器模块（DSH / Claude Code / Cursor / OpenCode）。
+"""多 Agent 状态感知与动作联动监视器模块（DSH / Claude Code / Cursor / OpenCode / AstrBot）。
 
 设计原则（手册 §8）：
 1. 绝不使用 mtime 盲轮询；
@@ -3137,6 +3137,184 @@ class CustomAgentMonitor(BaseAgentMonitor):
         return True
 
 
+class AstrBotMonitor(BaseAgentMonitor):
+    """AstrBot 监视器（插件订阅 + 统一协议 JSONL）。
+
+    写方是随包分发的 AstrBot 插件 ``integrations/astrbot-pet-bridge/``：开启联动时
+    （弹窗同意后）复制到 ``<AstrBot data>/plugins/astrbot_plugin_dsh_pet_bridge/``，
+    它把 ``on_llm_request`` / 工具调用 / ``after_message_sent`` 折叠成六态，写
+    ``<AstrBot data>/plugin_data/astrbot_plugin_dsh_pet_bridge/astrbot.jsonl``。
+
+    事件文件放在 AstrBot 的 data 目录里而不是桌宠配置目录：AstrBot 常以 Docker
+    部署，容器里看不到宿主机的桌宠配置目录，但 data 目录一定挂载在宿主机上——
+    放在这里两种部署共用一条路径。读方只读该文件，**不在 AstrBot 目录里创建任何
+    东西**（目录由插件首次写入时自己建）。安装/卸载只动带 ``MARKER_NAME`` 标记的
+    本插件目录，用户自有插件绝不覆盖。
+    """
+
+    PLUGIN_DIR_NAME = "astrbot_plugin_dsh_pet_bridge"
+    MARKER_NAME = ".dsh-pet-bridge"
+    EVENTS_FILE_NAME = "astrbot.jsonl"
+    #: 安装时复制的插件文件（README 只随仓库/安装包分发，不进 AstrBot 插件目录）
+    BUNDLE_FILES = ("main.py", "metadata.yaml")
+
+    def __init__(self, config_dir: Path, parent=None, data_dir: Path | str | None = None) -> None:
+        super().__init__("astrbot", config_dir, parent)
+        self._mkdir_on_start = False
+        self.data_dir: Path | None = None
+        self.set_data_dir(data_dir)
+
+    # ------------------------------------------------------------ 路径
+    @staticmethod
+    def _looks_like_data_dir(path: Path) -> bool:
+        return _safe_is_dir(path) and (
+            (path / "cmd_config.json").is_file() or _safe_is_dir(path / "plugins")
+        )
+
+    @classmethod
+    def normalize_data_dir(cls, path: Path | str | None) -> Path | None:
+        """用户给的目录 → AstrBot data 目录；认 AstrBot 根目录（含 data/）或 data 本身。"""
+        if not path:
+            return None
+        try:
+            candidate = Path(str(path)).expanduser()
+        except (TypeError, ValueError, RuntimeError):
+            return None
+        if cls._looks_like_data_dir(candidate / "data"):
+            return candidate / "data"
+        if cls._looks_like_data_dir(candidate):
+            return candidate
+        return None
+
+    @classmethod
+    def detect_data_dir(cls) -> Path | None:
+        """常见安装位置探测：``$ASTRBOT_ROOT``、AUR/包管理器、家目录下的源码/启动器目录。"""
+        candidates: list[Path] = []
+        env_root = os.environ.get("ASTRBOT_ROOT", "").strip()
+        if env_root:
+            candidates.append(Path(env_root).expanduser())
+        home = Path.home()
+        candidates += [
+            home / ".astrbot",
+            home / ".local" / "share" / "astrbot",
+            home / "AstrBot",
+            home / "astrbot",
+        ]
+        for c in candidates:
+            found = cls.normalize_data_dir(c)
+            if found is not None:
+                return found
+        return None
+
+    @classmethod
+    def plugin_dir_for(cls, data_dir: Path) -> Path:
+        return Path(data_dir) / "plugins" / cls.PLUGIN_DIR_NAME
+
+    @classmethod
+    def events_file_for(cls, data_dir: Path) -> Path:
+        """与插件 ``default_events_path`` 同一规则（测试用安装后的插件反推校验）。"""
+        return Path(data_dir) / "plugin_data" / cls.PLUGIN_DIR_NAME / cls.EVENTS_FILE_NAME
+
+    def set_data_dir(self, data_dir: Path | str | None) -> None:
+        """切换读取目标（仅在未运行时调用；运行中切换会让 tailer 丢游标）。"""
+        resolved = self.normalize_data_dir(data_dir) if data_dir else None
+        if resolved is None and data_dir:
+            # 目录暂不可识别（未挂载的盘/容器卷）：照原样读，出现后自动接上
+            resolved = Path(str(data_dir)).expanduser()
+        if resolved == self.data_dir and resolved is not None:
+            return
+        self.data_dir = resolved
+        if resolved is None:
+            self.events_file = self.config_dir / "agent-events" / f"{self.agent_key}.jsonl"
+        else:
+            self.events_file = self.events_file_for(resolved)
+        self.events_dir = self.events_file.parent
+        self._tailer = ByteOffsetTailer(self.events_file)
+
+    # ------------------------------------------------------------ 安装 / 卸载
+    @staticmethod
+    def bundled_plugin_dir() -> Path | None:
+        """内置 AstrBot 插件目录：打包版在 sys._MEIPASS，源码运行在仓库 integrations/ 下。"""
+        candidates = []
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "integrations" / "astrbot-pet-bridge")
+        candidates.append(
+            Path(__file__).resolve().parent.parent.parent / "integrations" / "astrbot-pet-bridge")
+        for c in candidates:
+            if (c / "main.py").is_file() and (c / "metadata.yaml").is_file():
+                return c
+        return None
+
+    @classmethod
+    def install_bridge(cls, data_dir: Path | str | None) -> tuple[bool, str]:
+        """把桥接插件复制进 AstrBot 插件目录。返回 (成功, 失败原因)。
+
+        先写到同级临时目录再整体替换，中途失败不会留下半个插件让 AstrBot 加载报错；
+        目标目录已存在但不带本桌宠标记 → 视为用户自有插件，拒绝覆盖。
+        """
+        data = cls.normalize_data_dir(data_dir)
+        if data is None:
+            return False, "不是 AstrBot 目录（找不到 data/cmd_config.json 或 data/plugins）"
+        src = cls.bundled_plugin_dir()
+        if src is None:
+            return False, "安装包里缺少 AstrBot 桥接插件（integrations/astrbot-pet-bridge）"
+        target = cls.plugin_dir_for(data)
+        if target.exists() and not (target / cls.MARKER_NAME).is_file():
+            return False, f"{target} 已存在且不是桌宠安装的插件，未覆盖"
+        staging = target.with_name(target.name + ".dsh-pet-tmp")
+        try:
+            (data / "plugins").mkdir(parents=True, exist_ok=True)
+            if staging.exists():
+                shutil.rmtree(staging)
+            staging.mkdir()
+            for name in cls.BUNDLE_FILES:
+                shutil.copyfile(src / name, staging / name)
+            (staging / cls.MARKER_NAME).write_text(
+                "installed by dsh-pet-indesktop; removed when Agent Link → AstrBot is turned off\n",
+                encoding="utf-8",
+            )
+            if target.exists():
+                shutil.rmtree(target)
+            os.replace(staging, target)
+        except OSError as exc:
+            shutil.rmtree(staging, ignore_errors=True)
+            log.warning("安装 AstrBot 桥接插件失败: %s", exc)
+            return False, f"写入 {target} 失败：{type(exc).__name__}"
+        log.info("AstrBot 桥接插件已安装: %s", target)
+        return True, ""
+
+    @classmethod
+    def uninstall_bridge(cls, data_dir: Path | str | None) -> bool:
+        """移除本桌宠安装的插件目录与它写的事件文件；不带标记的目录一律不碰。"""
+        data = cls.normalize_data_dir(data_dir)
+        if data is None:
+            return True  # 目录已不存在/未配置：没有可清理的东西
+        target = cls.plugin_dir_for(data)
+        ok = True
+        if target.exists():
+            if not (target / cls.MARKER_NAME).is_file():
+                log.warning("AstrBot 插件目录 %s 不带桌宠标记，保留不删", target)
+                ok = False
+            else:
+                try:
+                    shutil.rmtree(target)
+                except OSError as exc:
+                    log.warning("卸载 AstrBot 桥接插件失败: %s", exc)
+                    ok = False
+        events_dir = cls.events_file_for(data).parent
+        if _safe_is_dir(events_dir):
+            try:
+                for child in events_dir.iterdir():
+                    if child.is_file() and child.name.startswith(cls.EVENTS_FILE_NAME):
+                        child.unlink()
+                if not any(events_dir.iterdir()):
+                    events_dir.rmdir()
+            except OSError as exc:
+                log.debug("清理 AstrBot 事件文件失败: %s", exc)
+        return ok
+
+
 def other_instances_use_agent(config, agent_key: str) -> bool:
     """另一个本地安装点（变体/独立实例）是否也开着该全局 Agent 联动。
 
@@ -3205,7 +3383,8 @@ class AgentLinkManager(QObject):
     dsh_user_message = Signal(str, str)
 
     # 联动气泡展示名
-    AGENT_NAMES = {"dsh": "DSH", "claude": "Claude Code", "cursor": "Cursor", "opencode": "OpenCode"}
+    AGENT_NAMES = {"dsh": "DSH", "claude": "Claude Code", "cursor": "Cursor", "opencode": "OpenCode",
+                   "astrbot": "AstrBot"}
     # 过程汇报：工具名 → 用户可读文案（不展示原始命令/路径）
     TOOL_LABELS = {
         "read": "正在读文件", "write": "正在写文件", "edit": "正在改代码",
@@ -3351,6 +3530,10 @@ class AgentLinkManager(QObject):
             "claude": ClaudeCodeMonitor("claude", self.config_dir, self),
             "cursor": CursorMonitor(self.config_dir, self),
             "opencode": OpenCodeMonitor(self.config_dir, self),
+            "astrbot": AstrBotMonitor(
+                self.config_dir, self,
+                data_dir=str((self.cfg.get("agent_link", {}) or {}).get("astrbot_root") or "") or None,
+            ),
             }
         # 自定义联动 Agent：配置驱动的只读监视器（key/path 已在 config 清洗时
         # 保证合法唯一）；显示名合并进实例级 agent_names，类级 AGENT_NAMES
@@ -3466,6 +3649,9 @@ class AgentLinkManager(QObject):
         for key, monitor in self.monitors.items():
             should_run = bool(agent_cfg.get(key, False))
             if should_run and not monitor._running:
+                if isinstance(monitor, AstrBotMonitor):
+                    # 读取目标跟随配置（开启时才选目录，构造时可能还没有）
+                    monitor.set_data_dir(str(agent_cfg.get("astrbot_root") or "") or None)
                 # 换代次：上一代留给这个 Agent 的呈现簿记（在飞确认 / 硬失败标记 /
                 # 原始状态 / 收尾身份）不得延续——否则「关掉再开启联动」后新代第一次
                 # 真实收尾会被上一代的标记吞掉（L02），旧确认也可能以新代身份到期。
@@ -3563,6 +3749,7 @@ class AgentLinkManager(QObject):
         if agent_key not in self.monitors:
             return False
 
+        astrbot_root: str | None = None  # 开启 AstrBot 时随开关一起落盘的 data 目录
         if enabled:
             # 针对需要注入 hooks 的 Agent 弹窗征求用户同意
             if agent_key == "claude":
@@ -3608,6 +3795,31 @@ class AgentLinkManager(QObject):
                     name="dsh-bridge-install",
                 ).start()
                 return False
+            elif agent_key == "astrbot":
+                data_dir = self._resolve_astrbot_data_dir()
+                if data_dir is None:
+                    return False
+                parent = self.win if hasattr(self.win, "winId") else None
+                res = QMessageBox.question(
+                    parent,
+                    "开启 AstrBot 联动",
+                    "开启联动需要向 AstrBot 安装一个桥接小插件：\n"
+                    f"{AstrBotMonitor.plugin_dir_for(data_dir)}\n\n"
+                    "它只把 AstrBot 的处理状态（思考 / 调用工具 / 回复完成）写到本地文件\n"
+                    f"{AstrBotMonitor.events_file_for(data_dir)}\n"
+                    "给桌宠读——不写消息内容、仅本地、无网络。\n\n"
+                    "安装后需重启 AstrBot，或在 AstrBot WebUI 的插件页重载插件才会生效。\n"
+                    "是否允许安装？（关闭联动时会自动卸载）",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if res != QMessageBox.StandardButton.Yes:
+                    return False
+                ok, msg = AstrBotMonitor.install_bridge(data_dir)
+                if not ok:
+                    QMessageBox.warning(parent, "开启 AstrBot 联动",
+                                        f"桥接插件安装失败：{msg}\n联动未开启。")
+                    return False
+                astrbot_root = str(data_dir)
         else:
             if agent_key == "dsh":
                 self._install_pending.pop("dsh", None)
@@ -3622,6 +3834,19 @@ class AgentLinkManager(QObject):
                     if hasattr(self.win, "show_bubble"):
                         name = self.AGENT_NAMES.get(agent_key, agent_key)
                         self.win.show_bubble(self._dialogue("bridge.uninstall.failed", "Claude hooks 卸载未完全成功，可手动检查 ~/.claude/settings.json", name=name), duration_ms=6000)
+            elif agent_key == "astrbot":
+                root = (self.cfg.get("agent_link", {}) or {}).get("astrbot_root")
+                if self._other_instances_enabled("astrbot"):
+                    log.info("其他实例仍在使用 AstrBot 联动，保留桥接插件")
+                elif not AstrBotMonitor.uninstall_bridge(root):
+                    log.warning("AstrBot 桥接插件卸载未完全成功（配置已关闭，插件可能残留）")
+                    if hasattr(self.win, "show_bubble"):
+                        self.win.show_bubble(
+                            self._dialogue("bridge.uninstall.failed",
+                                           "AstrBot 桥接插件卸载未完全成功，可手动删除 AstrBot 的"
+                                           f" data/plugins/{AstrBotMonitor.PLUGIN_DIR_NAME}",
+                                           name="AstrBot"),
+                            duration_ms=6000)
             elif agent_key == "dsh":
                 if self._other_instances_enabled("dsh"):
                     log.info("其他实例仍在使用 DSH 联动，保留桥接插件")
@@ -3633,12 +3858,47 @@ class AgentLinkManager(QObject):
 
         ag_cfg = dict(self.cfg.get("agent_link", {}))
         ag_cfg[agent_key] = bool(enabled)
+        if astrbot_root is not None:
+            ag_cfg["astrbot_root"] = astrbot_root
         self.cfg.set("agent_link", ag_cfg)
         self.cfg.save()
         self.apply_config()
         if enabled:
             self._warn_if_agent_absent(agent_key)
         return True
+
+    def _resolve_astrbot_data_dir(self) -> Path | None:
+        """AstrBot data 目录：已记住的优先；否则弹目录选择（预填自动探测结果）。"""
+        configured = AstrBotMonitor.normalize_data_dir(
+            (self.cfg.get("agent_link", {}) or {}).get("astrbot_root"))
+        if configured is not None:
+            return configured
+        from PySide6.QtWidgets import QFileDialog
+
+        parent = self.win if hasattr(self.win, "winId") else None
+        start = AstrBotMonitor.detect_data_dir()
+        picked = QFileDialog.getExistingDirectory(
+            parent, "选择 AstrBot 目录（AstrBot 根目录，或 Docker 挂载出来的 data 目录）",
+            str(start or Path.home()),
+        )
+        if not picked:
+            return None
+        data_dir = AstrBotMonitor.normalize_data_dir(picked)
+        if data_dir is None:
+            QMessageBox.warning(
+                parent, "开启 AstrBot 联动",
+                f"{picked}\n看起来不是 AstrBot 目录：里面应当有 data/cmd_config.json 或 data/plugins。\n"
+                "请选择 AstrBot 根目录，或它的 data 目录。",
+            )
+            return None
+        return data_dir
+
+    def enable_notice(self, agent_key: str) -> str:
+        """开启联动后的气泡文案（菜单开关的统一出口；AstrBot 需要提醒重载插件）。"""
+        if agent_key == "astrbot":
+            return ("已开启 AstrBot 联动～重启 AstrBot，或在它的 WebUI 插件页重载"
+                    "「桌宠联动桥接」后生效")
+        return f"已开启 {agent_key.upper()} 状态联动监听～"
 
     def pause(self) -> None:
         """桌宠隐藏时暂停所有监视器，丢弃待播联动动作，并取消所有完成确认计时器

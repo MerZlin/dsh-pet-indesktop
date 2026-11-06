@@ -813,7 +813,7 @@ def end_quiet_mode(pet) -> list[str]:
 
 
 def add_agent_link_menu(menu: QMenu, pet) -> None:
-    """Agent 联动二级菜单（4 个 Agent 独立开关 + 自定义 Agent 三级子菜单 + 气泡提醒选项，失败/拒绝自动回滚勾选）。"""
+    """Agent 联动二级菜单（5 个内置 Agent 独立开关 + 自定义 Agent 三级子菜单 + 气泡提醒选项，失败/拒绝自动回滚勾选）。"""
     sub = add_submenu(menu, "Agent 联动", None)
     agent_cfg = dict(pet.cfg.get('agent_link', {}))
     for agent_key, agent_label in (
@@ -821,6 +821,7 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         ('claude', 'Claude Code'),
         ('cursor', 'Cursor'),
         ('opencode', 'OpenCode'),
+        ('astrbot', 'AstrBot'),
     ):
         act = sub.addAction(agent_label)
         act.setCheckable(True)

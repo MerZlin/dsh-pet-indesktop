@@ -265,7 +265,7 @@ EXPORT_GUIDE: dict[str, Any] = {
     ],
     "Agent 专属配置（agents 层）": (
         "custom 模式下运行时会按「正在活动的 Agent」选台词：agents[该Agent][事件] → global(顶层 phrases)[事件] → 内置默认，"
-        "逐级兜底、留空即继承上一层。顶层 agents 的每个键就是一个 Agent（dsh/claude/cursor/opencode/自定义 Agent 等），"
+        "逐级兜底、留空即继承上一层。顶层 agents 的每个键就是一个 Agent（dsh/claude/cursor/opencode/astrbot/自定义 Agent 等），"
         "值为 {事件key: [候选文案数组]}，键名与顶层 phrases 完全一致、可全部或只挑几个事件配置。"
         "注意：余额查询、桥接安装/卸载等 Pet 公共事件不随 Agent 路由，请写在顶层 phrases（global），不要在 agents 里写。"
     ),
