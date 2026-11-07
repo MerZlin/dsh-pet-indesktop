@@ -559,6 +559,22 @@ def build_pet_controls(host) -> None:
     host.texts_edit.setMaximumHeight(170)
     texts = host.config.get("self_talk_texts", DEFAULT_SELF_TALK_TEXTS)
     host.texts_edit.setPlainText("\n".join(str(item) for item in texts))
+    # AI 碎碎念：开关 + 性格描述（无 chat 构建下行会被显隐逻辑收掉，控件常驻无害）
+    host.self_talk_ai_check = ToggleSwitch(host)
+    host.self_talk_ai_check.setChecked(bool(host.config.get("self_talk_ai_enabled", False)))
+    # 接线就近放这里（本模块既有口径）：toggled 直连显隐联动，不占对话框预算
+    host.self_talk_ai_check.toggled.connect(
+        lambda *_a: update_ai_self_talk_rows(host))
+    host.self_talk_ai_personality_edit = QPlainTextEdit(host)
+    host.self_talk_ai_personality_edit.setMinimumSize(240, 56)
+    host.self_talk_ai_personality_edit.setMaximumHeight(140)
+    host.self_talk_ai_personality_edit.setPlaceholderText(
+        "例：傲娇毒舌但其实很关心主人，说话简短爱用省略号……\n"
+        "AI 按这里填的性格现场编碎碎念；留空则不生效。"
+    )
+    host.self_talk_ai_personality_edit.setPlainText(
+        str(host.config.get("self_talk_ai_personality", "") or "")
+    )
     host.self_talk_image_dir_picker = ResourcePathPicker(
         str(host.config.get("self_talk_image_dir", "") or ""),
         directory=True,
@@ -865,6 +881,34 @@ def _load_dialogue_scope_into_editors(host, scope: str) -> None:
     buf = host._dialogue_scope_buffer.get(scope) or {}
     for key, edit in host.dialogue_phrase_edits.items():
         edit.setPlainText(str(buf.get(key, "") or ""))
+
+
+# ------------------------------------------------------------ AI 碎碎念
+# 实现刻意全放在本模块（modern_settings_dialog 有行数预算，AI 碎碎念组在
+# 对话框里只留三个单行挂钩：显隐联动 / toggled 接线 / 保存落盘）。
+
+
+def update_ai_self_talk_rows(host, *_args) -> None:
+    """AI 碎碎念两行显隐：性格设定行只跟 AI 开关。
+
+    显隐叠加：内容链路开着（周期或点击自言自语任一）+ 本构建带 chat 模块
+    （no-chat 变体整条能力不存在，连 AI 开关行一起收掉）+ AI 开关打开。
+    ``*_args`` 兼容 toggled(bool) 直连。
+    """
+    content_visible = host.self_talk_check.isChecked() or host.click_self_talk_check.isChecked()
+    ai_visible = content_visible and getattr(host, "chat_build_capable", False)
+    host._set_setting_rows_visible(("self_talk_ai",), ai_visible, dependency="self_talk_ai")
+    host._set_setting_rows_visible(
+        ("self_talk_ai_personality",),
+        ai_visible and host.self_talk_ai_check.isChecked(),
+        dependency="self_talk_ai",
+    )
+
+
+def save_self_talk_ai_settings(host) -> None:
+    """AI 碎碎念两键落盘（清洗在 config.normalize：strip + 截断 2000 字）。"""
+    host.config.set("self_talk_ai_enabled", host.self_talk_ai_check.isChecked())
+    host.config.set("self_talk_ai_personality", host.self_talk_ai_personality_edit.toPlainText())
 
 
 def _apply_dialogue_scope_rows(host) -> None:

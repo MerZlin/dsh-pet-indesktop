@@ -692,6 +692,11 @@ def show_random_self_talk(host) -> bool:
     if bubble_blocked(host):
         return False
 
+    # 点击路径的朗读旗（show_click_self_talk 立的）：无论本次抽到文本还是图，
+    # 都在入口读走——出图时没人朗读，旗帜不能漏到下一次周期自言自语。
+    speak_next = bool(getattr(host, "_self_talk_ai_speak_next", False))
+    host._self_talk_ai_speak_next = False
+
     # 审批等一直挂着的气泡优先，自言自语不覆盖
     if getattr(host, "_sticky_bubble_active", False) or getattr(host, "_alert_current", None) is not None:
         return False
@@ -729,6 +734,12 @@ def show_random_self_talk(host) -> bool:
             image_scale=host._self_talk_image_scale,
         )
 
+    # AI 碎碎念：接管成功时文本稍后由回调落地（失败仍回落固定句 value）；
+    # speak_next 表示这是点击触发的回退，AI 句落地那刻要一并朗读。
+    from .self_talk_ai import maybe_show_ai_self_talk
+
+    if maybe_show_ai_self_talk(host, fallback_text=value, speak_after=speak_next):
+        return True
     host._last_self_talk_text = value
     return host._show_self_talk_text(value)
 
@@ -777,6 +788,10 @@ def show_click_self_talk(host, click_name: str) -> bool:
         value = random.choice(texts)
         shown = host._show_self_talk_text(value)
     else:
+        # AI 碎碎念接管随机回退路径时，朗读要在文本真正落地（回调）那刻做：
+        # 先立旗子，show_random_self_talk 文本尾读走（AI 句生成完才显示，
+        # 当场 value 还是 None，靠这条把「说的」与「读的」钉成同一句）。
+        host._self_talk_ai_speak_next = True
         host._last_self_talk_text = None
         shown = host._show_random_self_talk()
         value = getattr(host, "_last_self_talk_text", None)

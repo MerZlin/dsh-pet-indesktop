@@ -1398,6 +1398,7 @@ class ModernSettingsDialog(QDialog):
             self_talk_enabled or self.click_self_talk_check.isChecked(),
             dependency="self_talk_content",
         )
+        settings_pet_controls.update_ai_self_talk_rows(self)
 
     def _update_click_self_talk_controls(self, enabled: bool) -> None:
         """点击自言自语（``click_self_talk``）的后续项显隐。
@@ -2514,6 +2515,7 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_max_interval", maximum)
         self.config.set("self_talk_duration_seconds", self.self_talk_duration_spin.value())
         self.config.set("self_talk_texts", texts or list(DEFAULT_SELF_TALK_TEXTS))
+        settings_pet_controls.save_self_talk_ai_settings(self)
         self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
         self.config.set("self_talk_image_scale", self.self_talk_image_scale_spin.value())
         self.config.set("self_talk_image_chance", self.self_talk_image_chance_spin.value())

@@ -3166,6 +3166,11 @@ class AppShell:
         # 否则「退出时登记表为空 → worker 随后 spawn 登记」会留下永远无人收的进程。
         self._quitting = True
         self._flush_chat_memory_hits()
+        # AI 碎碎念在飞 worker 一并收口（QThread 不许带着跑着退进程）；
+        # 纯桌宠/无 chat 变体下模块照常可导入（自身不依赖 pet.chat）。
+        from .self_talk_ai import cancel_all as _cancel_self_talk_ai_workers
+
+        _cancel_self_talk_ai_workers()
         # 窗级收口：逐窗保存位置、停本窗预热与 Agent、提交本窗会话
         for inst in self._instances:
             win = inst.win

@@ -83,6 +83,27 @@ recovery
 
 ## 变更记录
 
+### 2026-11-07 — 新增每宠键 `self_talk_ai_enabled` / `self_talk_ai_personality`（AI 碎碎念）
+
+本刀**新增 2 个持久设置键与 2 行设置项**：随机自言自语（碎碎念）从固定句池
+（`self_talk_texts`）改为可选用 LLM 按用户填写的性格现场生成（每次一句、句式随机），
+不改任何既有键的默认值、归属与保存语义。实现全在新模块 `pet/self_talk_ai.py`。
+
+| 项 | 本刀口径 |
+|---|---|
+| setting_id / 行键 | `self_talk_ai_enabled` / `self_talk_ai_personality`（行键与配置键同名，`pet/config.py` 默认值 dict） |
+| 归属 | 「互动」域 →「自言自语」组（排在候选内容之后、图片目录之前） |
+| 标题 / 说明 | 「碎碎念由 AI 生成」/「性格设定」。性格设定是 AI 的人设描述素材（≤2000 字），留空视为未配置 |
+| default | `False` / `""`（**双关**）。关着时随机自言自语与改动前逐字相同；开着但没配模型/性格留空同样回落固定句池 |
+| 保存时机 / commit_policy | `immediate`（随设置窗关闭的既有写回路径，经 `settings_pet_controls.save_self_talk_ai_settings` 单行挂钩） |
+| capability / 平台可用性 | 依赖本构建带 chat 模块（no-chat 变体两行整体收掉，`update_ai_self_talk_rows` 以 `chat_build_capable` 判定）；运行时还需要「AI 设置」里已配置并启用服务商，否则静默回落固定句池 |
+| 依赖 | 内容链路显隐（周期或点击自言自语任一开启）+ AI 开关；服务商/密钥复用 chat 子系统 `ChatSettings.active_config`（`Config.resolve_api_key` 兼容 keyring），**不新增任何网络/凭据键** |
+| 迁移 | **新键**：老配置没有它 → 取默认关（升级用户呈现不变）；`Config.reload` 白名单与归一化（`_bool_or_default` / strip+截断 2000 字）同步登记，`tests/test_config_schema.py` 快照钉住 |
+| 恢复 | 生成失败/超时（12s 上限）/输出不可用一律回落本次已抽好的固定句；气泡被审批等占用时整句丢弃，绝不覆盖重要气泡 |
+| 披露层级 | `primary`（就在「自言自语」组里） |
+| 线程/收口 | 生成走 QThread worker + 主线程桥接 QObject（queued signal 回 UI）；进程收口挂在 `AppShell._on_about_to_quit`（`self_talk_ai.cancel_all()`） |
+| 测试 | `tests/test_self_talk_ai.py` 16 条（清洗/prompt 组装/配置门/接管口/失败回落/在飞不排队/气泡占用丢弃/点击朗读同句）；`tests/test_architecture.py` 行数预算 2722→2724（两个单行挂钩，带日期注释） |
+
 ### 2026-10-21 — 新增一级域「功能」（功能模块启用/停用卡片，staged 语义）
 
 本刀**新增 1 个一级能力域与 1 个持久设置的可见入口**（`feature_activation` 键与迁移
