@@ -157,6 +157,29 @@ def build_messages(personality: str, history, *, trigger: str = "timer", now=Non
     ]
 
 
+def _resolve_root_config(host):
+    """找出能读 chat 设置的**真 Config**（chat 设置是全局键，不在每宠视图上）。
+
+    宿主形态各异：PetWindow 的 ``cfg`` 本身就是真 Config（有 ``chat_settings``）；
+    overlay 壳的 ``cfg`` 是主宠每宠视图、子 sprite 宿主的 ``cfg`` 是 slot 快照视图
+    （``_SpriteConfig``）——两者都**没有** ``chat_settings``，直接拿去读会被
+    :meth:`_provider_and_config` 的兜底吞掉并静默返回 None，表现成「AI 碎碎念
+    永远不触发」（2026-11-07 实机回归的根因）。真 Config：壳上是 ``_config``，
+    子宠宿主经 ``_shell`` 可达；都找不到就退回 ``host.cfg``（调用方自行兜底）。
+    """
+    candidates: list = []
+    for attr in ("cfg", "_config", "config"):
+        candidates.append(getattr(host, attr, None))
+    shell = getattr(host, "_shell", None)
+    if shell is not None:
+        for attr in ("_config", "config", "cfg"):
+            candidates.append(getattr(shell, attr, None))
+    for candidate in candidates:
+        if candidate is not None and callable(getattr(candidate, "chat_settings", None)):
+            return candidate
+    return getattr(host, "cfg", None)
+
+
 def _provider_and_config(config):
     """取聊天子系统激活模型的 (provider, 请求配置)；不可用返回 None。
 
@@ -174,6 +197,9 @@ def _provider_and_config(config):
             return None
         pcfg = settings.active_config
     except Exception:
+        # 这条静默 None 曾把「宿主视图没有 chat_settings」藏成
+        # 「AI 碎碎念永远不触发」——至少留 debug 级痕迹（失败回落仍是硬要求）。
+        log.debug("chat 设置读取失败：config=%r", type(config).__name__, exc_info=True)
         return None
     if not str(getattr(pcfg, "base_url", "") or "").strip():
         return None
@@ -372,7 +398,7 @@ def maybe_show_ai_self_talk(host, *, fallback_text: str, speak_after: bool = Fal
     state = _state(host)
     if state.worker is not None and state.worker.isRunning():
         return False
-    resolved = _provider_and_config(cfg)
+    resolved = _provider_and_config(_resolve_root_config(host))
     if resolved is None:
         return False
     provider, pcfg = resolved

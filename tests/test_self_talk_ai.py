@@ -275,3 +275,59 @@ def test_click_speak_flag_flows_to_display(configured_host):
     ) is True
     assert _pump_until(app, lambda: bool(host.spoken))
     assert host.spoken == ["AI 现场编的碎碎念"]  # 说的 == 看的
+
+
+# ---------------------------------------------------------------- 根 Config 解析
+class _OverlaySpriteHost:
+    """overlay 子宠宿主形态：``cfg`` 是每宠视图（无 chat_settings），真 Config
+    在 ``_shell._config``——2026-11-07 实机回归的病灶形态。"""
+
+    def __init__(self, root_config, per_pet_cfg):
+        self.cfg = per_pet_cfg
+        self._shell = type("Shell", (), {"_config": root_config})()
+        self.shown = []
+        self._last_self_talk_text = None
+
+    def _bubble_blocked(self):
+        return False
+
+    def _show_self_talk_text(self, text):
+        self.shown.append(text)
+        return True
+
+
+class _RootConfig:
+    """带 chat_settings 的真 Config 替身（方法存在性就是解析判据）。"""
+
+    def chat_settings(self):
+        return None
+
+
+def test_overlay_host_resolves_root_config(monkeypatch):
+    """每宠视图读开关/性格，chat 设置必须从真 Config 解析——两者不能混同一个对象。"""
+    app = _qapp()
+    root = _RootConfig()
+    host = _OverlaySpriteHost(
+        root,
+        {"self_talk_ai_enabled": True, "self_talk_ai_personality": "傲娇毒舌"},
+    )
+    captured = {}
+    monkeypatch.setattr(
+        self_talk_ai,
+        "_provider_and_config",
+        lambda cfg: (captured.__setitem__("cfg", cfg), (_FakeProvider(), object()))[1],
+    )
+
+    assert self_talk_ai.maybe_show_ai_self_talk(host, fallback_text="固定句") is True
+    assert captured["cfg"] is root  # chat 设置走真 Config，不是每宠视图
+    assert _pump_until(app, lambda: bool(host.shown))
+    assert host.shown == ["AI 现场编的碎碎念"]
+
+
+def test_resolve_root_config_prefers_chat_settings_capable():
+    # PetWindow 形态：cfg 本身就是真 Config
+    real = _RootConfig()
+    assert self_talk_ai._resolve_root_config(type("W", (), {"cfg": real})()) is real
+    # 子宠宿主形态：cfg 无 chat_settings，真 Config 在 _shell._config
+    host = _OverlaySpriteHost(real, {})
+    assert self_talk_ai._resolve_root_config(host) is real
