@@ -1054,6 +1054,10 @@ def _normalize_pet_profile_values(data: dict) -> None:
     data["self_talk_enabled"] = bool(data.get("self_talk_enabled", False))
     data["self_talk_speak_enabled"] = _bool_or_default(data.get("self_talk_speak_enabled"), False)
     data["self_talk_texts"] = _clean_self_talk_texts(data.get("self_talk_texts"))
+    # AI 碎碎念：开启后自言自语不再从固定句池抽句，而是后台调 LLM 现场生成；
+    # personality 是用户填写的性格描述（prompt 素材，非指令），留空视为未配置。
+    data["self_talk_ai_enabled"] = _bool_or_default(data.get("self_talk_ai_enabled"), False)
+    data["self_talk_ai_personality"] = str(data.get("self_talk_ai_personality") or "").strip()[:2000]
     bubble_style = str(data.get("self_talk_bubble_style") or "")
     data["self_talk_bubble_style"] = bubble_style if bubble_style in SELF_TALK_BUBBLE_STYLES else DEFAULT_SELF_TALK_BUBBLE_STYLE
     data["click_sound_enabled"] = bool(data.get("click_sound_enabled", True))
@@ -1144,6 +1148,8 @@ class Config:
             "self_talk_image_chance": DEFAULT_SELF_TALK_IMAGE_CHANCE,  # 出图概率百分比（0~100）
             "bubble_text_scale": 100,  # 气泡文字显示尺寸百分比（50~300，100 = 默认；气泡与字号一起放大）
             "self_talk_texts": list(DEFAULT_SELF_TALK_TEXTS),
+            "self_talk_ai_enabled": False,  # 碎碎念走 LLM 现场生成（需在 AI 设置里配好模型）
+            "self_talk_ai_personality": "",  # AI 碎碎念的性格描述（用户填写）
             "self_talk_image_dir": "assets/big_blue_fat_fish",
             "self_talk_bubble_style": DEFAULT_SELF_TALK_BUBBLE_STYLE,
             # Existing event wording: legacy is deliberately the default.
@@ -1516,6 +1522,8 @@ class Config:
             "self_talk_min_interval",
             "self_talk_max_interval",
             "self_talk_texts",
+            "self_talk_ai_enabled",
+            "self_talk_ai_personality",
             "self_talk_duration_seconds",
             "self_talk_image_dir",
             "self_talk_image_scale",
@@ -2238,6 +2246,8 @@ class Config:
             "self_talk_min_interval",
             "self_talk_max_interval",
             "self_talk_texts",
+            "self_talk_ai_enabled",
+            "self_talk_ai_personality",
             "self_talk_duration_seconds",
             "self_talk_image_dir",
             "self_talk_image_scale",
