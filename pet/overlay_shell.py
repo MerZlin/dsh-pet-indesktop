@@ -668,10 +668,12 @@ class _SpriteSelfTalkHost:
             return False
         if self._sticky_bubble_active or self._alert_current is not None:
             return False
-        # 点击路径的朗读旗（window_alerts.show_click_self_talk 立的）：无论本次
-        # 抽到文本还是图都在入口读走，出图时不能漏到下一次周期自言自语。
+        # 点击路径的朗读旗/动作名（window_alerts.show_click_self_talk 立的）：
+        # 无论本次抽到文本还是图都在入口读走，出图时不能漏到下一次周期自言自语。
         speak_next = bool(getattr(self, "_self_talk_ai_speak_next", False))
         self._self_talk_ai_speak_next = False
+        action_next = str(getattr(self, "_self_talk_ai_action_name", "") or "")
+        self._self_talk_ai_action_name = ""
         now = time.monotonic()
         if now - self._self_talk_images_checked_at > 60.0:
             self._self_talk_images_checked_at = now
@@ -703,7 +705,7 @@ class _SpriteSelfTalkHost:
                 pixmap=QPixmap.fromImage(image))
         # AI 碎碎念：接管成功时文本稍后由回调落地（window_alerts 同款口径）。
         if maybe_show_ai_self_talk(
-            self, fallback_text=value, speak_after=speak_next
+            self, fallback_text=value, speak_after=speak_next, action_name=action_next
         ):
             return True
         self._last_self_talk_text = value
@@ -3058,10 +3060,12 @@ class OverlayShell(QObject):
         # 审批等一直挂着的气泡优先，自言自语不覆盖（window_alerts 同款守卫）
         if self._sticky_bubble_active or self._alert_current is not None:
             return False
-        # 点击路径的朗读旗（window_alerts.show_click_self_talk 立的）：无论本次
-        # 抽到文本还是图都在入口读走，出图时不能漏到下一次周期自言自语。
+        # 点击路径的朗读旗/动作名（window_alerts.show_click_self_talk 立的）：
+        # 无论本次抽到文本还是图都在入口读走，出图时不能漏到下一次周期自言自语。
         speak_next = bool(getattr(self, "_self_talk_ai_speak_next", False))
         self._self_talk_ai_speak_next = False
+        action_next = str(getattr(self, "_self_talk_ai_action_name", "") or "")
+        self._self_talk_ai_action_name = ""
         # 惰性剔除运行期间被删除的图片——但 stat 是磁盘税（py-spy 实测
         # 每次自言自语 timeout 全量 is_file 一遍 = 48-56ms 慢帧），
         # 60s 才复查一次（配置热改路径会主动重置该时刻）。
@@ -3109,7 +3113,7 @@ class OverlayShell(QObject):
                 pixmap=QPixmap.fromImage(image))
         # AI 碎碎念：接管成功时文本稍后由回调落地（window_alerts 同款口径）。
         if maybe_show_ai_self_talk(
-            self, fallback_text=value, speak_after=speak_next
+            self, fallback_text=value, speak_after=speak_next, action_name=action_next
         ):
             return True
         self._last_self_talk_text = value

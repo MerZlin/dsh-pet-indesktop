@@ -75,13 +75,16 @@ _SYSTEM_TEMPLATE = (
     "输出要求：\n"
     "1. 只输出这一句话本身——不要引号、不要旁白、不要解释、不要任何前缀。\n"
     "2. 一句话，10~30 个字，口语化，可以带符合性格的语气词或口癖。\n"
-    "3. 从【随机主题】里挑一个（或由此自由联想）；不要与【最近说过】的句子相同，"
-    "也不要只换一两个字。\n"
-    "4. 这句话是你说给自己听的，不是对用户发言；除非主题自然需要，不要提问。"
+    "3. 若给了【正在做的动作】：这句碎碎念**必须围绕这个动作**展开（吐槽/描述/"
+    "感想都可以），忽略【随机主题】。\n"
+    "4. 没给【正在做的动作】时，从【随机主题】里挑一个（或由此自由联想）；"
+    "不要与【最近说过】的句子相同，也不要只换一两个字。\n"
+    "5. 这句话是你说给自己听的，不是对用户发言；除非话题自然需要，不要提问。"
 )
 
 _USER_TEMPLATE = (
     "【当前时间】{moment}\n"
+    "{action_block}"
     "【随机主题】{theme}\n"
     "【最近说过（不要重复）】\n"
     "{recent}\n"
@@ -138,17 +141,25 @@ def _moment_text(now=None) -> str:
     return f"周{'一二三四五六日'[now.weekday()]} {period} {now:%H:%M}"
 
 
-def build_messages(personality: str, history, *, trigger: str = "timer", now=None) -> list[dict]:
-    """组装碎碎念生成请求（纯函数：随机性靠主题池 + 时间 + 随机主题选择）。"""
+def build_messages(
+    personality: str, history, *, trigger: str = "timer", action_name: str = "", now=None
+) -> list[dict]:
+    """组装碎碎念生成请求（纯函数：随机性靠主题池 + 时间 + 随机主题选择）。
+
+    ``action_name`` 非空 = 动作联动：桌宠正在（或将要）播这个动作，台词必须
+    围绕它展开，【随机主题】被忽略。
+    """
     personality = str(personality or "").strip()[:PERSONALITY_CHAR_LIMIT] or _DEFAULT_PERSONALITY
     recent_lines = [str(item).strip() for item in list(history)[-HISTORY_LIMIT:] if str(item).strip()]
     recent = "\n".join(f"- {item}" for item in recent_lines) if recent_lines else "（无）"
+    action_block = f"【正在做的动作】{str(action_name).strip()}\n" if str(action_name).strip() else ""
     return [
         {"role": "system", "content": _SYSTEM_TEMPLATE.format(personality=personality)},
         {
             "role": "user",
             "content": _USER_TEMPLATE.format(
                 moment=_moment_text(now),
+                action_block=action_block,
                 theme=random.choice(_THEMES),
                 recent=recent,
                 trigger_note=_CLICK_NOTE if trigger == "click" else "",
@@ -334,6 +345,57 @@ def cancel_all() -> None:
             pass
 
 
+def _can_play_action(host) -> bool:
+    """宿主是否真能给**这一只宠**播联动动作。
+
+    三种宿主都有 ``request_link_anim``，但 overlay 子 sprite 宿主的是**静默
+    no-op**（子宠没有联动动作控制器，播在主宠身上等于"点了子宠主宠转圈"）；
+    给子宠配一个它做不出来的动作，台词会描述一个没发生的动作——比不联动更糟。
+    """
+    if not callable(getattr(host, "request_link_anim", None)):
+        return False
+    shell = getattr(host, "_shell", None)
+    sprite = getattr(host, "_sprite", None)
+    if shell is not None and sprite is not None:
+        return sprite is getattr(shell, "sprite", None)
+    return True
+
+
+def pick_random_action_clip(host) -> str | None:
+    """给周期碎碎念随机抽一个动作 clip 名（当前角色 random/ 池）。
+
+    返回 None 的情形：宿主播不了（``_can_play_action`` 为假，子宠/测试替身）、
+    角色没有 random/ 素材。调用方拿到 None 就走纯文字碎碎念。
+    """
+    if not _can_play_action(host):
+        return None
+    try:
+        from . import catalog
+
+        cfg = getattr(host, "cfg", None)
+        character = str((cfg.get("character") if cfg else None) or catalog.DEFAULT_CHARACTER)
+        video_dir = catalog.resolve_character_video_dir(character) / "random"
+        stems = [p.stem for p in video_dir.glob("*.webm")] + [
+            p.stem for p in video_dir.glob("*.gif")
+        ]
+        return str(random.choice(stems)) if stems else None
+    except Exception:
+        log.debug("随机动作抽取失败", exc_info=True)
+        return None
+
+
+def _play_action(host, action_name: str) -> None:
+    """播联动动作（request_link_anim 语义：一次性、不打断在播的、存待播）。
+
+    播放失败不影响碎碎念本身——台词晚几秒照常落地，最坏是"说了句与动作无关
+    的话"，可接受。
+    """
+    try:
+        host.request_link_anim(str(action_name))
+    except Exception:
+        log.debug("联动动作播放失败：%s", action_name, exc_info=True)
+
+
 def _release_worker(host, worker) -> None:
     state = _state(host)
     if state.worker is worker:
@@ -379,12 +441,20 @@ def _display(host, text: str, fallback_text: str, speak_after: bool) -> bool:
         return False
 
 
-def maybe_show_ai_self_talk(host, *, fallback_text: str, speak_after: bool = False) -> bool:
+def maybe_show_ai_self_talk(
+    host, *, fallback_text: str, speak_after: bool = False, action_name: str = ""
+) -> bool:
     """文本自言自语的 AI 接管口：接管成功返回 True（文本稍后落地）。
 
     三个宿主的随机自言自语文本尾部都调这里：返回 True 表示本次由 AI 生成，
     ``host._show_self_talk_text`` 稍后被回调；返回 False 表示维持原状——调用方
     立即显示 ``fallback_text``（固定句池抽中的那句）。
+
+    ``action_name``：点击路径传当前点击动画名（动画正在播）；周期路径留空，
+    由这里在全部门闸过了之后随机抽一个动作**先播出来**、台词围绕它生成——
+    顺序刻意是"先动后说"，动作不依赖生成结果，AI 失败回落固定句时动作照播
+    （最坏是说了句与动作无关的话，可接受）。子宠播不了动作（``pick`` 返回
+    None），自动退化为纯文字碎碎念。
 
     接管条件：开关开 + 性格非空 + 聊天子系统可用且激活模型已配置 + 当前宿主
     没有在飞生成（生成中再次触发直接回固定句，不排队——防请求堆积）。
@@ -402,8 +472,14 @@ def maybe_show_ai_self_talk(host, *, fallback_text: str, speak_after: bool = Fal
     if resolved is None:
         return False
     provider, pcfg = resolved
+    if not str(action_name or "").strip():
+        action_name = pick_random_action_clip(host) or ""
+        if action_name:
+            _play_action(host, action_name)
     trigger = "click" if speak_after else "timer"
-    messages = build_messages(personality, state.history, trigger=trigger)
+    messages = build_messages(
+        personality, state.history, trigger=trigger, action_name=action_name
+    )
 
     worker = _Worker(provider, pcfg, messages)
     bridge = _Bridge(

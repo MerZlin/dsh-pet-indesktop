@@ -331,3 +331,115 @@ def test_resolve_root_config_prefers_chat_settings_capable():
     # 子宠宿主形态：cfg 无 chat_settings，真 Config 在 _shell._config
     host = _OverlaySpriteHost(real, {})
     assert self_talk_ai._resolve_root_config(host) is real
+
+
+# ---------------------------------------------------------------- 动作联动
+def test_build_messages_action_overrides_theme():
+    messages = self_talk_ai.build_messages("傲娇", [], trigger="timer", action_name="下五子棋")
+    user = messages[1]["content"]
+    assert "【正在做的动作】下五子棋" in user
+    assert messages[0]["content"].count("必须围绕这个动作") == 1  # 系统规则里动作优先
+
+
+def test_build_messages_without_action_keeps_theme_only():
+    user = self_talk_ai.build_messages("傲娇", [], trigger="timer")[1]["content"]
+    assert "【正在做的动作】" not in user
+
+
+class _ActionHost(_Host):
+    """带动作播放通道的宿主；记录 request_link_anim 的调用。"""
+
+    def __init__(self, *, cfg=None, blocked=False, clips=("下五子棋", "写代码", "吃Token")):
+        super().__init__(cfg=cfg, blocked=blocked)
+        self.clips = list(clips)
+        self.played = []
+
+    def request_link_anim(self, name):
+        self.played.append(str(name))
+
+
+def _make_action_host(monkeypatch, **kwargs):
+    """直接构造带播放通道的宿主（不换 class——那不会重跑 __init__）。"""
+    host = _ActionHost(
+        cfg={
+            "self_talk_ai_enabled": True,
+            "self_talk_ai_personality": "傲娇毒舌",
+            "self_talk_speak_enabled": False,
+        },
+        **kwargs,
+    )
+    monkeypatch.setattr(
+        self_talk_ai, "_provider_and_config", lambda c: (_FakeProvider(), object())
+    )
+    return host
+
+
+def test_periodic_murmur_picks_and_plays_action(monkeypatch):
+    app = _qapp()
+    host = _make_action_host(monkeypatch)
+    monkeypatch.setattr(
+        self_talk_ai, "pick_random_action_clip", lambda h: "下五子棋"
+    )
+
+    assert self_talk_ai.maybe_show_ai_self_talk(host, fallback_text="固定句") is True
+    assert host.played == ["下五子棋"]  # 动作先播，不等生成
+    assert _pump_until(app, lambda: bool(host.shown))
+
+
+def test_click_action_name_flows_into_request(monkeypatch):
+    app = _qapp()
+    host = _make_action_host(monkeypatch)
+    seen = {}
+    real_build = self_talk_ai.build_messages
+
+    def spy_build(personality, history, *, trigger="timer", action_name="", now=None):
+        seen["action"] = action_name
+        seen["trigger"] = trigger
+        return real_build(personality, history, trigger=trigger, action_name=action_name, now=now)
+
+    monkeypatch.setattr(self_talk_ai, "build_messages", spy_build)
+
+    host._self_talk_ai_speak_next = True
+    host._self_talk_ai_action_name = "点击回应-挠痒咯咯笑"
+    assert self_talk_ai.maybe_show_ai_self_talk(
+        host, fallback_text="固定句", speak_after=True,
+        action_name=host._self_talk_ai_action_name,
+    ) is True
+    assert seen["action"] == "点击回应-挠痒咯咯笑" and seen["trigger"] == "click"
+    assert host.played == []  # 点击动画本来就在播，不重复播
+    assert _pump_until(app, lambda: bool(host.shown))
+
+
+def test_sub_sprite_host_gets_no_action(monkeypatch):
+    """子 sprite 宿主（request_link_anim 是 no-op）不配动作、不播动画。"""
+    app = _qapp()
+    host = _make_action_host(monkeypatch)
+    # 伪装成子 sprite：有 _shell/_sprite 且 sprite 不是主宠
+    host._shell = type("S", (), {"sprite": object()})()
+    host._sprite = object()
+    seen = {}
+    real_build = self_talk_ai.build_messages
+
+    def spy_build(personality, history, *, trigger="timer", action_name="", now=None):
+        seen["action"] = action_name
+        return real_build(personality, history, trigger=trigger, action_name=action_name, now=now)
+
+    monkeypatch.setattr(self_talk_ai, "build_messages", spy_build)
+
+    assert self_talk_ai.maybe_show_ai_self_talk(host, fallback_text="固定句") is True
+    assert seen["action"] == "" and host.played == []
+    assert _pump_until(app, lambda: bool(host.shown))
+
+
+def test_can_play_action_host_forms():
+    # 无通道 → False
+    assert self_talk_ai._can_play_action(_Host()) is False
+    # 有通道、无子宠语境 → True
+    host = _ActionHost()
+    assert self_talk_ai._can_play_action(host) is True
+    # 子 sprite → False（主宠才播）
+    host._shell = type("S", (), {"sprite": "main"})()
+    host._sprite = "sub"
+    assert self_talk_ai._can_play_action(host) is False
+    host._sprite = "main"
+    assert self_talk_ai._can_play_action(host) is True
