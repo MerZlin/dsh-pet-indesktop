@@ -229,3 +229,4 @@
 | L192 | 2026-11-08 | Mac 验收续测与平台提示 | 灵动岛、全屏与截图通过，18+6 个有效短样本；补正穿透文案，保留托盘与退出未通过项。 | native、island、fullscreen、performance、stress、wording |
 | L193 | 2026-11-08 | Mac 人工恢复与登录自启 | 真人穿透恢复及重新登录自启通过，截图与事件记录互证，清理测试项并复核源码只读。 | manual、tray、autostart、relogin、cleanup、evidence |
 | L194 | 2026-11-08 | macOS 里程碑推送范围 | 用户授权推送 Mac 代码、回归与证据文档，保留架构图及未过门禁，不发布正式包。 | git、macos、scope、verification、limitations |
+| L195 | 2026-11-09 | 开发者 README 重写 | 根 README 聚焦分支架构与近期改动，说明 Linux/macOS 实测边界，移除旧版用户教程文字守卫。 | readme、developer、linux、macos、documentation、scope |

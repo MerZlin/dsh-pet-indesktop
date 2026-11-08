@@ -26,7 +26,7 @@
 |---|---|---|
 | [`PRODUCT-STATUS-2026-10-09.md`](PRODUCT-STATUS-2026-10-09.md) | 2026-10-11 当前状态快照：分开源码、候选包、实机证据与待验证项，包含 issues/PR 适用性分类。 | 恢复工作或引用最新进度前必读；先核对证据的源码范围和包摘要，不能把旧全量或局部测试当作当前三端通过。 |
 | [`PRODUCT-NEXT-STEPS-SPEC-2026-10-09.md`](PRODUCT-NEXT-STEPS-SPEC-2026-10-09.md) | 本版目标契约：固定身份、设置作用域、提醒、扩展与三端交付门；后续 DLC 与本版分开。 | 修改上述行为或准备提交前必读；按文首最新授权，本版收口及全产品确认后可自主提交 PR，未放行提前发布、合并或跳过验收。 |
-| [`../README.md`](../README.md) | 主说明，**用户优先**：下载/安装/使用/功能/隐私/已知限制/求助在前，开发者入口与约束在后（详细开发约束以 `AGENTS.md` 与 `docs/` 为准；逐条变更史已下沉到 [`CHANGELOG-ARCHIVE-2026-10.md`](CHANGELOG-ARCHIVE-2026-10.md)，素材制作链下沉到 [`ASSET-PIPELINE.md`](ASSET-PIPELINE.md)，模块一览/Harness 机制/性能内存口径下沉到 [`DEV-HANDOVER.md`](DEV-HANDOVER.md) §10）。 | 第一次接触项目；查用户可见行为、发布形态、上游同步状态、当前版本是否已发布。**工程细节（模块职责、端口/反查口径、内存调节键、包体与内存实测）不要在 README 里找**——按上句的下沉去向查。 |
+| [`../README.md`](../README.md) | 当前 petcore 分支的开发者入口：架构边界、近期改动、Linux/macOS 实现与实测范围、运行/测试/构建及文档导航；旧版用户教程从 Git 历史查看。 | 接手本分支、搭建开发环境或判断平台是否已有候选/原生证据前必读；详细契约以 `petcore/AGENTS.md` 与专项文档为准。 |
 | [`../AGENTS.md`](../AGENTS.md) | 工程指南：项目结构、变更纪律、CI 成本纪律、"Context pointers" 触发表、agent skills 入口。 | 提交任何代码之前；尤其改动碰撞选举、ffmpeg 派生、打包、菜单、设置、PR 合并前，先查 "Context pointers"。 |
 | [`../CONTEXT.md`](../CONTEXT.md) | 领域术语表（Shared UX Contract / Settings System / Menu Action Model / Report Gate / Session-End Spawn Freeze 等）与禁用说法。 | 命名新概念、写设计文档、或需要确认"这个词在本项目里到底指什么"时；提案与既有术语冲突时必须先读。 |
 | [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) | 第三方素材、组件**与随包分发的第三方二进制**（如 `resources/presentmon/` 的帧率采集后端及其 MIT 原文）的授权声明；本文件本身随桌面三端产物（`_internal/`）与 APK 资产分发。 | 新增/替换动画素材、图标、字体、第三方库，或**把任何第三方二进制（含内置音效）随包分发**时（后者另有构建期的 sha256/架构门与 `--add-data` 接线守卫，见 [`ONEDIR_PACKAGING.md`](ONEDIR_PACKAGING.md) 第一、四节与 [`ANDROID.md`](ANDROID.md)）；素材制作与入库流程见 [`ASSET-PIPELINE.md`](ASSET-PIPELINE.md)，新素材的来源署名必须同步回本文。 |
@@ -147,6 +147,8 @@
 ---
 
 ## PR 报告存档
+
+- [petcore 开发者 README 重写（2026-11-09）](PR-REPORT-PETCORE-README-2026-11-09.md)：根 README 改为分支开发者入口，同步 petcore 上手文档，解释两端适配及证据限制；删除只约束旧版用户教程的四项文字断言。**调整 README 受众或引用当前分支状态前必读**；无运行行为变化。
 
 - [petcore macOS 适配与原生验收记录（2026-11-08）](PR-REPORT-PETCORE-MACOS-2026-11-08.md)：Linux 推送后的截图/字体/时区/权限/GIF/托盘修复，Intel Cocoa、人工穿透恢复、登录自启、24 组性能及未过门禁；继续 macOS 验收或构建 arm64 包前必读。
 
@@ -461,7 +463,7 @@
 | [`PETCORE-ANIMATION-QUALITY-ASSESSMENT-2026-10-24.md`](PETCORE-ANIMATION-QUALITY-ASSESSMENT-2026-10-24.md) | 小小桌宠与 petcore 动画架构/画质调查，105/106 同源、DPR 与 Q70 证据及 T00–T06 串行任务书；仅计划未实施。 | 改动画缩放/DPR、比较编码档位、评估播放器移植或交给后继模型执行画质改善之前必读。 |
 | [`PETCORE-D1-ACCEPTANCE-2026-10-24.md`](PETCORE-D1-ACCEPTANCE-2026-10-24.md) | 分发能力 D1（T00–T07）对外验收说明：能做什么/不能做什么、15 项验收矩阵、复跑命令、四个设计决定、7 条已知缺口与给审查者的 4 个问题。 | 对外汇报分发进度、交给他人（含 AI）验收、或判断「市场到底能不能用」时先读这份，再按需打开各批 PR 报告。 |
 | [`PETCORE-EXTENSIONS-RELEASE.md`](PETCORE-EXTENSIONS-RELEASE.md) | 功能扩展发布手册（待执行）：产物 size/sha、三个先决确认、五步流程（重建/上传/索引/HTTPS 验收/切源）与逐步回滚、明确禁止的自动发布动作。 | **真正发布扩展或切换默认索引源之前必读**；确认「哪些是 agent 不许自动做的」也看这份。 |
-| [`../petcore/README.md`](../petcore/README.md) | 开发者上手指南：环境、运行、目录地图、加菜单项/mod/角色包、测试门禁、已知边界。 | 第一次接手 petcore、或需要一条可复制的命令时。 |
+| [`../petcore/README.md`](../petcore/README.md) | petcore 开发接线指南：与根 README 共享当前平台状态，展开 CLI、目录、菜单/mod/角色包、测试门禁与边界。 | 开始修改 petcore 或创建扩展时；跨平台交付范围先核对根 README 和 POSIX 报告。 |
 | [`../examples/petcore-mods/README.md`](../examples/petcore-mods/README.md) | 10 个可导入 feature mod 样板：安装、`allow_feature_mods`、端口、菜单/设置规范。 | 写/安装 petcore feature mod、复制样板或排查「装了为什么没生效」时；先按 [PETCORE-MOD-DEVELOPMENT.md](PETCORE-MOD-DEVELOPMENT.md) 走一遍最小骨架，再挑样板扩展。 |
 | [`../petcore/AGENTS.md`](../petcore/AGENTS.md) | petcore 的 agent/贡献者约定：每次改动必须写 log + index、架构红线、菜单/设置一致性、非模态与大小上限。 | 在 `petcore/` 下改任何代码或文档之前必读。 |
 

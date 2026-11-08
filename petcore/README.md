@@ -4,34 +4,33 @@
 > 与 `pet/` 仍然保留，作为迁移期的参照与兼容层；本目录不 import `pet`，只有
 > `petcore/media/` 与 `petcore/content/legacy.py` 两个适配层例外。
 
-## 当前开发状态（2026-10-24，P4-c3 A–E）
+## 当前开发状态（2026-11-09）
 
-当前Core候选为0.2.0/API1。A已关闭整仓/原生退出阻断；B提供slot提醒交付、免打扰汇总与真实播放完成/取消；C待办完整调度、D农历/节气/生日、E48签及语音联动均已实现。新增偏好仍按宠物隔离；自动节日提醒与所有新增语音默认关闭，功能扩展执行授权仍默认关闭。
+当前 Core 为 **0.5.0 / API 1**，使用单进程、多宠独立窗口。近期对话/记忆/语音、
+角色台词、QQ 桥接及 Linux/macOS 适配摘要见 [分支 README](../README.md)。
+本页侧重开发接线；版本号、源码能力、候选产物和原生验收是不同层面的状态。
 
-Windows隔离源码和性能已验证；最终整仓9837passed/20skipped、正常exit0，petcore/公共门1662passed、高负载3×86passed，准确数字及未验证范围见[E联合报告](../docs/PR-REPORT-PETCORE-P4C3-E-2026-10-24.md)。当前`.venv`已建立并用于Python3.11.1验证，不代表已构建冻结包。完整数据/回滚契约见[MOD-FORMAT §17](../docs/PETCORE-MOD-FORMAT.md)。
+- Linux 第六轮候选在 Ubuntu 22.04 构建，并在 Ubuntu 24.04.5 GNOME Wayland + xcb
+  验证真实交互、输入法、安装升级与重登自启；未发布正式 Release。
+- Mac 已在 Intel macOS 15.8.2 / Qt 6.12.0 验证源码交互、菜单、截图、全屏转场和自启；
+  arm64 构建目标尚缺对应硬件，没有 `.app` 产物或安装验收。
+- Windows 整仓仍有七项既有失败，压力下 Qt 退出超时未解决；两端各完成 24 组短性能样本，
+  30 分钟内存观察已取消。详细范围见 [Linux 报告](../docs/PR-REPORT-PETCORE-POSIX-2026-11-07.md)
+  与 [Mac 报告](../docs/PR-REPORT-PETCORE-MACOS-2026-11-08.md)。
 
-之前“仅清单/8公历节日/6签”的状态保留在[质量审查历史报告](../docs/PR-REPORT-PETCORE-QUALITY-REVIEW-2026-10-24.md)，不再作为当前能力结论。P4-c2只读Agent、P5-a1灵动岛已有；Agent写入、灵动岛二阶段、节日专属动画与角色素材下载/v6仍未做。本轮止于E，分发清单/Release ZIP/下载加固/候选包及远端验收尚未开始。
-
-下方运行/打包命令是开发说明，不代表本轮全部执行。P4-c3验收不创建或信任证书、不降低Smart App Control、不覆盖真实安装；遇安全策略拦截应保留证据并标记候选包验收阻断。
-
-**2026-10-27 追加**：语音链路（新增「语音」设置页、本地部署模型的 OpenAI 兼容/通用 JSON 接口、
-自语与点击台词朗读、8% 概率连说 5 句的自言自语彩蛋）、关于页致谢体系（作者/贡献者/特别鸣谢/
-issue·PR 协作者/B 站粉丝分页搜索/全局唯一手写签名，随包快照见 `petcore/community/data/`）、
-安装包签名（用 Inno 的 `SignedUninstaller` 在**安装时**签 `unins000.exe`，否则 Windows 11
-智能应用控制会拦卸载器；见 `../docs/ONEDIR_PACKAGING.md` 同名小节）、以及菜单注册化
-（`AI 对话 / 看看屏幕 / 截图提问` 改由 `ai.chat` 的 menu contribution 提供，没装扩展就不出现；
-气泡改为桌宠窗口的从属窗口，右键菜单与气泡同层）。逐条记录见 `../docs/PETCORE-LOG.md` L106–L109。
+较早阶段的数字保留在各批报告中，不作为当前全绿结论。规格和进度分别查看
+[SPEC](../docs/PETCORE-SPEC.md)、[日志索引](../docs/PETCORE-LOG-INDEX.md)。
 
 ## 1. 环境
 
 Linux/macOS 的源码适配与候选构建入口见 [POSIX 桌面说明](../docs/PETCORE-POSIX.md)。
-2026-11-07 状态：代码与本机回归阶段，目标虚拟机尚未部署；不代表已完成这两端的原生验收。
+POSIX 验收使用 Python 3.12，依赖安装需带 `packaging/petcore-posix-constraints.txt`；
+Linux 固定 PySide6 6.11.3，macOS 固定 6.12.0。下方 Windows 命令在仓库根目录执行。
 
 Windows（Git Bash）：
 
 ```bash
-cd E:/AI/DSH/dshpet
-python -m venv .venv
+py -3.12 -m venv .venv
 .venv/Scripts/python -m pip install -U pip
 .venv/Scripts/python -m pip install -r requirements.txt pytest ruff
 ```
@@ -51,7 +50,7 @@ python -m venv .venv
 # 指定数据目录与 mods 目录
 .venv/Scripts/python -m petcore --root ./data --mods-dir ./mods
 
-# 第二个独立实例（每个实例一只宠、独立数据目录/lock）
+# 第二个独立应用实例（独立数据目录/lock；进程内多宠由 PetManager 管理）
 .venv/Scripts/python -m petcore --instance pet2
 
 # 本项目内安装打包工具（PyInstaller 到 .venv，Inno Setup 到 tools/InnoSetup）
@@ -94,9 +93,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
 | `content/` | 旧素材只读适配、mod 内容、收集、打包 | `legacy.py` 允许 import `pet.*` |
 | `net/` | 唯一网络出口：代理兜底、失败分类 | 只用标准库；其他包不得 import 网络库 |
 | `api/` | API 服务规格、`api.json`、钥匙串凭据、探测 | 密钥不落盘 |
-| `account/` | 登录态与额度（P9，暂未实现） | 网络只经 `net/` |
+| `account/` | 账户配置与额度查询 | 网络只经 `net/` |
 | `mods/` | manifest、发现、启停、安装、feature 宿主、CLI | 标准库为主 |
-| `platform/` | Windows 输入、屏幕几何、会话、自启 | Qt 只出现在屏幕快照 |
+| `platform/` | Windows/Linux/macOS 能力、输入、原生窗口、屏幕、自启 | Qt 与原生窗口操作留在 GUI 线程 |
 | `ui/` | 窗口、渲染、气泡、托盘、菜单、设置 | Qt |
 | `builtin/` | Core 内置特性（`CORE_FEATURE_IDS`，设置页按 `host_page` 内嵌）+ demo 接缝 | 入口只能是 `host/factory.py:create_host` |
 | `menu_templates/` | 默认菜单布局 JSON | 与 `menu_layout.py` schema 一致 |
@@ -168,9 +167,9 @@ loader 的判据是「位于 `user_mods_dirs`（`<数据根>/mods`、冻结包�
 内置清单（7 个）：`fun.self-talk`、`fun.click-talk`、`tool.quick-launch`、
 `tool.quiet-mode`、`tool.links`、`tool.memory-trim`、`tool.network-info`。
 
-可导入样板（10 个）在 `examples/petcore-mods/`：`fun.divination`、`fun.festival`、
+可导入样板（12 个）在 `examples/petcore-mods/`：`fun.divination`、`fun.festival`、
 `reminder.todo`、`voice.chime`、`media.music`、`tool.weather`、`tool.file-reader`、
-`ai.chat`、`tool.ocr`、`ai.agent`。用
+`ai.chat`、`tool.ocr`、`tool.ai-browser`、`ai.agent`、`im.qq`。用
 `petcore mods install examples/petcore-mods/<id>` 安装，并在设置 →「扩展管理」
 开启「允许功能扩展」；安装后菜单默认进「扩展」，设置页进入「扩展管理」→「加装扩展」。
 详细说明见 [`examples/petcore-mods/README.md`](../examples/petcore-mods/README.md)。
@@ -207,7 +206,7 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest \
 - `engine/` 禁 PySide6；
 - `contracts/` 只用标准库；
 - 直接 import `pet.*` 只允许 `media/` 与 `content/legacy.py`；
-- 全包禁 `urllib/http/socket/requests/aiohttp/httpx`。
+- 网络库只允许在 `net/`、`api/`、`account/` 导入；mod 经宿主端口访问网络。
 
 ## 8. 改完必须做的事
 
@@ -222,27 +221,27 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest \
 ## 9. 当前已知边界
 
 - 真双屏未在本机验证（本机 1 块物理屏），多屏逻辑只有伪造几何单测。
-- macOS/Linux 的窗口层级、输入穿透与设置焦点未实机验证。
+- Linux GNOME/xcb 候选和 Intel Cocoa 源码已有原生输入/窗口/设置焦点证据；
+  不能外推为 KDE/Hyprland、原生 Wayland 或 Apple Silicon 产物已经验收。
 - 没有热卸载、没有 mod 沙箱；feature 只支持 host-only。
 - 旧 `menu_layout` 的显隐不会被新默认模板强行改写；默认隐藏「大小」只对
   使用默认布局的用户生效。
-- 单进程多宠已实现（slot 0 主宠 + slot 1–15）；跨进程碰撞 IPC、每屏多宠、
-  overlay `ScreenHost` 仍是非目标。
+- 单进程多宠已实现，容量以 `config.MAX_PETS` 为准；每宠独立窗口，
+  不引入跨进程碰撞 IPC 或旧版 overlay `ScreenHost`。
 - 与主分支的完整功能差距（AI/识屏/Agent/账户/音乐/语音/天气/灵动岛/更新等）
   维护在 [`../docs/PETCORE-MAIN-PARITY-BACKLOG.md`](../docs/PETCORE-MAIN-PARITY-BACKLOG.md)，
   不要用“示例 mod 存在”判断某域已交付。
-- 历史批次曾以 PyInstaller 6.22.3 / Inno Setup 6.7.3 构建 onedir 与安装包
-  （默认窗口化，`Subsystem=2`）；这不是本轮候选证据。2026-10-24 当前 Python 3.11
-  独立 `.venv` 未安装 PyInstaller，A–E 未生成冻结包，也未验收安装/卸载。
-  后续分发必须重新检查工具版本、构建和端到端运行，不能复用历史产物结论。
-- 安装向导的 5 个扩展是 `[Tasks]` 可勾选项，装到 `%APPDATA%\dsh-pet-core\mods\<id>`
-  并附 `.trusted` 授信标记；不勾选不写盘。
+- Windows 11-05 的 0.5.0 开发签名 setup 是历史本地产物，不包含后续全部 POSIX 改动；
+  Linux 候选已验，Mac arm64 包未交付。构建入口和产物范围见分支 README。
+- 安装器随附扩展落 `{app}/mods/<id>` 并附 `.trusted`，用户导入落数据根 `mods/`；
+  可选扩展不勾选不写盘，具体任务以 `packaging/petcore.iss` 为准。
 - 朝向口径：素材原生朝左，`facing == "right"` 才镜像（`_mirrored()`）；反了就是
   「位移方向和面朝向相反」。
 - 碰边反馈按接触沿触发，每次落地/撞墙都 Q 弹 + 音效；多宠碰撞分离一律经过
   `_clamp_position()`，拖拽中不参与碰撞结算。
 - 全局快捷键只在 Windows 注册，真实按键未在本轮自动化验证。
-- 边缘探头在单屏 Windows 实机验证；macOS/Linux 的窗口出屏/旋转命中未实机验证。
+- Linux 已有三档缩放四边视口与原生输入记录；完整探头/旋转组合及真实多屏仍需按
+  POSIX 验收表补测，不能由一次拖动或 offscreen 用例代替。
 - 首跑供给只验证了包装与 shenshen 的前 2 段实机转换，未跑全量素材。
 - 设置页不再每个 mod 占一个侧边栏页：`ExtensionsPage` 用**左侧竖向导航**聚合「扩展管理」和所有 mod 设置页，按「基础扩展 / 加装扩展」分组；侧边栏 8 页（P6 新增 core 页「API 与账户」）。
 - mod 展示名优先 `mod.json` 的 `name_zh`，缺失回退 `name`；安装器随附的包落 `{app}/mods`（`.trusted`），用户导入仍落数据目录 `mods/`。

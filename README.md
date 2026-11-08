@@ -1,772 +1,232 @@
-# dsh-pet-indesktop
+# petcore · dsh-pet-indesktop
 
-<p align="center">
-  <a href="https://github.com/MerZlin/dsh-pet-indesktop/releases"><img alt="版本" src="https://img.shields.io/github/v/release/MerZlin/dsh-pet-indesktop?label=%E7%89%88%E6%9C%AC&color=blue"></a>
-  <a href="https://github.com/MerZlin/dsh-pet-indesktop/releases"><img alt="总下载" src="https://img.shields.io/github/downloads/MerZlin/dsh-pet-indesktop/total?label=%E6%80%BB%E4%B8%8B%E8%BD%BD&color=brightgreen"></a>
-  <a href="https://github.com/MerZlin/dsh-pet-indesktop"><img alt="Stars" src="https://img.shields.io/github/stars/MerZlin/dsh-pet-indesktop?style=social"></a>
-  <a href="https://github.com/MerZlin/dsh-pet-indesktop/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/MerZlin/dsh-pet-indesktop?color=orange"></a>
-  <a href="https://github.com/MerZlin/dsh-pet-indesktop"><img alt="Repo size" src="https://img.shields.io/github/repo-size/MerZlin/dsh-pet-indesktop"></a>
-  <a href="https://github.com/MerZlin/dsh-pet-indesktop/issues"><img alt="Issues" src="https://img.shields.io/github/issues/MerZlin/dsh-pet-indesktop"></a>
-  <img alt="平台" src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-8A2BE2">
-  <img alt="动画素材" src="https://img.shields.io/badge/%E5%8A%A8%E7%94%BB-dynamic%20animations-ff69b4">
-</p>
+基于 Python + PySide6 的桌面宠物核心，按 **core + mod** 拆分窗口交互、动画、内容、平台能力和业务扩展。
+本 README 面向 `feat/petcore-vpet-architecture` 分支的开发者，状态更新于 **2026-11-09**。
+当前 Core 版本为 **0.5.0**；版本号不代表本分支所有平台都已有对应正式安装包。
 
-一个基于 **Python + PySide6** 的独立桌面宠物。项目脱离 DSH 运行时，提供透明无边框、置顶、可拖动、角色切换、动画播放、系统托盘和可选 AI 对话能力。
+运行入口是 `python -m petcore`。旧 `pet/` 与 `python -m pet` 保留作迁移参照及部分媒体适配，
+两者的配置结构、窗口拓扑和发布产物不能混用。旧版用户文档可从 Git 历史查看。
 
-> **发布状态**
->
-> - **最近正式发布：v4.3.4（2026-10-19）**。Release 永久地址：[`releases/tag/v4.3.4`](https://github.com/MerZlin/dsh-pet-indesktop/releases/tag/v4.3.4)，产物清单与校验值以该页面为准；说明文档见 [`docs/RELEASE-v4.3.4.md`](docs/RELEASE-v4.3.4.md)。
-> - **v4.3.4 换回了「每块屏一张合成窗」**：条件是多块屏**且任一块屏的缩放不是 100%**（并且开着「允许桌宠跨屏」）。原因是 v4.3.3 那张铺满整个虚拟桌面的合成窗只能有一个 DPR：混合缩放下 Windows 按「窗口大部分落在哪块屏」定倍率，必有一侧被按错倍率画到可见区外（#307）；两块屏缩放相同但不是 100% 时，Qt 又对**负原点屏**报「原生原点 + 逻辑宽高」的混合坐标，单窗把这份错位当真，屏与屏之间凭空多出空洞（#310）。每张窗只落在自己那块屏上，这两个坐标问题都不再参与运算。**多块屏缩放全是 100% 时仍是单窗**，行为与 v4.3.3 一致。
-> - **v4.3.4 同时修的同类缺陷**（按模式收口，不是单点补丁）：点击台词不朗读（三个读配置的地方都读了主配置，每宠键取不到）、换音色/语速后旧句子永不重合成（缓存键不是实际合成输入的指纹）、待办与报时提醒「气泡没送出却已盖戳」（之后不再补）、帧率采集攒满自己的 ETW 会话（`error 1450`）、跨屏拖过去的位置不落盘（v4.3.3 回归）、每日待办跨午夜漏提醒、副屏右键菜单写主窗控制器等。**新增**：三个动作的**全局快捷键**（设置 → 互动 → 快捷键，默认不绑）与设置页 **Ctrl+F** 直接搜。
-> - **跨屏能力已在真双屏上验证**：本机主屏 2560×1440@170Hz + 左侧副屏 1920×1080@60Hz（负坐标）实测跨屏拖拽、边缘探头、设置说明均正常；**混合缩放本机验到 125%**（副屏改 125% 时窗口数翻转、坐标探针对得上），**100% + 150% 这类组合仍未实机验证**——本版按每屏一窗处理，但那条路上的另一个未结案项见下一条。
-> - **仍未结案**：[issue #286](https://github.com/MerZlin/dsh-pet-indesktop/issues/286) 报告的 Windows 11 + 150% DPI 下桌宠不可见、鼠标整屏失效，原因**仍未定性**，本版不含其修复。
-> - 发布形态为 **onedir 目录打包**，Windows 提供 Inno Setup 安装包（`.exe`）与便携 zip：启动时不再像 onefile 那样解包到 `_MEI*` 临时目录；配置、日志与功能缓存仍会正常写入数据目录。
-> - 各版本摘要与历史见 [版本与变更历史](#版本与变更历史)。
+- [架构与边界](#架构与边界)
+- [近期改动](#近期改动)
+- [Linux 与 macOS 适配](#linux-与-macos-适配)
+- [开发环境与运行](#开发环境与运行)
+- [扩展开发](#扩展开发)
+- [测试与验证](#测试与验证)
+- [候选构建](#候选构建)
+- [文档导航](#文档导航)
 
-## 目录
+## 架构与边界
 
-- [下载与版本选择](#下载与版本选择)
-- [安装、升级与卸载](#安装升级与卸载)
-- [快速开始](#快速开始)
-- [功能概览](#功能概览)
-- [使用教程](#使用教程)
-- [AI 对话使用教程（Chat 版）](#ai-对话使用教程chat-版)
-- [动画素材与自定义角色](#动画素材与自定义角色)
-- [配置、隐私与安全](#配置隐私与安全)
-- [已知限制](#已知限制)
-- [反馈与求助](#反馈与求助)
-- [项目来源与素材声明](#项目来源与素材声明)
-- [许可证与致谢](#许可证与致谢)
-- [版本与变更历史](#版本与变更历史)
-- [开发者与贡献](#开发者与贡献)
+petcore 使用**单进程、多宠独立窗口**：`CoreHost` 装配共享服务，`PetManager` 管理宠物窗口，
+`PetWindow` 负责交互与绘制。Linux/macOS 实现在 `petcore/platform/`，不引入旧版 overlay
+或跨进程碰撞架构。多屏位置使用 Qt 逻辑坐标，DPR 只参与图像及原生像素边界转换。
 
----
+```mermaid
+flowchart LR
+    CLI[cli.main] --> Host[CoreHost]
+    Host --> Manager[PetManager]
+    Manager --> Window[PetWindow × N]
+    Window --> Engine[engine / media]
+    Window --> Platform[platform]
+    Host --> Mods[mod loader / feature runtime]
+    Mods --> Ports[HostPorts]
+    Ports --> Services[core services]
+```
 
-## 下载与版本选择
+| 路径 | 职责与约束 |
+| --- | --- |
+| `petcore/engine/`、`contracts/` | 动画、几何、状态及端口契约；不依赖 Qt，contracts 只依赖标准库 |
+| `petcore/media/`、`content/` | WebP 帧序列 / WebM / GIF、角色内容；仅 media 和 `content/legacy.py` 可直接适配 `pet.*` |
+| `petcore/platform/` | 平台能力、输入区域、原生窗口策略、屏幕、自启与权限诊断 |
+| `petcore/ui/` | Qt 窗口、气泡、菜单、设置和端口装配；Qt 对象在其所属线程操作 |
+| `petcore/mods/`、`builtin/` | 包发现、校验、安装与贡献注册；内置 feature 与可安装扩展分开 |
+| `petcore/net/`、`api/`、`account/` | 网络出口、服务规格、系统钥匙串和账户能力；mod 通过端口访问 |
+| `examples/petcore-mods/` | 可安装 feature 样板，包括 AI 对话、Agent、OCR、音乐、天气、提醒与 QQ 桥接 |
 
-正式发布时请以 [Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases) 页面实际上传的文件为准。当前推荐下载的 Windows 产物如下：
+核心菜单必须登记设置落点；新增持久设置须遵守保存/取消和配置作用域契约。
+角色定位与贴边按 `body_box`，输入命中与绘制共用缩放、镜像、旋转、Q 弹和偏移变换。
+API Key 只进入系统钥匙串；`api.json` 保存服务规格。feature mod 当前为 host-only，
+**没有沙箱或热卸载隔离保证**。详细约束以 [petcore/AGENTS.md](petcore/AGENTS.md) 为准。
 
-| 版本 | 安装包（setup.exe） | 绿色版（zip） | 适合场景 |
-|---|---|---|---|
-| Chat WebM | `dsh-pet-standalone-webm-chat-setup.exe` | `dsh-pet-standalone-webm-chat-portable.zip` | WebM 高清播放 + AI 对话，功能完整 |
-| 无 Chat WebM | `dsh-pet-standalone-webm-setup.exe` | `dsh-pet-standalone-webm-portable.zip` | 只想要桌宠本体，不接入 AI |
+## 近期改动
 
-选择建议：
+以下是本分支 11 月以来的实现摘要；不同功能和平台的验证范围分别记在对应报告中。
 
-- **想体验完整功能（含 AI 对话）**：装 Chat 版。
-- **只需要桌宠陪伴**：装无 Chat 版，包体更小、启动更轻。
-- **不想安装、追求便携**：用绿色版 zip，解压到任意目录双击即用。
+| 批次 | 主要变化 | 记录 |
+| --- | --- | --- |
+| 11-01～11-02：对话、记忆与语音 | 对话视图与 `chat_view` 扩展接缝、数据/缓存根搬迁、记忆管理与召回、外部记忆只读融合、分句朗读与预合成 | [L151–L162 索引](docs/PETCORE-LOG-INDEX.md) |
+| 11-03：台词与 AI 回复 | 每日台词与自定义台词组成循环播放池；点击台词可恢复内置；提示词上限可见化；误输出工具调用时兜底；本地/data 图片与可选 GIF 表情回复 | [台词记录](docs/PETCORE-LOG.md#l164--2026-11-03--每日播放池循环--点击台词初始句--人设卡扩容与重写)、[AI 回复报告](docs/PR-REPORT-AI-TOOLS-PROMPT-MEME-2026-11-03.md) |
+| 11-03～11-04：启动与界面 | 首帧后分步加载扩展、点击反馈不受音效阻塞；修复快速对话深色模式黑底；补充角色扮演人设卡 | [启动与点击](docs/PR-REPORT-CLICK-PACKS-STARTUP-2026-11-03.md)、[对话与人设](docs/PR-REPORT-QUICKCHAT-PERSONAS-2026-11-04.md) |
+| 11-05：QQ 与数据健壮性 | 修复设置页凭据接线，验证 token 持久化；兼容 OneBot 鉴权形式；加固数据根、扩展替换与会话坏时间戳处理 | [QQ 桥接报告](docs/PR-REPORT-QQ-BRIDGE-AND-UPSTREAM-AUDIT-2026-11-05.md) |
+| 11-07～11-08：Linux/macOS | 平台能力矩阵、输入与窗口策略、自启、候选构建；在 VM 中定位并修复输入法/系统库混载、GIF 命中、Cocoa 托盘、字体布局和权限诊断问题 | [Linux/POSIX 报告](docs/PR-REPORT-PETCORE-POSIX-2026-11-07.md)、[Mac 报告](docs/PR-REPORT-PETCORE-MACOS-2026-11-08.md) |
 
-> 两个版本使用同一套高清 WebM 素材（106 段动画），只是入口不同：Chat 版会加载聊天子系统，无 Chat 版完全不携带 AI 对话依赖。
->
-> **macOS（Apple Silicon）**：产物为 `dsh-pet-standalone-<webm-chat|webm>-macos-arm64.zip`（onedir .app），随 [Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases) 一同发布，从该页面下载即可；首次打开步骤见下文「macOS（Apple Silicon）」。
->
-> **Linux（x86_64）**：产物为 `dsh-pet-standalone-*-linux-x86_64.zip`（onedir 目录，解压即用），同样随 Releases 发布，见下文「Linux（x86_64）」。
->
-> **GIF 变体**（旧版那个约 800 MB 的超大单文件，运行时会在 C 盘临时目录解压并可能残留缓存）自 v4.0.0 起不再默认发布；确有需要可按 [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md) 的说明自行构建。
+与旧版 v4.3–v4.4 的功能归属和差距见 [功能对照](docs/PETCORE-V43-V44-PARITY-2026-11-05.md)。
+该文档是 11-05 快照，其中“非 Windows 平台层”的后续进展以本页和 POSIX 报告为准。
 
-## 安装、升级与卸载
+## Linux 与 macOS 适配
 
-Android 原生悬浮桌宠已提供本地测试版构建入口，支持 Android 8.0 及以上。
-安装、功能边界和构建步骤见 [Android 说明](docs/ANDROID.md)，实际验证范围见
-[Android 交付报告](docs/PR-REPORT-ANDROID-PET-2026-10-15.md)。测试 APK 不作为正式发布附件。
+### 目标与已有证据
 
-### Windows：安装包（setup.exe）
+| 平台 | 实现目标 | 已验证 | 尚未交付或验证 |
+| --- | --- | --- | --- |
+| Linux x86_64 | Ubuntu 22.04+；X11，以及 Wayland 会话中的 XWayland/xcb | Ubuntu 22.04 构建/ELF 审计；Ubuntu 24.04.5 GNOME Wayland + xcb 的源码与候选包交互、中文输入、安装升级、真实重登自启 | Ubuntu 22.04 真实桌面、独立 Xorg 桌面、KDE、Hyprland、多屏/热插拔；没有发布正式 Release |
+| macOS | macOS 14.4+；arm64 `.app` 为构建目标，Intel 保留源码运行 | Intel macOS 15.8.2 / Qt 6.12.0 VM 的原生交互、中文输入、菜单/设置/聊天、全屏转场、截图、人工穿透恢复、真实重登自启 | 当前 VM 为 x86_64，尚无 arm64 `.app` / 签名 / 安装验收；独立桌面 Space 切换、双 Retina、混合缩放和热插拔未验 |
+| Windows | 保留现有实现与专有平台能力 | 原有路径与本次跨平台回归分开记录 | 当前整仓及压力测试仍有未通过项，见下方验证记录 |
 
-1. **下载**：选择 `dsh-pet-standalone-webm-chat-setup.exe`（或无 Chat 版）放到任意位置。
-2. **双击运行**：如果出现 Windows SmartScreen 提示，点「更多信息 → 仍要运行」（软件尚未购买代码签名证书）。
-3. **选择语言**：向导默认简体中文，也可切换 English，点「下一步」。
-4. **选择安装目录**：
-   - 默认目录为 `%LOCALAPPDATA%\Programs\dsh-pet-standalone-webm-chat`（当前用户目录，**不需要管理员权限**）；
-   - 想装到其他盘符（如 `D:\`、`E:\`），点「浏览」自己选一个目录即可。
-5. **附加任务**：可勾选「创建桌面快捷方式」（默认不勾选）。
-6. **完成**：勾选「运行 dsh-pet-standalone-webm-chat」会立即启动桌宠。
-7. **首次启动**：桌宠出现在屏幕右下角；系统托盘出现常驻图标（右键托盘可打开菜单）。
+### Linux 实现
 
-**常见问题**
+- **启动与能力**：创建 `QApplication` 前选择 xcb，尊重显式 `QT_QPA_PLATFORM`；缺少
+  XWayland/xcb 或误用原生 Wayland 时给出诊断。界面与 `--check` 共用能力矩阵。
+- **输入与贴边**：XFixes ShapeInput 使用当前可见 alpha 轮廓，缓存静态区域、保留拖动连续性，
+  隐藏/关闭释放，句柄重建后重放。逻辑位置与原生视口分离，避免 GNOME 限制透明画布出屏。
+  XFixes 失败会明确降级为矩形输入，不改用 Linux 全局光标轮询。
+- **桌面恢复与自启**：无系统托盘时提供任务栏恢复窗口；自启写用户级 XDG `.desktop`，
+  保留解释器、工作目录、数据根和实例参数，覆盖中文与空格路径。
+- **冻结包**：Ubuntu 22.04 / glibc 2.35 基线，PySide6 6.11.3；构建匹配 Qt 的 Fcitx 插件，
+  审计 ELF 架构/依赖/glibc，隔离宿主 Qt/GIO 插件。文件选择器使用随包 Qt，避免 GTK/IBus ABI 混载。
+  部分内置按钮仍为英文，宿主 GVfs 远程卷扩展不在当前冻结包支持范围。
 
-- **找不到桌宠了？** 看系统托盘（可能收在「显示隐藏的图标」里），双击托盘图标可显示/隐藏桌宠。
-- **想开机自启？** 右键托盘 → 勾选「开机自启」即可（写入当前用户注册表 Run 键，无需管理员）；也可以在「桌宠设置」中开启。
-  - **自启不生效怎么办**：① 安全软件/系统优化工具（360、电脑管家、Defender 等）可能拦截或清理未签名程序的自启项——请到其"开机加速/启动项管理"中恢复；② 程序每次启动会自检：若发现"之前开启过但已被清理"，桌宠会气泡提醒；③ macOS 新版系统需在「系统设置 → 通用 → 登录项」中允许桌宠（勾选时也有气泡提示）。
+### macOS 实现
 
-### Windows：绿色版（zip 免安装）
+- **窗口策略**：桌宠使用普通无边框 NSWindow；桌宠、气泡与灵动岛被动显示不抢焦点，
+  设置/聊天/截图选择层仍可主动激活并输入。原生属性在显示与句柄重建后重放。
+- **透明输入与菜单**：更新现有 NSWindow 的 `ignoresMouseEvents`，不逐帧切换 flags/show；
+  菜单栏状态图标使用共用 QMenu 会话，动作在菜单关闭后执行，支持右键鼠标通路。
+- **截图与恢复**：采集前检查录屏权限，拒绝时不先隐藏宠物或返回黑图；修复截图层的
+  Spaces 策略。用户已手动验证托盘开启/关闭穿透及恢复点击；CGEventPost 自动化异常另行保留。
+- **自启与资源**：用户级 LaunchAgent 保留源码/冻结启动参数；`.app` 资源与用户数据分离。
+  arm64 构建入口包含 bundle 配置、ad-hoc 签名与签名检查，但当前 Intel VM 未执行成功构建。
+- **原生测试发现的共用修复**：GIF 帧统一为 QImage 供 alpha 命中；修正 CJK 字体回退下的
+  气泡高度、窄设置窗布局，以及跨时区缓存时间比较。
 
-1. 下载 `dsh-pet-standalone-webm-chat-portable.zip`。
-2. 解压到任意可写目录（例如 `E:\dsh-pet\`），**保持文件夹内结构完整**。
-3. 双击文件夹里的 `dsh-pet-standalone-webm-chat.exe` 即可运行。
-4. 删除整个文件夹即完成卸载，不残留任何运行缓存。
+两端手动穿透均为**整窗穿透**，通过托盘或恢复窗口关闭。Windows 专有的全局快捷键、
+GPU/FPS、系统麦克风和 SMTC 本轮未移植，配置值保留，界面/诊断明确可用性。
+历史 issue/PR 与本分支的对应处理见 [POSIX 历史缺陷表](docs/PETCORE-POSIX.md#历史缺陷对应)，
+不能把上游 PR 的方案或合并状态当作本分支的实测结果。
 
-> 绿色版与安装版是同一套 onedir 产物，运行行为完全一致；区别只是安装版多了快捷方式与卸载器。
+## 开发环境与运行
 
-### macOS（Apple Silicon）
+以下命令在仓库根目录执行。跨平台验收使用 **Python 3.12**；POSIX 依赖约束见
+[`packaging/petcore-posix-constraints.txt`](packaging/petcore-posix-constraints.txt)，
+其中 Linux 为 PySide6 6.11.3，macOS 为 6.12.0。
 
-1. **获取**：到 [Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases) 页面，在对应版本的 Assets 里下载 `dsh-pet-standalone-webm-chat-macos-arm64.zip`（或无 Chat 版 `dsh-pet-standalone-webm-macos-arm64.zip`）。若你手上的版本没有附 macOS 产物，请到 [Issues](https://github.com/MerZlin/dsh-pet-indesktop/issues) 反馈——**不要自己去 Actions 页面点构建**，那是维护者发布流程的一部分。
-2. **解压**：得到 `dsh-pet-standalone-webm-chat.app`，可拖入「应用程序」文件夹。
-3. **首次打开**：应用未签名（ad-hoc codesign），Gatekeeper 会拦截——**右键 .app → 打开**，或终端执行：
-   ```bash
-   xattr -dr com.apple.quarantine dsh-pet-standalone-webm-chat.app
-   ```
-4. **数据目录**：`~/Library/Application Support/dsh-pet-standalone-<变体>/`（各变体相互独立，与 Windows 行为一致）。
-5. **开机自启**：托盘/右键菜单勾选「开机自启」（按变体生成独立 LaunchAgent）。
-6. **启动 DeepSeek Harness**：右键菜单的 **DeepSeek Harness** 子菜单与托盘菜单的两个启动项都提供「启动 dsh web 界面 / 启动桌面端界面」（**桌面端当前仅 Windows 支持**，macOS 上点它只会如实提示不支持，不会静默改开网页）。需安装 Node.js（`brew install node`）；启动器会自动探测 Homebrew/nvm 等路径并回退 `npx @deepseek-ai/dsh`。
-7. **关闭 Dock 图标**：在「桌宠设置 → 常规 → 显示 Dock 图标」取消勾选后，Dock 隐藏会彻底生效——隐藏桌宠也不会把 Dock 图标临时唤回；恢复入口是菜单栏托盘图标（显示 / 隐藏、鼠标穿透、桌宠设置）。开启鼠标穿透或关闭 Dock 图标时，桌宠会气泡提示恢复位置。
-
-> Intel Mac：当前 CI 只构建 arm64；Intel 用户请从源码运行（见下），或在 Intel 机器上自行构建。
-
-### Linux（x86_64）
-
-1. **获取**：到 [Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases) 页面，在对应版本的 Assets 里下载 `dsh-pet-standalone-webm-chat-linux-x86_64.zip`（或无 Chat 版 `dsh-pet-standalone-webm-linux-x86_64.zip`）。若你手上的版本没有附 Linux 产物，请到 [Issues](https://github.com/MerZlin/dsh-pet-indesktop/issues) 反馈——**不要自己去 Actions 页面点构建**，那是维护者发布流程的一部分。
-2. **解压**：得到 `dsh-pet-standalone-webm-chat/` 目录，运行其中的同名二进制：
-   ```bash
-   unzip dsh-pet-standalone-webm-chat-linux-x86_64.zip
-   cd dsh-pet-standalone-webm-chat
-   chmod +x dsh-pet-standalone-webm-chat   # 一般无需，zip 已保留可执行权限
-   ./dsh-pet-standalone-webm-chat
-   ```
-3. **首次运行缺库**（PySide6 需要少量系统库，常见发行版需安装）：
-   ```bash
-   # Debian / Ubuntu / Mint 等（其他发行版请找对应包名）
-   sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libegl1 libgl1 \
-                    libfontconfig1 libdbus-1-3 fonts-noto-cjk
-   ```
-   - `fonts-noto-cjk` 用于中文显示（缺失时气泡/聊天中文会显示为方块）。
-   - 默认按 X11 运行；Wayland 会话下若透明/置顶异常，可试 `QT_QPA_PLATFORM=xcb ./dsh-pet-standalone-webm-chat`。
-4. **数据目录**：`~/.config/dsh-pet-standalone-<变体>/`（各变体相互独立，与 Windows/macOS 行为一致）。
-5. **开机自启**：托盘/右键菜单勾选「开机自启」（写入 `~/.config/autostart/` 的 .desktop 文件）。
-6. **点击音效**：自动使用系统 `paplay`（PulseAudio）或 `aplay`（ALSA）；两者都没有时静默跳过。
-7. **启动 DeepSeek Harness**：右键菜单的 **DeepSeek Harness** 子菜单与托盘菜单的两个启动项都提供「启动 dsh web 界面 / 启动桌面端界面」（**桌面端当前仅 Windows 支持**，Linux 上点它只会如实提示不支持）。需安装 Node.js；启动器会自动探测 PATH 并回退 `npx @deepseek-ai/dsh`。
-
-> 建议在 X11 桌面（GNOME/KDE/Xfce 等）上使用；托盘图标依赖桌面环境的系统托盘支持（GNOME 需安装 AppIndicator 扩展）。
-
-### 从源码运行（开发者）
-
-需要 Python 3.10 或更高版本（CI 使用 Python 3.11，Windows 实机开发验证覆盖 Python 3.13）。在项目根目录执行：
+Windows / PowerShell：
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m pet        # Windows 也可直接双击 run.bat（实际执行 pythonw -m pet）
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m petcore --check --strict
+.\.venv\Scripts\python.exe -m petcore --root .scratch/dev-data --character shenshen
 ```
 
-源码入口默认包含 Chat 能力；如果只想验证桌宠核心功能，可使用无 Chat 的打包入口或在本地配置中关闭聊天。完整的环境准备、依赖清单、运行期目录与常用命令见 [`docs/DEV-HANDOVER.md`](docs/DEV-HANDOVER.md) §1.2 与附录 A。
+Linux / macOS：
 
-### 升级
-
-- **安装版**：直接运行新版 setup.exe 覆盖安装即可，配置与聊天会话不受影响。
-- **绿色版**：用新版 zip 解压覆盖旧文件夹即可。
-- **从 v4.2.x 及更早升到 v4.3.0 及以后，先看升级说明**：[`docs/RELEASE-v4.3.0.md`](docs/RELEASE-v4.3.0.md) 的「升级说明」一节列了会改变观感的行为变更与旧配置键退役情况，其中常被问到的是——旧版右键菜单整体退役（原选旧版的用户自动切到新菜单，功能为旧版超集）；「直播捕获兼容模式」改为**重启级开关**，勾选重启后多只桌宠会先收拢为主宠（活跃清单保留，取消勾选再重启即回来）；**免打扰模式期间语音也一并静音**（丢弃不补播）；Agent 联动与主动识屏各删掉一族旧配置键，老存档里的这些值不再被读取。逐条处置见该文档，本页不重复。
-- **升级不会丢数据**：设置与聊天会话在**按变体独立**的数据目录里（见 [数据目录](#数据目录)），覆盖安装/解压不影响它们。
-- **升级前建议先备份整个数据目录**：数据目录按**变体**分、**不按版本分**——同一变体的新旧版本共用同一个目录，升级会就地改写里面的配置。把整个目录复制一份，是回退时唯一可靠的凭据。
-- **回退前先核对迁移备份**：从 v4.2.x 及更早升到 v4.3.0 及以后时，程序会把主宠的每宠设置（位置、尺寸、角色、音效、气泡等）从 `config.json` 迁进 `config-slot-0.json`，并清掉 `config.json` 里的这些键（迁移前留了一份 `config.json.pre-slot0-migration.bak`）。**旧版本不读 `config-slot-0.json`**：升上去之后直接把产物换回 v4.2.x，主宠会回到默认位置与尺寸。要在 4.3 前后来回切，先退出桌宠，再用上面那份目录备份（或 `config.json.pre-slot0-migration.bak`）恢复数据目录，而不是只换 exe。
-
-### 卸载
-
-- **安装版**：`设置 → 应用 → 已安装的应用`（或「控制面板 → 程序和功能」）→ 找到 `dsh-pet-standalone (WebM Chat)` → 卸载。
-- 卸载程序会删除安装目录与快捷方式；各变体的数据目录（见下方「数据目录」）中的配置与会话默认保留，如需彻底清除可手动删除对应目录。
-
-### 数据目录
-
-设置与聊天会话保存在**按变体独立**的数据目录里（重装不会丢失；同一变体的新旧版本**共用**同一个目录，不是按版本隔离——升级会就地改写它，升级前请先备份）：
-
-| 系统 | 数据目录 |
-|---|---|
-| Windows | `%APPDATA%/dsh-pet-standalone-<变体>/` |
-| macOS | `~/Library/Application Support/dsh-pet-standalone-<变体>/` |
-| Linux | `~/.config/dsh-pet-standalone-<变体>/` |
-
-目录名按变体分：Chat 版 `dsh-pet-standalone-webm-chat`、无 Chat 版 `dsh-pet-standalone-webm`、源码运行为 `dsh-pet-standalone`。目录中主要包含：
-
-```text
-config.json                      # 全局设置；v4.3.0 起主宠的每宠键迁到 config-slot-0.json
-config-slot-0.json               # 主宠的每宠设置（多宠时另有 config-slot-N.json）
-config-slot-N.json               # 其它桌宠各自的设置
-config.json.pre-slot0-migration.bak   # 上述迁移前的 config.json 备份（只在做过迁移的目录里）
-sessions/<character_id>/<session_id>.json      # 主宠会话；其它桌宠为 sessions-slot-N/
-pet.log
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt -c packaging/petcore-posix-constraints.txt
+.venv/bin/python -m petcore --check --strict
+.venv/bin/python -m petcore --root .scratch/dev-data --character shenshen
+# Linux：在 Wayland 桌面中显式使用 XWayland
+QT_QPA_PLATFORM=xcb .venv/bin/python -m petcore --root .scratch/dev-data
 ```
 
-配置格式当前为 **v4**（`config.json` 的 `version` 字段；每宠档案 `config-slot-N.json` 同版），并兼容历史平铺字段，例如 `chat_api_url`、`chat_api_key`、`chat_model`、`chat_system_prompt` 和 `chat_enabled`。
+`--check --strict` 做资源与诊断检查，不创建桌宠窗口；它不能替代桌面输入或安装验收。
+Linux 系统依赖、输入法匹配与诊断方法见 [POSIX 运行说明](docs/PETCORE-POSIX.md#运行与自启)。
+`--instance <name>` 创建独立数据根/锁的应用实例，不用于实现进程内多宠。
 
-### 旧版 onefile 缓存清理（仅旧版本需要）
+默认数据目录：Windows `%APPDATA%/dsh-pet-core`；Linux
+`$XDG_CONFIG_HOME/dsh-pet-core`（默认 `~/.config/dsh-pet-core`）；macOS
+`~/Library/Application Support/dsh-pet-core`。开发和回归优先显式 `--root`，与日常数据隔离。
+POSIX 自启入口为 `python -m petcore --root <data-root> autostart on|off|status`，
+只注册用户级条目；LaunchAgent 在下次登录生效。
 
-旧版单文件 EXE（onefile）运行时会在系统临时目录创建 `_MEI数字` 目录，崩溃或强制结束时可能残留；**当前 onedir 发布版不会再产生该缓存**。程序启动时仍会自动尝试清理超过 24 小时的遗留目录，并跳过当前进程正在使用的运行目录；权限不足或目录被占用时只记录日志，不强制修改 ACL。
+## 扩展开发
 
-也可以使用项目提供的专用脚本检查：脚本默认只预览，不会删除任何目录。确认所有桌宠进程都已退出后，才使用 `--delete`：
+Core 内置 feature 位于 `petcore/builtin/features/`，可安装样板位于
+[`examples/petcore-mods/`](examples/petcore-mods/README.md)。功能包通过 `HostPorts`
+使用展示、调度、存储、HTTP、API、语音等服务，不直接 import core 的具体业务实现。
 
-```powershell
-python scripts/cleanup_mei_cache.py
-python scripts/cleanup_mei_cache.py --min-age-hours 0
-python scripts/cleanup_mei_cache.py --delete
+```bash
+# 在已激活的虚拟环境中执行；所有命令使用同一个独立数据根
+python -m petcore --root .scratch/dev-data mods validate examples/petcore-mods/ai.chat
+python -m petcore --root .scratch/dev-data mods install examples/petcore-mods/ai.chat
+python -m petcore --root .scratch/dev-data --allow-feature-mods
 ```
 
-如果某些目录因权限异常仍无法删除，请先退出所有桌宠，再用管理员 PowerShell 运行脚本；脚本不会自动接管目录所有权，避免误操作其他临时文件。
-
-## 快速开始
-
-1. 桌宠默认出现在屏幕右下角，播放待机动画。
-2. 右键桌宠打开菜单；**左键点击**触发互动动画，**按住拖动**可移动桌宠。
-3. 首次使用建议打开「设置」：右键桌宠 → 桌宠设置（或托盘菜单 → 桌宠设置）。设置**关闭即自动保存并立即生效**（直接点 X 也保存）；少数几项要重启或重新登录才生效，清单见[新版设置对话框](#新版设置对话框)。
-4. 让它说话：设置 → 互动 →「自言自语」（定时气泡）与「点击与音效」（点击反馈、点击台词朗读）都在这里；点击、拖动、丢出去、拖文件给它都有不同反应。
-5. 多开：右键菜单「生小肥鱼」在**同一进程**内孵出第二只，各自独立的设置、会话与位置。
-6. Chat 版额外提供「AI 对话」（右键菜单）与「AI 设置」（**托盘菜单**，打开的是设置窗的「AI 与对话」页）入口；无 Chat 版不会显示。AI 对话的零基础配置见 [AI 对话使用教程（Chat 版）](#ai-对话使用教程chat-版)。
-
-## 功能概览
-
-### 桌宠窗口
-
-- PySide6 透明、无边框、置顶窗口（无边框圆角窗口，窗外无方形背景）。
-- 支持点击互动、拖动、拖动惯性、方向转向和系统托盘。
-- **锁定位置**：设置开启后桌宠不可拖动（点击互动仍有效）。
-- **SHIFT+左键拖动**：设置开启后必须按住 SHIFT 才能拖动桌宠。
-- **不透明度**：桌宠窗口透明度 10%–100% 可调，保存立即生效。
-- 支持角色切换；角色目录按素材自动发现，不要求把角色写死在代码中。
-- 右键菜单使用**新版现代菜单**（紧凑分组 + 线性图标 + 半透明表面），可跟随系统/浅色/深色主题，UI 字体/字号/密度/圆角/浅深主题色均可调，内容与层级可在设置里编排。旧版经典菜单已**全量移除**（2026-10-08），不再有菜单版本切换项；原选旧版的用户自动使用新版菜单，功能为旧版超集。
-- 新版菜单首行彩蛋入口（欧鲸鲸，可配置头像/标题/图片目录）与「快捷启动」均可配置；「生小肥鱼」会启动一只独立的新桌宠（自动避让位置、配置隔离）。
-- 右键菜单提供 **DeepSeek Harness** 子菜单（启动并打开页面 / 重启服务 / 停止服务），托盘菜单是两个平铺启动项（启动 dsh web 界面 / 启动桌面端界面）：
-  - **「启动 dsh web 界面」**：一键后台拉起 `dsh web` 并自动打开浏览器（默认端口 38080，可用环境变量 `DSH_PORT` 覆盖）。启动命令自动适配不同安装方式（PATH 上的 `dsh` → node 全局包 → 官方 `npx @deepseek-ai/dsh`），macOS 同样可用（需装有 Node.js）。若本机已有 dsh web 在运行（含官方默认端口），直接复用并打开现有实例，不再重复拉起。
-  - 首次运行时 npx 拉取组件 + dsh 自举（可能出现 npm/pnpm 安装窗口）在网络较慢时需要几分钟属正常现象，桌宠会冒泡提示启动中；想跳过首次下载可提前手动 `npm install -g @deepseek-ai/dsh`。
-  - **「启动桌面端界面」**打开已安装的 **DeepSeek Harness 桌面端**（当前仅 Windows 支持）：常见安装位与注册表卸载项都会探测，已安装就直接打开，未安装会如实报错、不会悄悄改开网页；桌面端是你自己的应用，桌宠退出**不会**关掉它。
-  - 设置中另有「随桌宠启动 dsh 服务」开关与「自启目标」（只影响自启这一路，菜单点哪项就起哪项）：开启后桌宠启动即按目标拉起——目标是 dsh web 时后台静默起服务（不开浏览器、不弹窗口），目标是桌面端界面时直接打开应用；**自启还要求同时开着 DSH 联动**（联动关着时 dsh web 没有消费者，不会拉起）；**关闭开关只是不再自动拉起**，已经在跑的 dsh web 要等桌宠退出或关闭 DSH 联动时才收口（唯一例外：在桌宠拉起探测期间关掉开关，那一次刚拉起的实例会被立刻收掉）；非 Windows 上「自启目标」里的桌面端项置灰并写明原因（暂不支持 ≠ 永远不支持）。
-  - **「重启/停止服务」带确认框**（列出将终止的 PID 与端口）：`--no-open` 静默常驻之后没有可关闭的控制台窗口，这两个入口就是关掉它的正规方式——不必再去任务管理器杀进程。停止前会核验目标是 dsh web，端口被别的程序占用时**只报告、不终止**（避免误杀）；macOS 上暂不支持反查（会如实报告「读不到持有它的进程」）。退出桌宠**不会**顺带停止你自己起的 dsh 服务（桌宠自拉起的那份由退出收口负责收掉）。
-- 托盘菜单（鼠标穿透 / 开机自启）勾选状态与设置实时同步。
-
-### 新版设置对话框
-
-- 侧边栏 + 卡片式布局，按能力域分 10 页：常规 / 桌宠 / 互动 / 菜单 / 桌面组件 / AI 与对话 / 自动化与联动 / 语音 / 文件识别 / 更新。「桌宠」「互动」「菜单」等域内再用页内标签切「显示与音乐 / 动作与碰撞」这类同级任务；搜索命中另一标签的行会自动切过去。
-- **关闭即自动保存并立即生效**：直接点 X、ESC、保存按钮都会落盘并刷新桌宠。
-- **三个例外**（照常保存，但当前进程不按新值跑，行内也写着同一句）：`允许桌宠跨屏` 和 `直播捕获兼容` 要**重启**后生效；`帧率采集权限` 要**注销或重启电脑**后才生效。
-- **Ctrl+F 直接搜**：设置窗任意位置按 **Ctrl+F**，光标进侧栏搜索框并全选；回车 / ↓ 前进、↑ 后退（第一条上按 ↑ 回绕到最后一条），命中会切到对应页、展开折叠并高亮。搜索是**跳转式**不是过滤式，不会把人困在空列表里；侧栏的「恢复默认设置 / 保存并退出」是命令、不在搜索范围内。
-- 深色系统下全界面可读：自绘开关、下拉、选项弹窗、颜色块均适配明暗主题。
-- 彩蛋入口、菜单外观（颜色/圆角/半透明/字体）、点击音效、余额自动刷新等集中管理。
-- 桌宠显示分组可调「气泡文字大小」（50–300%，默认 100）：气泡列宽/换行预算/label 尺寸与字号用**同一个系数**等比放大；默认 100% 时与旧版逐像素一致。审批/提问气泡为固定布局，不随本项变化。
-
-### 动画播放
-
-- WebM 版：直接播放透明 WebM，默认素材为 640×360、24fps。
-- 播放速率可在设置中调整，可选 `0.5x` / `0.75x` / `1.0x` / `1.25x` / `1.5x` / `2.0x` / `3.0x` / `4.0x`（默认 `1.0x`）。
-- 动画按 `idle`、`turn`、`move`、`click`、`drag`、`random` 等目录组织。
-- 支持相邻非待机动画之间的等待间隔；等待期间只播放待机和转向动画。
-- 支持随机自言自语气泡；没有自定义文本时使用内置文本。
-- 素材懒加载 + 优先级预热：冷启动更快；**桌宠隐藏后暂停动画解码与活动定时器（隐藏时 CPU 接近 0），显示时立即恢复**。
-
-### AI 对话（Chat 版）
-
-- **新版双栏工作台**：左侧会话导航（搜索/重命名/置顶/批量管理）+ 右侧消息画布；**经典手机式窗口**保留可切换。
-- 支持 OpenAI Chat Completions 兼容接口；自定义 API 地址、模型、超时、温度和最大输出 token。
-- 支持 SSE 流式输出、多轮上下文裁剪、会话 JSON 持久化、停止生成、失败重试。
-- 消息支持 **Markdown 渲染**（表格、代码块、列表），复制按钮复制原文；模型输出的原始 HTML 按字面显示、不渲染。**现代双栏工作台自 v4.3.0 起支持**；经典手机式窗口与快捷气泡（快捷提问 / 灵动岛问答）的 Markdown 自 v4.3.1 起支持，三处渲染口径一致。
-- 会话按角色隔离；切换角色时不会把旧角色消息带入新角色。
-- 聊天窗靠近桌宠显示，并支持选择是否跟随桌宠移动；背景支持内置主题壁纸 / 自定义图片 / 裁剪取景。
-- API Key 优先使用系统钥匙串；钥匙串不可用时可按设置选择配置文件回退。
-- AI 对话窗口是**独立窗口**：不改变桌宠主窗口的透明背景、mask、鼠标穿透与动画状态机。
-
-### 主动识屏陪伴（Windows + Chat 版，默认关闭）
-
-- 白名单应用切换时以桌宠口吻冒泡关怀（截图 + 前台窗口上下文 → 视觉模型）。
-- 停留时长门限、闲置判定、冷却间隔、每日上限、免费模型优先、dry-run 验证模式。
-- 截图仅在内存中压缩处理并直接发送给视觉模型，不写入本地文件、不保留副本。
-
-### Agent 联动（默认关闭）
-
-- 内置 DSH 桥接插件（`integrations/dsh-pet-bridge`）与 Claude hooks 安装器：感知 AI Agent 状态并切换动作，支持开始干活、过程汇报、任务完成三种气泡反馈，右键 Agent 联动子菜单可独立开关。
-- **DSH 富事件状态**：thinking（思考）/ working（干活，带工具名）/ attention（需确认）/ error / idle 多态呈现，多会话按 attention > error > working > thinking > idle 聚合，子代理不抢状态；审批与提问为**纯提示常驻气泡**（引导回 DSH 界面处理），同一 Agent 的并发审批/提问按 `interaction_id` 互不覆盖。
-- **开机即按配置装配**：重启后已开启的 Agent 联动与主动识屏直接生效，不再需要手动展开一次菜单或开关一次设置对话框。
-- **自定义联动 Agent**：在 `config.json` 的 `agent_link.custom_agents` 里声明任意 Agent（key / 显示名 / 事件文件路径），桌宠即对其 JSONL 事件文件做只读监听，联动行为与内置 Agent 一致——不改代码即可接入任何能写本地文件的 Agent，协议详见 [`docs/AGENT_LINK_PROTOCOL.md`](docs/AGENT_LINK_PROTOCOL.md)。
-- **一键启动 DSH**：本机已在跑 dsh web（含官方 3080）时直接复用，不再拉起第二个实例；Windows 上 node/pnpm 解析覆盖 nvm-windows/nvm/fnm/Volta/scoop 等布局，也可用 `pnpm_bin` 配置键手动指定 pnpm 入口。
-
-### 看看屏幕（Chat 版）
-
-- 右键菜单 →「看看屏幕」：截取当前屏幕（含多显示器）→ 附带前台窗口「程序名 | 标题」上下文 → 发给视觉模型，用人设口吻回应一句（关心/吐槽/好奇），结果以气泡显示。
-- **回复会自动同步到 AI 对话当前会话**（一条 `[看看屏幕] 前台窗口：…` 记录 + 一条回复），可继续追问；聊天窗未打开时仅气泡显示、不写入。
-- 截图自动压缩（最长边 768px、JPEG 70）后仅在内存中处理并直接发送到你配置的模型服务商，不写入本地截图文件、不保留副本；不发送到本项目自建服务器，请你遵循所配置模型服务商的隐私政策。
-- 视觉模型在「设置 → AI 与对话 → 视觉能力」里配置：可手填模型名/独立端点/独立密钥，或勾选「同聊天模型」复用聊天配置；DeepSeek 聊天模型会自动映射到预览版视觉模型。
-- **注意：每次「看看屏幕」都会按一次视觉模型请求计费，消耗对应模型的 token**（截图按像素折算 + 回复输出）；有 4 秒冷却防连点，免费档高峰可能遇到限流（稍后重试即可）。
-
-### DeepSeek 余额（Chat 版）
-
-- 右键菜单或托盘 →「DeepSeek 余额」：查询 DeepSeek 开放平台账户余额，以气泡显示（如"余额 ¥12.34（充值 ¥10.00 / 赠送 ¥2.34）"）。
-- 数据来自 DeepSeek 官方 `/user/balance` 接口，使用当前配置的 API Key 鉴权（需使用 DeepSeek 官方端点）；查询结果 30 秒内缓存复用，重复查询秒回。
-- 桌宠设置可开启「余额自动刷新」（分钟级，0=关闭），到点自动查询并气泡显示；也可开启「点击显示余额」（与点击自言自语自动排队）。
-- 实现参考 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（见 [项目来源与素材声明](#项目来源与素材声明)）。
-
-### 点击音效
-
-- 点击桌宠触发 Q 弹时播放短促音效（内置合成音，可在桌宠设置中关闭）。
-- 可自定义声音：把 `click.wav` 放到桌宠数据目录 `sounds/` 下即可替换内置音效。
-
-### 全局快捷键（设置 → 互动 → 快捷键，默认不绑）
-
-> v4.3.4 新增：三个动作各录一个**系统级**组合键，在别的程序前台时也生效。
-
-- 三个动作：**AI 对话**、**看看屏幕**、**截图提问**（与右键菜单同一条入口）。
-- **默认全空**，一个键都不绑；右键菜单照常可用。
-- **必须带修饰键（Ctrl / Alt / Shift / Win 之一）**：单独一个键会抢走打字输入，所以录入时会被
-  清空（鼠标停在录入框上有说明）。右边的「清除」回到不绑。
-- **被别的程序占用时那条不生效**：Windows 的热键表是独占的，日志里能查到失败记录。
-  设置页是独立进程、拿不到注册结果，所以它在行内提前写清后果，不会假装「已生效」。
-- **只有 Windows 注册**：其它平台能看能存，但不生效，行内会写明。
-- 改完点「保存并退出」即生效，**不用重启**。
-
-### 音乐播放器入口与路径（Windows）
-
-> 本段描述的这批改动（右键菜单补两个入口、设置页给四个播放器建行）**自 v4.3.1 起提供**（#285）。
-
-- 右键菜单「音乐」按播放器逐个给出「打开〈播放器〉给主人放歌」入口：**网易云音乐、QQ音乐、酷狗音乐、汽水音乐**（后两个是本次补上的，此前只有前两条）。
-- 桌宠先自己找：按每个播放器登记的常见安装目录名搜几个盘符与用户目录（最多三层，含安装器把程序放进「版本号子目录」的情况；不联网、不做全盘扫描），找不到的条目在菜单里**置灰并写明原因**，不会点了没反应。
-- 找不到或装在别处时，在「桌宠设置 → 桌宠 → 显示与音乐 → 播放器路径（高级）」里给四个播放器各填一个可执行文件路径（`…\KuGou.exe` 这类程序本体，不是快捷方式）。也可以点「自动检测」让桌宠自己找一遍：**每点一次都会重新搜**（上次没找到的也会再找），找到就填进上面四行、**覆盖那里原有的内容**；检测期间你自己改过的行会保留、不会被覆盖（结果弹窗里会说明）。本次没扫完的行显示**「未完成」**（可以稍后再点一次），不会说成「没找到」。搜索在后台跑，不会卡住设置页。手填的路径**以它为准**：文件不存在时菜单如实提示找不到，不会偷偷回退自动搜索（避免"看起来能用、其实用的不是这个"）。
-- **这些路径只影响右键菜单的「打开…给主人放歌」，与歌词无关**：路径留空、填错、填成另一个播放器，都不会让歌词显示或消失。歌词取自**系统媒体会话**（系统当前正在播的那首歌），需要播放器把播放信息交给系统——酷狗要在它自己的设置里打开「支持系统播放控件」。所以**歌词不显示时改这里的路径没有用**：先确认播放器有没有把正在播的信息交给系统。
-
-### 待办提醒
-
-- 右键菜单 →「待办」面板增删改（带矢量图标），数据按实例落盘（`todo_items[-instance].json`，原子写）。
-- 到期提醒 + 提前提醒（`todo_reminder_lead_minutes`，默认提前 5 分钟）、10 分钟宽限；一次性待办到期自动归档；错过宽限的提醒静默盖戳，不会一次轰炸。
-- 提醒形式：桌宠可见时用气泡，否则走桌面通知（由 `system_notifications_enabled` 总门控，默认开）；总开关与提前量在「设置 → 自动化与联动 → 待办提醒」。
-
-### 边缘交互与彩蛋玩法
-
-- **黄金回旋**：右键菜单新增「黄金回旋」入口；「设置 → 互动 → 点击与音效 → 点击反馈」可开「点击触发黄金回旋」（点击动画播完自动接回旋）与「点击回旋跳过动画」（点击直接回旋、跳过 Q 弹/点击素材）；连点逐圈加速（700ms → ×0.82 → 200ms 下限）。
-- **边缘探头**（`edge_probe_enabled`，默认关）：拖到屏幕左右边缘自动进入 ±45° 探头姿态（常驻露出 0.55、点击拉直 0.82、数秒自动退回）；探头激活时点击不播点击音效，**且移动被闸门拦住**（不会被平移出屏幕边缘）。
-- **撞飞彩蛋**：探头激活状态被撞飞时头部跟随速度方向整帧旋转，低速触碰边界/其它桌宠回正，落地停稳 5 秒后重新吸附。
-- **拖文件模拟吃掉**：把文件拖到桌宠身上播放吃动画并记录统计（**不真实删除文件**）。
-
-### 右键菜单编排（可配置菜单）
-
-- 「设置 → 菜单」左侧编辑、右侧**实时预览**：显隐勾选、移动到子菜单/根、新建子菜单、插入/删除分割线、别名（运行时只显别名）、图标覆盖（内置矢量 / none / 本地图片 ≤5MB，contain/cover）、恢复默认名称/图标/布局、删除子菜单（二次确认，子项提升回根）。
-- 配置缺失回默认模板；损坏/不支持的 schema 只保留「桌宠设置 / 退出」安全菜单；旧自定义树自动补入新默认项；动作缺条件置灰 + tooltip。
-- 同页 Tab 还有「快捷启动」（双行应用列表编辑，无配置时子菜单显示禁用占位「尚未配置快捷项」）与「外观」（主题即时生效、开关从属项「开显关隐」）。
-
-### 省电模式
-
-- 在「设置 → 桌宠 → 动作与碰撞 → 动画与移动」开启「省电模式」后：**停止后台动画预热**（不再预载非核心动画的首帧），降低待机时的 CPU 与内存占用。
-- **默认（合成窗）拓扑下它不降帧**：闲置时的系统降载自动进行，画面帧率由素材自己驱动，与本开关无关。只有 **legacy 单窗路径**（勾选「直播捕获兼容模式」重启后，或开发者用的 `PET_RENDER_TOPOLOGY=legacy`）才按半帧率呈现（24fps 素材 → 12fps 效果），任何交互立即恢复全帧率。
-- 默认关闭；这是**全局**一项（写在主配置里，任意桌宠的设置页都能改）。
-
-### 性能与内存治理
-
-- **多宠共用一条解码链**：多只桌宠是同一进程内的多窗，同角色多窗共用一条进程内解码链（不再是每只一个解码进程），长时运行内存稳定、不再单调上涨；隐藏后暂停动画解码与活动定时器（隐藏时 CPU 接近 0）。机制与平台无关，且没有开关。
-- 其余项（首帧缓存预算、启动与内存降载、频闪根因等）与**各轮的实测数字、口径**（命令 + 环境 + 样本量）见 [`docs/DEV-HANDOVER.md`](docs/DEV-HANDOVER.md) §10.2 与 [`docs/INDEX.md`](docs/INDEX.md) 的 PR 报告存档（PR #76、内存专项）。
-
-### 单进程多开与共享解码
-
-- **多宠恒为进程内多开**：点「生小肥鱼」在**同一进程**内孵化新桌宠（独立 slot / 配置 / 会话 / 素材库），空闲时多只播的是同一份待机素材，由进程内帧扇出（`DecodeFanoutHub`）统一解码——待机时 ffmpeg 解码进程从 N 个减到 1 个，解码 CPU 与内存显著降低；机制与平台无关。历史上那个「单进程多开（省内存）」开关已随拓扑收口退役，现在没有开关也没有多进程多宠形态（捕获模式 / `PET_RENDER_TOPOLOGY=legacy` 下的单窗 PetWindow 只渲染主宠）。
-- 每只桌宠的设置存档（含位置、角色、气泡等每宠项）各自独立，不会丢配置。
-- 失败无感回退：无发布者、断流等任何情况下，消费端都会自动回退本地解码，播放行为与关闭时一致。
-
-**多宠下的设置作用域**（单合成窗多宠一共三档，设置页按档标注）：
-
-- **每宠档案**（右键某只 → 桌宠设置，改哪只影响哪只）：角色与缩放、播放速率、拖动物理 / 静止放手下落 / 抛掷力度、点击音效与碰撞音效（开关 / 音量 / 音源包）、气泡与自言自语（开关 / 台词 / 间隔 / 时长 / 配图 / 气泡方案 / 文字大小）、点击触发自言自语与点击朗读、点击显示余额、这只自己的碰撞开关、位置与朝向、各自的聊天会话。这些存在这只宠自己的档案 `config-slot-N.json` 里（主宠是 `config-slot-0.json`）；**主宠设置页改的也只是主宠自己那份**。
-- **整窗**（一窗多宠里只有一份窗旗标、一个窗口透明度，物理上按整窗生效；子宠页这些行会标注「对所有桌宠生效」）：窗口置顶、鼠标穿透、光标隐藏时自动穿透、全屏时自动隐藏、不透明度、锁定位置、SHIFT+左键拖动。
-- **全局**（进程与整个产品一份，写在主 `config.json`）：托盘与灵动岛、DeepSeek 余额查询与自动刷新、更新检查、待办提醒、共享解码链、Agent 联动与主动识屏（dsh 等 agent 只有一条连接，全部窗共享状态）、菜单编排与外观、开机自启、省电模式、直播捕获兼容（重启级）、首帧缓存预算。
-- 注意：**全局项在任意一只桌宠的设置页上都能改**（行内会写明「影响所有桌宠」），不再有「只有主桌宠能改」的置灰项；侧栏的重置也是两个动作——「重置本宠设置…」只重置这只宠的档案（保留位置），「重置全局设置…」只重置全局那一份。
-
-### 内存调节（高级，改 config.json）
-
-以下键暂无设置 UI，编辑数据目录下的 `config.json` 后重启生效：
-
-| 键 | 默认 | 说明 |
-|---|---|---|
-| `first_frame_cache_max_mb` | 8 | 首帧缓存总预算（MB，4-64）。多开时按进程共享一份预算 |
-| `predict_prewarm_lead_ms` | 350 | 预测式预热：动画播到结尾前提前多少毫秒预解码预测的下一段首帧（有效 200-600，越界自动夹到边界；没有「关闭」档，关后台预热请用省电模式） |
-| `ffmpeg_recycle_minutes` | 10 | ffmpeg 解码子进程在圈边界的定期回收间隔（分钟，2-120）；0=不回收 |
-
-## 使用教程
-
-### 基本操作
-
-| 操作 | 效果 |
-|---|---|
-| 左键点击桌宠 | 触发点击互动动画 |
-| 按住并拖动 | 移动桌宠；松开后根据拖动方向和速度处理转向、移动或惯性。**多显示器**下可以拖到 / 丢到任意一块屏 |
-| 按住 SHIFT + 左键拖动 | 开启了「SHIFT+左键拖动」时，这是唯一的拖动方式；未开启时 SHIFT 无特殊含义 |
-| 右键桌宠 | 打开带图标的上下文菜单；可选择「生小肥鱼」启动独立的新桌宠，或在「桌宠控制」里改窗口能力 |
-| 双击托盘图标 | 显示 / 隐藏桌宠 |
-| 右键托盘图标 | 打开设置、AI 对话、开机自启、DeepSeek Harness（启动/重启/停止）、退出等菜单 |
-| 拖拽桌宠时 | 若开启了聊天窗跟随，聊天窗口会一起移动；默认不跟随 |
-
-### 锁定位置 / SHIFT 拖动 / 不透明度
-
-在「桌宠设置 → 桌宠 → 动作与碰撞 → 拖拽与弹射」（锁定位置、SHIFT 拖动）与「桌宠设置 → 桌宠 → 显示与音乐 → 显示」（不透明度）中：
-
-> 这三项在一窗多宠的单合成窗里是**整窗**作用域——只有一份窗旗标、一个窗口透明度，所以改了会影响这一窗里的所有桌宠（设置页会标注「对所有桌宠生效」）；逐只独立的是位置、尺寸这类每宠档案项。
-
-- **锁定位置**：开启后桌宠固定不动，怎么拖都拖不走（点击互动仍然有效）；想再调整位置时关闭即可。
-- **SHIFT+左键拖动**：开启后普通拖动被禁用，必须**按住 SHIFT 再左键拖**才能移动桌宠——适合防止误拖，或桌面有别的操作需要普通左键时使用。
-- **不透明度**：10%–100%，数值越小桌宠越透明（半透明效果），保存立即生效。
-
-> 三者与「鼠标穿透」的区别：锁定/SHIFT 只是禁止拖动，点击互动（点头、音效、彩蛋）照常；鼠标穿透是桌宠完全不接收鼠标事件（点击会落到下层窗口），需要从托盘菜单关闭（或到「桌宠设置 → 互动」里改）。开启「鼠标穿透」时桌宠会气泡提示恢复位置。
-
-### 开机自启
-
-1. 右键系统托盘图标。
-2. 勾选菜单中的「开机自启」。
-3. 取消勾选即关闭自启；状态直接读写当前用户的注册表 Run 键，无需管理员权限。
-
-### 调整播放速率
-
-1. 右键桌宠（或托盘菜单）→「桌宠设置」。
-2. 调整「播放速率」。
-3. 点击保存或应用。
-4. 播放当前动画或切换到下一段动画，观察节奏是否变化。
-
-速率对当前片段和后续片段均生效；可选 `0.5x` ~ `4.0x`（默认 `1.0x`）。
-
-### 设置动作等待间隔
-
-「动作等待间隔」用于降低连续动作过于密集时的节奏：
-
-1. 在设置中找到「动作等待间隔」。
-2. 输入间隔秒数，默认是 `0`。
-3. 设为 `0`：保持当前连续播放行为。
-4. 设为大于 `0`：相邻的非待机、非转向动画之间等待指定时间；等待期间仍允许待机和转向动画播放。
-
-这个设置只影响动画调度，不会阻塞窗口拖动、点击、设置窗口或聊天窗口。
-
-### 开启自言自语气泡
-
-1. 在「桌宠设置」中勾选「开启自言自语气泡」。
-2. 设置「随机间隔最短」和「随机间隔最长」。
-3. 在「自言自语内容」中每行填写一条文本。
-4. 留空会恢复内置内容，例如：
-
-```text
-好女孩……
-好模型……
-欧鲸鲸……
+feature 包需安装到用户数据根的 `mods/` 并获准执行；仅传 `--mods-dir` 不会绕过授权。
+角色 content 包与 feature 包的加载规则不同。扩展字段、菜单/设置贡献及生命周期见
+[开发指南](docs/PETCORE-MOD-DEVELOPMENT.md)与[格式契约](docs/PETCORE-MOD-FORMAT.md)。
+
+## 测试与验证
+
+先运行改动相关回归，再按 [AGENTS.md](AGENTS.md) 的风险门决定整仓与时序压力验证。
+无头用 `offscreen`；原生 xcb/Cocoa 结果单独记录。以下为激活虚拟环境后的 Bash 示例：
+
+```bash
+python -m ruff check pet/ tests/ petcore/
+QT_QPA_PLATFORM=offscreen python -m pytest -q tests/test_petcore_*.py
+QT_QPA_PLATFORM=offscreen python -m pytest -q
+# Linux：真实 X 服务端输入检查，不等同桌面合成器验收
+QT_QPA_PLATFORM=xcb xvfb-run -a python -m pytest -q tests/test_petcore_native_desktop.py
+# macOS：在 Cocoa 桌面会话中执行
+QT_QPA_PLATFORM=cocoa python -m pytest -q tests/test_petcore_native_desktop.py
 ```
 
-气泡默认显示在角色当前可见形象边界的正上方并水平居中；屏幕上方空间不足时，会自动选择不遮挡角色的候选位置。自言自语窗口不会改变桌宠的透明 mask，也不会阻止桌宠移动。
+截至 2026-11-08 的证据如下，**不是对后续提交自动有效的全绿声明**：
 
-### 直播捕获兼容模式（Windows）
+| 证据 | 结果与范围 |
+| --- | --- |
+| Linux 累计回归 | 3620 passed / 18 skipped；Ubuntu GNOME 的候选安装、中文输入、文件选择、托盘恢复、自启及资源只读复核已做 |
+| Mac 累计回归 | 两条命令合计 3639 passed / 19 skipped；包含 petcore 与公共守卫，不是整个旧版仓库的 Mac 全量 |
+| Mac 时序压力 | 4 vCPU 满载三轮，每轮 127 passed / 1 skipped |
+| Windows 最终整仓 | 11760 passed / 24 skipped / 7 failed；七项与既有基线相同；另有布局族在压力下 Qt 原生退出超时，未解决 |
+| 短性能 | Linux、Mac 各完成单/四宠 × 待机/动画/拖动/隐藏 × 3 组，每组至少 60 秒；原始口径与 CPU/RSS/线程/输入计数见各报告 |
+| 长期与硬件限制 | 30 分钟内存观察已取消；未验证长期增长、物理热插拔、混合缩放多屏；Mac arm64 候选尚未交付 |
 
-用哔哩哔哩直播姬 / OBS 做**窗口捕获**时，如果窗口列表里找不到桌宠，是因为桌宠默认是"工具窗口"形态（不占任务栏，捕获软件会过滤掉这类窗口）——这就是同类软件 Bongo Cat 能被捕获而桌宠不能的原因。
+Linux 性能使用进程组口径，Mac 的 CPU 只统计应用主进程、子进程 RSS 单列；不能直接据此
+做跨平台性能排名。Mac 的 24 组有效样本来自 18+6 两次进程，首轮中止记录保留。
+完整失败清单、命令、环境、摘要和实测数据见 [Linux 报告](docs/PR-REPORT-PETCORE-POSIX-2026-11-07.md)
+及 [Mac 报告](docs/PR-REPORT-PETCORE-MACOS-2026-11-08.md)。
 
-解决办法：打开「桌宠设置 → **常规** → **直播捕获（高级）**」（折叠组，默认收起，点开即见），勾选其中的**「直播捕获兼容」**（Windows），**保存后重启桌宠生效**：
+## 候选构建
 
-- 重启后桌宠走单窗口渲染路径，变为普通顶层窗口并显示标题「dsh-pet 桌宠」，直播姬/OBS 的窗口捕获列表即可看到并选中它
-- 重启时多只桌宠会先**收拢为主宠物**（小肥鱼暂不出现；清单保留，取消勾选再重启即回来）；该模式下「生小肥鱼」不可用（单窗口径），点击会提示「直播捕获兼容模式仅主宠物」
-- 该开关按**重启**生效：撤销勾选也要重启才恢复原样（不让正在被捕获的窗口当场变回工具窗口）。它是**全局**项（写在主配置里），**任意一只桌宠的设置页都能改**，行内写明「影响所有桌宠」
-- 自言自语与快速对话气泡也会临时变成桌宠主窗的**子内容**：捕获「dsh-pet 桌宠」这一个源即可同时看到桌宠和气泡，不需要为气泡另加窗口源
-- 气泡在捕获模式下会在桌宠窗口范围内自动选位（上方空间不足时放侧面/下方），避免被主窗边界裁掉；关闭捕获模式后恢复原本的独立浮出定位
-- 代价：任务栏会出现桌宠图标（不开直播时取消勾选即可恢复原样）
-- 开启后窗口置顶、鼠标穿透等其余行为不受影响
+本分支候选与旧 `dsh-pet-standalone-*` 发布线分开。以下是构建入口，不表示产物已正式发布。
 
-**已知限制（如实说明）**：桌宠窗口是分层透明窗口（layered window），OBS 的
-**「BitBlt」/「游戏捕获」模式读不到它的画面内容**——会得到黑屏，这是分层窗口的
-技术限制，属预期行为，不是本功能没生效。请使用 **「Windows 10（1903 及更高版本）」
-窗口捕获模式**（OBS 里叫「Windows 10 窗口捕获」，走 Windows Graphics Capture），
-或直播姬的对应窗口捕获模式。让捕获源能拿到画面内容的进一步修复在 Phase B 跟踪，
-本阶段只保证窗口可被枚举、可被选中。
+| 平台 | 入口 | 产物与约束 |
+| --- | --- | --- |
+| Windows | `scripts/build_petcore.ps1` | onedir + 可选 Inno Setup；11-05 曾构建 0.5.0 开发证书签名 setup，该历史包不含后续全部 POSIX 修改 |
+| Linux | `scripts/build_petcore_linux.sh` | Ubuntu 22.04 x86_64 原生构建，输出 `dsh-pet-core-linux-x86_64.tar.gz`；第六轮候选已验，未上传正式 Release |
+| macOS | `scripts/build_petcore_macos.sh` | 要求原生 arm64、macOS 14.4+；目标 `dsh-pet-core-macos-arm64.app.zip`；当前 Intel VM 被架构门正确拒绝 |
 
-### 切换角色
-
-1. 打开右键菜单中的角色选择入口。
-2. 选择角色后，桌宠会加载对应角色目录中的动画（菜单每次打开都会重新扫描，无需重启）。
-3. Chat 版会同步更新聊天窗口的角色名称、头像回退、主题色、有效 system prompt 和会话列表。
-4. 角色之间的消息历史相互隔离。
-
-#### 热加载新角色：文件怎么放
-
-除内置角色外，桌宠会自动扫描**外部角色目录**发现新角色。目录名即角色 ID，按下面的树状结构放置即可（目录里含 webm 或 gif 即被识别）：
-
-```text
-characters/                          ← 外部角色根目录（见下方两个扫描位置）
-└── <新角色ID>/                      ← 目录名 = 菜单里显示的角色 ID，如 mycat
-    ├── manifest.json                ← 可选：角色名 / prompt / 主题色 / 动作映射
-    └── videos/
-        ├── idle/                    ← 待机（可多个）
-        │   └── 待机呼吸.webm
-        ├── turn/                    ← 转向
-        │   └── 东张西望.webm
-        ├── move/                    ← 移动
-        │   └── 原地踏步.webm
-        ├── click/                   ← 点击回应
-        │   └── 点击开心.webm
-        ├── drag/                    ← 拖拽（可选）
-        │   └── 悬空反馈.webm
-        └── random/                  ← 随机动作池
-            └── 吃零食.webm
+```bash
+# POSIX：先按 workflow 安装系统编译/运行依赖，使用全新的输出目录
+.venv/bin/python -m pip install PyInstaller -c packaging/petcore-posix-constraints.txt
+PYTHON_BIN="$PWD/.venv/bin/python" bash scripts/build_petcore_linux.sh --output .scratch/linux-candidate-1
+# 在 Apple Silicon 构建机上执行
+PYTHON_BIN="$PWD/.venv/bin/python" bash scripts/build_petcore_macos.sh --output .scratch/macos-candidate-1
 ```
 
-**两个扫描位置**（exe 同目录优先，其次用户数据目录；用户数据目录跨安装/升级保留）：
-
-| 平台 | exe 同目录 | 用户数据目录 |
-|---|---|---|
-| Windows | `<安装目录>\characters\` | `%APPDATA%\dsh-pet-standalone\characters\` |
-| macOS | `.app/Contents/MacOS/characters/` | `~/Library/Application Support/dsh-pet-standalone/characters/` |
-| Linux | 源码运行目录 `characters/` | `~/.config/dsh-pet-standalone/characters/` |
-
-把新角色的 `videos` 放进去后，**右键桌宠重新打开菜单即可看到新角色**，选中即热加载——不需要重新打包或重启程序。透明 WebM 素材的制作方法见 [`docs/ASSET-PIPELINE.md`](docs/ASSET-PIPELINE.md)。
-
-## AI 对话使用教程（Chat 版）
-
-### 零基础快速配置（小白照抄版）
-
-不想研究 API 的话，在「设置 → AI 与对话 → 模型与连接」里**只需要填一样东西：API Key**。其他按下面的值照抄即可：
-
-| 设置项 | 填这个 |
-|---|---|
-| API 地址 | `https://api.deepseek.com` |
-| 模型 | `deepseek-v4-flash` |
-| API Key | 在 DeepSeek 开放平台创建（步骤见下） |
-
-> 软件首次打开时，API 地址和模型**默认就已经是上面这两个值**（DeepSeek），不用改；只要把 API Key 粘进去就能用。
-
-**如何创建 API Key（5 分钟搞定）：**
-
-1. 打开 DeepSeek 开放平台：<https://platform.deepseek.com>
-2. 用手机号注册 / 登录账号
-3. 左侧菜单找到 **「API Keys」→「创建 API Key」**
-4. 复制生成的 `sk-` 开头的密钥
-5. 回到桌宠 → 右键 →「桌宠设置」→ 左侧「AI 与对话」→「模型与连接」→ 把密钥粘贴到 **API Key** 那一行 → 点侧栏底部的 **「保存并退出」**（AI 页上没有单独的存档按钮，存档按钮只有侧栏这一个）
-6. 点 **「测试连接」**，看到「连接成功」就完成了，去聊天吧！
-
-**小提示：**
-
-- API Key 只在创建时完整显示**一次**，创建完记得立刻复制保存（丢了就重新建一个，旧的作废）。
-- 新注册账号一般会赠送一点测试额度；用完后到开放平台的「充值」页面充值，充多少用多少。
-- 如果显示「认证失败（401/403）」，基本就是 Key 复制漏了字符或多了空格，重新粘贴一次。
-- 显示「余额不足（402）」就是没额度了，去平台充值即可（网络和配置都是好的）。
-
-### 第一步：配置 API
-
-1. 打开设置：右键桌宠 →「桌宠设置」（或托盘菜单 →「桌宠设置」）→ 左侧「AI 与对话」。**托盘菜单里的「AI 设置」**是这一页的直达入口（右键菜单里没有这一项）；从「AI 设置」进来同样落在这页上。填完点侧栏的「保存并退出」。
-2. 新建或选择一个 Provider。
-3. 填写兼容接口的 API 地址、模型、超时和生成参数。
-4. 填写 API Key，并按提示选择钥匙串或配置文件回退。
-5. 使用「连接测试」确认配置可用。
-
-首期协议是 OpenAI Chat Completions 兼容协议。Gemini 等其他服务只有在提供兼容网关或兼容端点时才可使用。
-
-### 常见错误码说明
-
-AI 对话接口返回的常见 HTTP 状态码含义与处理方式（「测试连接」与聊天发送遇到 HTTP 错误时，软件内会显示状态码与原始错误信息）：
-
-| 状态码 | 含义 | 处理方式 |
-|---|---|---|
-| 401 / 403 | API Key 无效或无权限 | 检查「AI 与对话」页里「模型与连接」的 API Key 是否正确、是否过期，或服务商账号权限是否足够 |
-| 402 | 账户余额不足（Insufficient Balance） | 到服务商开放平台充值后重试；此错误说明网络与证书均正常，请求已到达服务器 |
-| 429 | 请求过于频繁（限流） | 稍等片刻后重试；也可降低对话频率或减少会话历史长度 |
-| 5xx | 服务端故障 | 服务商临时问题，稍后重试 |
-| 网络连接失败 / 超时 | 无法连接 API 地址 | 检查网络与代理；确认地址可达、超时值足够 |
-| SSL CERTIFICATE_VERIFY_FAILED | 证书校验失败 | 开着代理/梯子（证书被拦截）或本地网关 / 自签名证书时，可在「AI 与对话 → 模型与连接」勾选「跳过 SSL 证书验证」 |
-
-> 502/503/504 等 5xx 错误通常不是软件问题；若「测试连接」成功但发送失败，请把服务商返回的原始错误信息发到 Issue 便于排查。
-
-### 第二步：开始对话
-
-1. 右键桌宠（或托盘菜单）→「AI 对话」。
-2. 聊天窗第一次打开时会定位在桌宠旁边，并根据桌宠当前可见形象边界和屏幕边界自动避让。
-3. 输入区支持多行输入：`Enter` 发送，`Shift+Enter` 换行；生成中按钮变为「停止」。
-4. 默认不跟随：想让它跟着桌宠走，点对话窗左侧栏底部的 **「跟随桌宠」**（收起侧栏时在标题栏里展开）。
-
-聊天窗默认为**新版现代双栏工作台**：左侧是会话导航（新建会话、会话列表、批量管理、跟随桌宠），右侧是消息时间线与输入区，包含：
-
-- 无边框圆角窗口 + 自绘标题栏：角色头像、会话标题与状态（就绪/思考中/生成中）、模型名、收起侧栏、最小化、关闭。
-- 会话侧栏：每行会话可切换，⋮ 菜单提供重命名 / 置顶 / 删除；底部有「跟随桌宠」「删除当前会话」「清空当前会话」。
-- 消息时间线：用户和桌宠气泡、流式回复、错误与停止状态、复制/重试按钮。
-- 输入区：附件（图片/文本拖拽或选择）、Enter 发送 / Shift+Enter 换行、生成中变为「停止」。
-- 可在「桌宠设置 → AI 与对话 → 对话窗口」中切换回**经典手机式窗口**。
-
-### 配置 system prompt 和角色 prompt
-
-system prompt 的优先级为：
-
-```text
-角色用户自定义 prompt > 角色 manifest 中的 prompt > 全局默认 prompt
-```
-
-角色可在以下文件中声明聊天配置：
-
-```text
-assets/characters/<character_id>/manifest.json
-```
-
-可选字段示例：
-
-```json
-{
-  "chat": {
-    "system_prompt": "你是一个温柔的桌面宠物……",
-    "theme_color": "#79C7FF",
-    "chat_actions": {
-      "thinking": "thinking.webm",
-      "success": "success.webm",
-      "error": "error.webm"
-    }
-  }
-}
-```
-
-非法或缺失的 `theme_color` 会回退为默认蓝色；缺少头像资源时，聊天窗使用角色 ID 首字母生成圆形头像。
-
-### 会话管理
-
-- 会话按角色目录保存。
-- 会话标题优先取用户自定义标题（每行会话的 **⋮ 菜单 → 重命名**，可备注会话内容），未自定义时取第一条用户消息，无法生成时使用时间标题。
-- 新版窗口的会话列表位于**左侧栏**：点击切换会话，每行 ⋮ 菜单提供重命名 / 置顶 / 删除；左侧栏底部有「跟随桌宠」「删除当前会话」「清空当前会话」；顶部的「开启新对话」新建会话，右侧栏头部按钮可收起侧栏。
-- 支持会话搜索、批量管理（多选后置顶 / 删除）；删除带确认框（防误删）。
-- 可新建、删除当前会话（带确认）或清空消息。
-- 生成过程中会限制切换和删除，避免旧请求污染新会话。
-- 停止生成时，未完成的半截 assistant 内容不会作为完整消息保存。
-- 旧版手机式聊天窗同样支持重命名（铅笔按钮）与新建/删除/清空。
-
-配置与会话的存放位置（按变体分目录）见 [数据目录](#数据目录)。
-
-## 动画素材与自定义角色
-
-- 动画源是 `assets/characters/<角色ID>/videos/`（内置角色 `shenshen`，106 段 WebM，按 `idle` / `turn` / `move` / `click` / `drag` / `random` 分类）；`assets/characters_gif` 只在构建 GIF 变体时生成，不随仓库维护。
-- 角色的名称、prompt、主题色与动作映射写在同目录的 `manifest.json`；没有稳定静态头像时不强制从 WebM/GIF 截首帧，避免启动变慢与打包兼容性问题。
-- **只想换角色、不重新打包**：按 [热加载新角色：文件怎么放](#热加载新角色文件怎么放) 把素材放进外部角色目录即可，重新打开右键菜单选中即生效。
-- **想从零做一套自己的动画素材**（AI 生成绿幕源视频 → 抠像 → 归一化 → 640×360 透明 WebM，含 GIF 变体生成与新增角色入库的完整流程）：见 [`docs/ASSET-PIPELINE.md`](docs/ASSET-PIPELINE.md)。
-
-## 配置、隐私与安全
-
-- API Key 不会写入日志，也不应放入截图、Issue 或公开配置。
-- 默认优先使用系统钥匙串；钥匙串不可用时，设置界面会提示配置文件回退风险。
-- 会话文件保存在本地，不实现云端同步。
-- OpenAI 兼容接口的错误响应、网络异常和空响应会转换为界面错误状态，并保留用户消息供重试。
-- 模型输出按 Markdown 渲染但**不渲染原始 HTML**；不要把不可信的模型输出当作脚本执行。
-- 「看看屏幕」与主动识屏的截图只在内存中处理并直接发给你配置的模型服务商，不写入本地文件；本项目的服务端不存在，也不会收到你的数据。
-- 截图上的**本地提取文字（OCR）不上云**：识别模型随包携带、离线运行、在子进程里跑（用完即退），图片与识别结果都不出本机；走网络的只有你主动选的「翻译」与「问问肥鱼」。
-- **开了代理 / VPN 的用户**：桌宠的联网功能对「系统代理」的反应各不相同——歌词取词会因此超时失效，更新检查却只有走代理才通，本地服务（本机 TTS、DSH 联动）要求保留 `localhost;127.*` 绕过。逐条实测与推荐设置见 [`docs/NETWORK-PROXY-AND-VPN-2026-09-22.md`](docs/NETWORK-PROXY-AND-VPN-2026-09-22.md)。
-
-## 已知限制
-
-- 当前发布只提供 WebM 变体（Chat / 无 Chat）；GIF 变体（Windows/macOS/Linux）自 v4.0.0 起不再发布——包体约 800 MB，构建、上传与下载成本过高。确有需要的用户请按 [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md) 自行构建（先运行 `python scripts/convert_to_gif.py --force --clean` 生成素材）。
-- 安装包未做代码签名，首次运行时 SmartScreen 可能出现提示，需手动放行；macOS 同样未签名，需 Gatekeeper 放行（右键打开）。
-- 当前 macOS 发布只提供 Apple Silicon（arm64）的 onedir .app；Intel Mac 请源码运行或自行构建。
-- Linux 发布只提供 x86_64 的 onedir 目录包（WebM 两个变体），需自行安装少量系统库（见「Linux（x86_64）」一节）；建议在 X11 桌面使用，Wayland 会话下透明/置顶表现取决于桌面合成器。
-- macOS / Linux 的真实 GUI 未做实机验收（三端 CI 均为无屏环境），这两个平台请当「预览」对待。
-- 当前 AI 对话只实现 OpenAI Chat Completions 兼容协议，不实现 Gemini 原生协议。
-- 当前不提供云端同步，也不支持编辑历史消息后重发。
-- 游戏帧率段（灵动岛 `fps`，默认关）在未授权采集时**不显示任何帧数据**：普通权限下采集后端起不了会话，授权方式是在设置页一次性把当前账户加入 `Performance Log Users` 组（一次 UAC），**需重新登录才生效**；未授权时段内如实显示原因，不填假数字。
-- 直播捕获兼容模式下 OBS 仍可能黑屏（Windows 分层窗口的既有约束，见「直播捕获兼容模式」一节），属预期行为。
-- 系统通知仍未接入系统原生弹窗：AI 对话在界面不在前台时走**应用自绘的右下角提示气泡**（各平台的取舍原因见 [`docs/CHANGELOG-ARCHIVE-2026-10.md`](docs/CHANGELOG-ARCHIVE-2026-10.md)）。
-- 自言自语文本是本地配置内容，不由模型自动生成情绪或动作。
-- 角色资源若缺少静态头像，聊天窗使用角色 ID 首字母回退；不会强制从 WebM/GIF 生成头像。
-- AI 对话默认校验 HTTPS 证书（发布包内置 CA 证书库）。开着代理/梯子（Clash 等）被证书拦截、或使用本地网关（LM Studio / Ollama 代理 / 自签名证书）时，若报「SSL: CERTIFICATE_VERIFY_FAILED」，可在「设置 → AI 与对话 → 模型与连接」勾选「跳过 SSL 证书验证」后重试；该选项同时作用于对话、看看屏幕、余额查询与测试连接。仅建议在可信的内网/本地环境中关闭校验。
-- 全屏应用会暂时盖住桌宠：浏览器 F11 全屏、网页/视频全屏、游戏（全屏优化/独占渲染）在 Windows 上是系统级置顶行为，任何置顶窗口都会被其覆盖；退出全屏后桌宠自动恢复。
-- Windows 上资源管理器重启、分辨率/DPI 变更、休眠唤醒等系统事件偶发导致置顶丢失：程序每 30 秒自检一次，检测到丢失会自动重新置顶（无需手动操作）。
-- 鼠标穿透开启期间桌宠无法被点击，也无法通过点击唤回置顶最前；需要交互时请先关闭「鼠标穿透」（托盘菜单切换，开启时桌宠会气泡提示）。
-
-## 反馈与求助
-
-- **报告问题 / 提建议**：[GitHub Issues](https://github.com/MerZlin/dsh-pet-indesktop/issues)。请附上版本号（「设置」侧栏底部与「设置 → 更新」都会显示当前版本）、系统与桌面环境、复现步骤；能附日志更好——日志是数据目录下的 `pet.log`（位置见 [数据目录](#数据目录)），提交前请扫一眼其中不含 API Key 等隐私内容（程序本身不会把 Key 写进日志）。
-- **备用下载渠道**：右键菜单 / 托盘菜单的「更新 / 帮助」下有「检查更新」「GitHub 项目页」「夸克网盘下载」（Windows 备用渠道）。
-- **先自查这三处**：[已知限制](#已知限制)、[AI 对话的常见错误码](#常见错误码说明)、[安装常见问题](#windows安装包setupexe)（找不到桌宠、自启不生效）。
-- **联网功能异常**（歌词取不到、语音不出声、更新检查失败）先看 [`docs/NETWORK-PROXY-AND-VPN-2026-09-22.md`](docs/NETWORK-PROXY-AND-VPN-2026-09-22.md)：系统代理 / VPN 对不同功能的影响不一样，文档里有 30 秒排查法。
-- **旧版本的历史变更**：[版本与变更历史](#版本与变更历史) 与 [`docs/CHANGELOG-ARCHIVE-2026-10.md`](docs/CHANGELOG-ARCHIVE-2026-10.md)。
-
-## 项目来源与素材声明
-
-本项目改自、源于 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)。桌宠的基础交互思路、动画链行为模型和部分资源组织方式来自原项目，感谢原作者的开源贡献。
-
-DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)，本项目的实现为桌宠内置的轻量版（菜单「DeepSeek 余额」+ 可选自动刷新，通过 DeepSeek 官方 `/user/balance` 接口查询，详见 [DeepSeek API 查询余额文档](https://api-docs.deepseek.com/zh-cn/api/get-user-balance/)）。
-
-当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源；`assets/characters` 包含 106 个 WebM 动画文件。GIF 目录仅在构建 GIF 变体时生成。后续新增或替换动画时，请更新 WebM，需要构建 GIF 变体时再生成对应 GIF。
-
-第三方素材、组件**与随包分发的第三方二进制**（如 `resources/presentmon/` 的帧率采集后端）的授权声明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
-
-## 许可证与致谢
-
-本项目采用 **MIT License**（见仓库根目录 `LICENSE`），第三方素材与组件授权声明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
-
-**特别感谢：**
-
-- [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)：参考实现与动画素材基础；初始「蓝色大肥鱼」素材来源。
-- [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)：DeepSeek 余额气泡思路参考。
-- **B 站 @这个刀子真甜、@上善无形、@ZipZipPipe**：桌宠形象来源（以 B 站昵称为准，未给主页链接）。
-- **贡献者 [ushio2026-alt](https://github.com/ushio2026-alt)**：贡献了 v4.0.0 的现代桌面体验重构（PR #11：新版右键菜单、新版设置、现代双栏 AI 对话窗口、彩蛋入口、多开孵化）、CI 测试时序稳定（PR #12）与彩蛋弹窗时序/图片回退加固（PR #13）。
-- **贡献者 [klxxya](https://github.com/klxxya)**：贡献了拖拽物理、全屏自动隐藏、看看屏幕、聊天窗主题背景、裁切取景、文字动画免镜像、置顶看门狗等增强功能（PR #5），v4.0.0 的性能与主动陪伴体系（PR #7：隐藏零功耗、启动懒加载、主动识屏陪伴、Agent 联动、多实例避让）与合并后的加固修复（PR #16），v4.2.1 之后的大批主线工作（灵动岛段化、单进程多宠架构、歌词采样提速等，逐项见 [`docs/RELEASE-v4.3.0.md`](docs/RELEASE-v4.3.0.md) 的致谢）。
-- **贡献者 [lscatfish123-cell](https://github.com/lscatfish123-cell)**：贡献了 Windows「自动隐藏任务栏」下桌宠误隐藏的修复（PR #18：全屏判定增加标题栏检查）。
-- **v4.3.1 修复批**：贡献者 [klxxya](https://github.com/klxxya)（#271 主宠设置保存、穿透卡死 #277）、[李玉清](https://github.com/lyq1101871677-dev)（#272 macOS 失活时桌宠保持可见）；拖拽弹簧手感批、Markdown 渲染覆盖，以及设置页打磨、截图问答品牌图标、歌词多歌手取词（这几批的提交署名同为 `syf`，与 GitHub 账号的对应关系未经核实，故不并入任何个人条目，记为**本地修复批/贡献记录**）。#271 由 **Xaisx-sys** 报告（含精确代码定位与主/子宠对照实验，直接锁定根因），#272 同族记录见 issue #262（另一处 legacy 鼠标缺陷另立 #275）。逐项见 [`docs/RELEASE-v4.3.1.md`](docs/RELEASE-v4.3.1.md)。
-- **Issue 反馈者**：[Viteyun](https://github.com/Viteyun)（图标过小反馈）、[Lorin1470](https://github.com/Lorin1470)（macOS 使用反馈与建议）、[YukidokeAzarea](https://github.com/YukidokeAzarea)（AI 对话报错反馈）、[zangxx66](https://github.com/zangxx66)（macOS 右键菜单反馈）——感谢你们帮助发现并定位问题。
-- **所有在 Bilibili 上为本项目提供反馈和建议的观众**：你们的评论、建议与使用反馈是项目持续改进的重要动力。v4.0.0 中的设置自动保存、深色模式适配、会话滚动、看看屏幕同步、气泡层级、托盘同步、锁定/不透明度等多项修复与功能均来自用户实测反馈。
-
-## 版本与变更历史
-
-各版本的完整发布说明按版本归档在 `docs/`，GitHub Releases 同步：
-
-| 版本 | 状态 | 发布说明 |
-|---|---|---|
-| **v4.3.1** | 已发布（2026-10-17） | [`docs/RELEASE-v4.3.1.md`](docs/RELEASE-v4.3.1.md) |
-| **v4.3.0** | 已发布（2026-10-15） | [`docs/RELEASE-v4.3.0.md`](docs/RELEASE-v4.3.0.md) |
-| **v4.2.1** | 已发布（2026-09-23） | [`docs/RELEASE-v4.2.1.md`](docs/RELEASE-v4.2.1.md) |
-| **v4.2.0** | 已发布（2026-09-10） | [`docs/RELEASE-v4.2.0.md`](docs/RELEASE-v4.2.0.md) |
-| v4.1.0 及更早 | 已发布（2026-09-02 及以前） | [GitHub Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases) |
-
-一句话摘要（细节以发布说明为准）：
-
-- **v4.3.1**：v4.3.0 之后的批次——拖拽弹簧阻尼手感（松手不再瞬移、慢速拖拽亚像素实时上屏）、快捷气泡与经典聊天窗接入 Markdown 渲染、**主宠设置页的每宠设置保存真实生效**（#271）、macOS 切到别的应用时桌宠不再消失（#272）、桌宠「看得见但点不到」的穿透卡死修复（#277）、设置页打磨（#280）、截图问答品牌图标（#278）、歌词多歌手取词（#279）、四播放器启动入口与播放器路径（#285）、气泡档案 / `edge-tts >= 7.3.1` / 作者账号区 + Android 0.2.1 测试包（#287）、每屏一窗多屏与「允许桌宠跨屏」（#288，默认关、重启生效）、歌词请求直连首选 + 有界单次回退（#291）、帧序列透明底板档位 v5（#292）、语音合成后端 provider 化（#267，默认仍 `edge`）、零活跃宠物不再静默 + slot0 迁移源清理口径更正（#289）、输入链路两处收尾（#293）、每日一签（抽签，#290：一天一支、一轮 48 天不重不漏）。本版 `config.py` 相对 v4.3.0 **净增 16 个配置键**（1 跨屏 + 9 语音后端 + 2 节日 + 4 每日一签）、删除 0 个。`v4.3.0` 之后的 PR 已全部并入 `main`（最后一批 **#294**：打包修复——**四个变体都随包带 `keyring`**、`LICENSE` 与第三方声明随包）。
-- **v4.3.0**：截图提问（框选 → 本地 OCR / 翻译 / 带图多轮问答，HDR 屏截图不再发白雾）、AI 对话增强（Markdown、深度思考、联网搜索、时间感知）、灵动岛段化与第三方段、免打扰模式、天气与网络信息、直播捕获兼容模式；架构上单进程「单合成窗多宠」成为唯一拓扑、旧版右键菜单整体退役。
-- **v4.2.1**：v4.2.0 之后并入 57 个已合并 PR——灵动岛重做、语音报时、节日提醒、歌词显示与「歌词对齐」、点击台词朗读与本机语音预缓存、气泡文字大小可调、Harness 服务重启/停止，以及 Windows 关机弹 `0xc0000142`、edge 音色被下架后自动兜底、Linux 屏幕边缘无法贴边等一批关键修复。
-- **v4.2.0**：内存与单进程多开（同角色共享解码链）、设置与菜单重构（右键菜单可编排、快捷启动、主题即时生效）、边缘探头 / 黄金回旋 / 撞飞彩蛋 / 省电模式、待办提醒、DSH 富事件状态与探索 Watchdog 控制链。
-
-各版本的**完整亮点与实测数字**以对应发布稿为准（本页只保留一句话摘要）：v4.3.0 的性能与内存实测、v4.2.1 的流畅度/包体数字、v4.2.0 的多开内存实测分别见 [`docs/RELEASE-v4.3.0.md`](docs/RELEASE-v4.3.0.md)、[`docs/RELEASE-v4.2.1.md`](docs/RELEASE-v4.2.1.md)、[`docs/RELEASE-v4.2.0.md`](docs/RELEASE-v4.2.0.md) 的「性能」与「新内容」节。
-
-更早的历史条目（v4.0.x / v3.1.1 及开发期逐条记录）已从本页下沉到 [`docs/CHANGELOG-ARCHIVE-2026-10.md`](docs/CHANGELOG-ARCHIVE-2026-10.md)；逐 PR 的技术细节（含性能实测与实机证据）见 [`docs/INDEX.md`](docs/INDEX.md) 的「PR 报告存档」。
-
-## 开发者与贡献
-
-改代码前先读工程纪律与文档索引，不要只照本页行事：
-
-- [`AGENTS.md`](AGENTS.md)：**工程纪律的权威出处**——项目结构、变更纪律、CI 成本纪律、架构红线、"Context pointers"（改哪块必须先读哪份文档）。
-- [`docs/INDEX.md`](docs/INDEX.md)：**全文档入口索引**，每份文档一句话 + 何时必读；找文档先查它，新文档必须在此登记并互链。
-- [`docs/DEV-HANDOVER.md`](docs/DEV-HANDOVER.md)：本地运行、改配置、加功能、跑测试、重新打包的流程，外加 §10 的 `pet/` 模块一览、Harness 启动器机制、性能与内存治理口径、坑位清单（自带基线日期，其中的行数/用例数按当时实测算，改动后以实际为准）。
-- [`CONTEXT.md`](CONTEXT.md)：领域术语表（Shared UX Contract / Settings System / Menu Action Model 等）。
-- [`petcore/README.md`](petcore/README.md)：新 core + mod 架构的开发者上手（环境、运行、目录地图、加菜单项/mod/角色包、测试门禁）。在 `petcore/` 下改代码前还要读 [`petcore/AGENTS.md`](petcore/AGENTS.md) 与 [`docs/PETCORE-LOG-INDEX.md`](docs/PETCORE-LOG-INDEX.md)。
-- [`docs/PETCORE-MAIN-PARITY-BACKLOG.md`](docs/PETCORE-MAIN-PARITY-BACKLOG.md)：petcore 与主分支的功能差距台账（已对齐/部分/未做 + 计划批次），判断“还差什么”先看它。
-- [`docs/PETCORE-MOD-DEVELOPMENT.md`](docs/PETCORE-MOD-DEVELOPMENT.md)：**从零写一个 petcore 扩展**的动手指南——三类产物（功能扩展/角色包/内容块）各放哪个目录、最小可运行骨架（含可直接复制的模板）、菜单与设置页的接线键、端口与线程规则、安装/重载/排错的完整闭环。想给项目做扩展或改别人做的扩展，先读这篇；字段级细节再查 [`docs/PETCORE-MOD-FORMAT.md`](docs/PETCORE-MOD-FORMAT.md)，角色包规格查 [`docs/PETCORE-CHARACTER-PACKS.md`](docs/PETCORE-CHARACTER-PACKS.md)。
-
-改对应代码前的必读文档（完整触发表见 `AGENTS.md` 的 "Context pointers"）：
-
-- [`docs/WINDOW_PY_SPLIT_GUIDE.md`](docs/WINDOW_PY_SPLIT_GUIDE.md)：改 `pet/window.py` 前必读（只许瘦不许胖）。
-- [`docs/SETTINGS-CHANGE-GATES.md`](docs/SETTINGS-CHANGE-GATES.md)：新增/改动任何设置项前必读。
-- [`docs/ASSET-PIPELINE.md`](docs/ASSET-PIPELINE.md)：做/换动画素材（绿幕源视频 → 透明 WebM）与新增角色前必读。
-- [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md)：打包流水线、随包资产与构建门。
-- [`docs/PR-REPORT-TEMPLATE.md`](docs/PR-REPORT-TEMPLATE.md) / [`docs/ACCEPTANCE_TESTS.md`](docs/ACCEPTANCE_TESTS.md) / [`docs/BUILD-CI-FAILURE-NOTES-2026-08.md`](docs/BUILD-CI-FAILURE-NOTES-2026-08.md)：PR 报告模板 / 三条验收路径该跑哪些测试 / 三平台打包 CI 的坑与解法汇总（CI 红了先去这里找同类记录）。
-- [`docs/PR-MERGE-LESSONS-2026-09-12.md`](docs/PR-MERGE-LESSONS-2026-09-12.md)：合并 PR 前必读（叠放 PR 冲突、两个 PR 合并后才越线的预算/红线、时序测试 flake 纪律）。
-
-### 提交前必过的门（硬要求）
-
-硬要求本身不在本页重复，两处权威出处：[`AGENTS.md`](AGENTS.md)（变更纪律 / CI 成本纪律 / 架构红线 / "Context pointers"）与 [`docs/DEV-HANDOVER.md`](docs/DEV-HANDOVER.md) §8（PR 流程、三份交付证据的判定标准、变更门禁清单）。
-
-一句话版：**推送前过本地三道门**（`ruff` → 全量 `pytest` → 受影响时序测试族高负载复跑 3 遍）；**每个 PR 交三份证据**（修改文件说明 + 实测性能分析 + 实机运行记录，报告写入 `docs/PR-REPORT-<主题>-<YYYY-MM-DD>.md` 并在 [`docs/INDEX.md`](docs/INDEX.md) 登记；纯文档/文案改动可只保留第 1 条，但要在 PR 描述里写明豁免理由）；**架构红线与行数预算**由 `tests/test_architecture.py` 机器守卫（常量值与每次校准的日期、理由都在该文件里，**改前读它，不要照抄别处的旧数字**）；**新增配置键三处登记**（默认值 dict + `reload()` 白名单 + `tests/test_config_schema.py` 快照）。
-
-### 开发结构
-
-`pet/` 模块一览（含各模块职责）、Harness 启动器机制、性能与内存治理口径，统一收在 [`docs/DEV-HANDOVER.md`](docs/DEV-HANDOVER.md) §10 与本页 [性能与内存治理](#性能与内存治理) 一节。
-
-拆代码前先读：[`docs/WINDOW_PY_SPLIT_GUIDE.md`](docs/WINDOW_PY_SPLIT_GUIDE.md)（`window.py` 处于「只许瘦不许胖」的增量拆分公约下）、[`docs/SETTINGS-CHANGE-GATES.md`](docs/SETTINGS-CHANGE-GATES.md)（设置项准入/准出）。
-
-### 测试与验证
-
-在项目根目录执行：
-
-```powershell
-pip install -r requirements.txt   # 运行时 + 开发依赖（含 pytest/ruff）
-$env:QT_QPA_PLATFORM = "offscreen"
-python -m pytest -q
-python -m ruff check pet/ tests/
-python -m compileall pet packaging scripts
-```
-
-- 该跑哪几个文件（设置窗口 / DSH Bridge / Qt 生命周期三条验收路径的精确命令）见 [`docs/ACCEPTANCE_TESTS.md`](docs/ACCEPTANCE_TESTS.md)；全量套件的规模与三端 CI 状态以实际运行为准，不要照抄历史数字。
-- 时序测试的写法纪律（事件同步 + 宽预算，禁止固定 sleep、赌目录枚举顺序、用 monotonic 绝对值做回拨算术）见 `AGENTS.md` 与 [`docs/PR-MERGE-LESSONS-2026-09-12.md`](docs/PR-MERGE-LESSONS-2026-09-12.md)。
-- 人工验证真实窗口（不设 `offscreen` 直接跑 `python -m pet`）时的自查清单见 [`docs/DEV-HANDOVER.md`](docs/DEV-HANDOVER.md) §10.4。
-
-### 打包发布
-
-发布流水线：**onedir 构建 → zip 绿色版 → Inno Setup 安装包**。onedir 运行期零解压、不产生 `_MEI` 缓存；安装包免管理员、可选安装目录。
-
-```powershell
-python -m pip install pyinstaller
-# WebM Chat 版 / WebM 无 Chat 版
-powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-chat
-powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm
-```
-
-macOS / Linux 用 `scripts/build_macos.sh` / `scripts/build_linux.sh`（与 CI 共用）；Chat 入口为 `packaging/pet_entry.py`、无 Chat 入口为 `packaging/pet_entry_no_chat.py`。
-
-完整的构建门（编码自检、包体瘦身、Qt 排他、产物 TTS 自检等）、Inno Setup 各变体的编译命令、GIF 变体与三端 CI 构建方式见 [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md)；打包流程与冒烟要求见 [`docs/DEV-HANDOVER.md`](docs/DEV-HANDOVER.md) §7；历史 onefile 产物的大小与 SHA-256 记录见 [`docs/BUILD_ARTIFACTS-2026-08-22.md`](docs/BUILD_ARTIFACTS-2026-08-22.md)。
+构建会运行 `--check --strict`，产生 `check.json`、`native-audit.json`、`build.json` 和
+`source-files.json`。Linux 检查随包 ELF、Fcitx 来源和动态依赖；macOS 构建入口执行
+ad-hoc 签名与严格签名检查，不能把 ad-hoc 当成 Developer ID 公证。
+只读 bundle 资源、用户数据与可导入扩展分离，Windows 专属二进制不进入 POSIX 包。
+
+[`petcore-posix-candidate.yml`](.github/workflows/petcore-posix-candidate.yml) 手动触发三端验证
+和候选 artifacts，只有仓库只读权限，不自动发布 Release；旧发布流程保留。
+完整依赖与安装入口见 [POSIX 构建说明](docs/PETCORE-POSIX.md#候选构建)。
+
+## 文档导航
+
+| 文档 | 用途 |
+| --- | --- |
+| [文档索引](docs/INDEX.md) | 查找现行契约、历史快照与交付报告 |
+| [工程约定](AGENTS.md)、[petcore 约定](petcore/AGENTS.md) | 修改前必读；线程、分层、设置、测试和交付纪律 |
+| [petcore 开发者上手](petcore/README.md) | 目录、CLI、菜单项、mod 与角色包开发 |
+| [最终规格](docs/PETCORE-SPEC.md)、[架构](docs/PETCORE-ARCHITECTURE.md)、[路线图](docs/PETCORE-ROADMAP.md) | 契约、分层及计划；实现状态须对照日志 |
+| [POSIX 桌面说明](docs/PETCORE-POSIX.md) | 平台接缝、历史缺陷映射、构建和原生验收 |
+| [扩展开发](docs/PETCORE-MOD-DEVELOPMENT.md)、[mod 格式](docs/PETCORE-MOD-FORMAT.md)、[角色包](docs/PETCORE-CHARACTER-PACKS.md) | 扩展作者的接线与数据契约 |
+| [变更日志索引](docs/PETCORE-LOG-INDEX.md) | 先查批次，再读对应 LNNN，避免把旧快照当作当前结论 |
+
+每批 petcore 改动追加日志及索引；行为变更交付逐文件说明、实测性能和原生运行证据。
+许可与素材归属见 [LICENSE](LICENSE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
