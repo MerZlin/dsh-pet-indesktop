@@ -74,12 +74,12 @@ def test_bundled_fans_snapshot_is_a_real_list() -> None:
 
 
 def test_bundled_data_is_wired_into_both_packaging_paths() -> None:
-    """测试读源码树，所以打包漏了这行也不会红——单独盯住两个打包入口。"""
+    """检查受版本控制的 Windows/POSIX 构建入口，不依赖本机生成的 spec。"""
+    from petcore.platform.bundle import DATA_DIRS
     root = Path(__file__).resolve().parents[1]
-    spec = (root / "dsh-pet-core.spec").read_text(encoding="utf-8")
     script = (root / "scripts" / "build_petcore.ps1").read_text(encoding="utf-8")
 
-    assert "'petcore/community/data'" in spec.replace('"', "'")
+    assert "petcore/community/data" in DATA_DIRS
     assert "petcore/community/data;petcore/community/data" in script
 
 

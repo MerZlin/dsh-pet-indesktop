@@ -252,6 +252,9 @@ def select_region(
     if target is None:
         raise ScreenError("no_screen", "没有可用的显示器")
     grabber = grab if grab is not None else grab_screen_image
+    if grab is None:
+        from ...platform.screenshot import ensure_capture_permission
+        ensure_capture_permission(request=True)
     image, target = _split_grab(grabber(target), target)
     if image is None or image.isNull():
         raise ScreenError("capture_failed", "无法读取屏幕内容")

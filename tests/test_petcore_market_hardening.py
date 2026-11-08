@@ -308,4 +308,4 @@ def test_rollback_failure_reports_state_and_paths(tmp_path):
     assert not outcome.ok
     assert outcome.state == "backup-missing"
     assert "已回滚" not in outcome.message
-    assert outcome.backup_path.endswith("market\\backup\\fun.missing\\1.0.0")
+    assert Path(outcome.backup_path) == tmp_path / "market" / "backup" / "fun.missing" / "1.0.0"

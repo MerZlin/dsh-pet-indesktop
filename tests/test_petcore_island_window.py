@@ -357,13 +357,18 @@ def test_stop_is_idempotent(make_island):
     assert island.sys_monitor.running() is False
 
 
-def test_expanding_card_keeps_folded_metrics_sampling(make_island):
+def test_expanding_card_keeps_folded_metrics_sampling(make_island, monkeypatch):
     """卡片态折行只是排版：每段都有明细行，值仍然可见，不该停采（AUD-25）。
 
     胶囊态被折进 `+N` 的段照旧停采（那才是真的看不见），见下一条用例。
     """
-    island = make_island({"island_metrics": ["cpu", "mem", "network"]},
+    island = make_island({"island_metrics": ["cpu", "mem", "network"],
+                          "island_info_mode": "custom",
+                          "island_custom_text": "Desktop acceptance status: idle"},
                          character_name="Shenshen")
+    # The screen budget is an OS boundary; offscreen defaults vary by runner.
+    monkeypatch.setattr(island, "_available_width", lambda: 1920)
+    island.refresh_from_config()
     island.show()
     app.processEvents()
     assert "network" not in island.plan().folded

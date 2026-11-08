@@ -35,6 +35,10 @@
 
 ## 构建与发布
 
+| 文档 | 一句话内容 | 何时必读 |
+| --- | --- | --- |
+| [PETCORE-POSIX.md](PETCORE-POSIX.md) | petcore Linux/macOS 启动、输入、窗口策略、自启、候选构建与历史缺陷映射。 | 改 POSIX 平台分支、构建或开始 VMware 验收之前；与 ONEDIR_PACKAGING 和交付报告一起读，源码测试不等于原生认证。 |
+
 - [petcore P4-c3 分发阶段详细实施计划](superpowers/plans/2026-10-24-petcore-p4c3-distribution.md)：T00–T09、精确接口/文件分工、红绿种子与停止门；A–E完成后接手分发、派worker或准备候选包前必读。
 
 | 文档 | 一句话内容 | 何时必读 |
@@ -143,6 +147,8 @@
 ---
 
 ## PR 报告存档
+
+- [petcore Linux/macOS 源码适配与候选构建（2026-11-07）](PR-REPORT-PETCORE-POSIX-2026-11-07.md)：平台启动/输入/窗口/菜单/恢复/自启、构建门、历史缺陷映射、本机证据与 VM 待验清单。**改 POSIX 平台分支或开始原生候选验收前必读**；操作入口见 [PETCORE-POSIX](PETCORE-POSIX.md)。
 
 - [QQ 桥接修复 + 两份外部产物审查（2026-11-05）](PR-REPORT-QQ-BRIDGE-AND-UPSTREAM-AUDIT-2026-11-05.md)：QQ 设置页真正的 token 断点是读 `host.credentials` 而非 `api_credentials`（运行时能生成、设置页看不见），改为 `api_credentials` + `persisted()` 回读；webhook 接受裸 `Authorization`/`?access_token=`/尾斜杠，`?token=` 的「query 算进路径」说法被真实 loopback 回归否定；采纳补丁包 4 个缺陷修复，拒绝其护栏、明文 `secret_store.py`、8792 代理与加固版整体重构。**改 QQ 互通、webhook 鉴权、钥匙串凭据或搬迁旧根前必读**。
 

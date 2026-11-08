@@ -1,0 +1,89 @@
+name: Petcore POSIX candidates
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: '1'
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: X11 libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libegl1 libopengl0 libgl1 libpulse0 libgtk-3-0 libspeechd2 libxrandr2 libwayland-cursor0 libwayland-egl1 libxcb-cursor0 libxcb-xfixes0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0 libxcb-image0 libxcb-render-util0 libxtst6
+      - run: python -m pip install -r requirements.txt -c packaging/petcore-posix-constraints.txt
+      - name: Offscreen tests (separate from native results)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m ruff check petcore tests scripts/build_petcore_posix.py packaging/install_petcore_linux.py
+          python -m pytest -q tests/test_petcore_*.py tests/test_architecture.py tests/test_pr_report_discipline.py tests/test_ci_workflows.py --junitxml=offscreen.xml
+      - name: Native xcb input delivery
+        if: runner.os == 'Linux'
+        run: QT_QPA_PLATFORM=xcb xvfb-run -a python -m pytest -q tests/test_petcore_native_desktop.py --junitxml=native.xml
+      - name: Native Cocoa policy
+        if: runner.os == 'macOS'
+        run: QT_QPA_PLATFORM=cocoa python -m pytest -q tests/test_petcore_native_desktop.py --junitxml=native.xml
+      - name: Native Windows regression
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM='windows'
+          python -m pytest -q tests/test_petcore_platform_win.py tests/test_petcore_pointer.py --junitxml=native.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: petcore-tests-${{ matrix.os }}
+          path: '*.xml'
+
+  candidate:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: '1'
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux build dependencies (Qt and Fcitx exact-version build)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config patchelf libdbus-1-dev libfontconfig1-dev libfreetype-dev libxkbcommon-dev libx11-dev libxcb1-dev libfcitx5utils-dev extra-cmake-modules libegl1 libopengl0 libgl1 libpulse0 libgtk-3-0 libspeechd2 libxrandr2 libwayland-cursor0 libwayland-egl1 libxcb-cursor0 libxcb-xfixes0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0 libxcb-image0 libxcb-render-util0
+      - run: python -m pip install -r requirements.txt PyInstaller -c packaging/petcore-posix-constraints.txt
+      - name: Build, strict resource check, native binary audit, sign and archive
+        run: python scripts/build_petcore_posix.py --output .scratch/posix-candidate
+      - uses: actions/upload-artifact@v4
+        with:
+          name: petcore-candidate-${{ matrix.os }}-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            .scratch/posix-candidate/*.tar.gz
+            .scratch/posix-candidate/*.app.zip
+            .scratch/posix-candidate/check.json
+            .scratch/posix-candidate/native-audit.json
+            .scratch/posix-candidate/build.json
+            .scratch/posix-candidate/source-files.json

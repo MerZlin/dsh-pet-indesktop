@@ -544,10 +544,12 @@ def test_replace_with_retry_retries_permission_error(monkeypatch, tmp_path: Path
             raise PermissionError(13, "busy")
 
     monkeypatch.setattr(memmod.os, "replace", fake_replace)
-    memmod._replace_with_retry("a", tmp_path / "b")
     if os.name == "nt":
+        memmod._replace_with_retry("a", tmp_path / "b")
         assert len(calls) == 3
     else:
+        with pytest.raises(PermissionError):
+            memmod._replace_with_retry("a", tmp_path / "b")
         assert len(calls) == 1
 
 

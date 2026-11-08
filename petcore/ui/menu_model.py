@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .menu_dispatch import connect_action
+
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -269,7 +271,7 @@ class MenuModel:
             action.setCheckable(True)
             action.setChecked(bool(item.checked()))
         if item.callback is not None:
-            action.triggered.connect(lambda _checked=False, cb=item.callback: cb())
+            connect_action(action, lambda _checked=False, cb=item.callback: cb())
 
     def _populate_extensions(
         self, menu: QMenu, placed: set[str], allowed: list[str] | None = None

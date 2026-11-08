@@ -155,9 +155,11 @@ def test_a_stopped_reader_never_starts_threads_again() -> None:
     assert reader.dispatched == started
 
 
-def test_sampling_carries_the_degraded_flag_out() -> None:
+def test_sampling_carries_the_degraded_flag_out(monkeypatch) -> None:
     """采样层不能吞掉退化标志：判定层要靠它区分"读超时"和"这一拍抖动"。"""
     sampling = importlib.import_module(f"{HOST_PKG}.sampling")
+    monkeypatch.setattr(sampling.audio_sessions, "available", lambda: (True, ""))
+    monkeypatch.setattr(sampling.window_source, "available", lambda: (True, ""))
     windows_seen: list[frozenset] = []
 
     def read_windows(targets):

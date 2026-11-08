@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtTest import QTest
+from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 from petcore.ui.animated_image import AnimatedImage
@@ -86,14 +86,21 @@ def test_start_stop_and_frame_advance(app, tmp_path: Path) -> None:
     gif = _write_gif(tmp_path / "anim.gif")
     widget = AnimatedImage(gif, 320)
     frames: list[int] = []
+    loop = QEventLoop()
+    budget = QTimer()
+    budget.setSingleShot(True)
+    budget.timeout.connect(loop.quit)
     try:
         assert widget.is_running is False
         widget.movie().frameChanged.connect(frames.append)
+        widget.movie().frameChanged.connect(lambda frame: loop.quit() if frame >= 1 else None)
         widget.start()
         assert widget.is_running is True
-        QTest.qWait(300)
-        assert frames, "动图要在事件循环里推进帧"
-        assert widget.movie().currentFrameNumber() >= 1
+        budget.start(10000)
+        if not any(frame >= 1 for frame in frames):
+            loop.exec()
+        # A looping movie may already be back at frame 0 at an arbitrary delay.
+        assert any(frame >= 1 for frame in frames), "动图要在事件循环里推进到次帧"
 
         widget.stop()
         assert widget.is_running is False

@@ -24,6 +24,8 @@
 
 from __future__ import annotations
 
+from ..platform import window_policy
+
 import logging
 import time
 from collections import deque
@@ -230,6 +232,8 @@ class DynamicIsland(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setWindowFlags(window_policy.passive_flags(self.windowFlags()))
+        window_policy.install(self)
         self.setObjectName("dynamicIsland")
         self.config = config
 
@@ -1661,7 +1665,7 @@ class DynamicIsland(QWidget):
             return
         # 点岛 = 用户明确要它在前（只改 z 序、不抢键盘焦点）。
         try:
-            self.raise_()
+            window_policy.raise_passive(self)
         except RuntimeError:
             pass
         self._press_global = event.globalPosition().toPoint()
@@ -1885,7 +1889,7 @@ class DynamicIsland(QWidget):
         self._raise_topmost()
 
     def _raise_topmost(self) -> None:
-        self.raise_()
+        window_policy.raise_passive(self)
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)

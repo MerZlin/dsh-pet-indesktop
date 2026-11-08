@@ -41,9 +41,28 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def is_read_only_bundle_path(path: Path) -> bool:
+    """POSIX resources stay immutable even when the bundle's owner can write."""
+    if not is_frozen() or sys.platform not in {"linux", "darwin"}:
+        return False
+    candidate = Path(path).resolve()
+    if sys.platform == "darwin":
+        # PyInstaller links resources between Frameworks and Resources. Both are
+        # inside the signed .app; resolve paths before checking their ownership.
+        for parent in Path(sys.executable).resolve().parents:
+            if parent.suffix == ".app":
+                return candidate.is_relative_to(parent)
+    internal = Path(getattr(sys, "_MEIPASS", repo_root())).resolve()
+    return candidate.is_relative_to(internal)
+
+
 def install_root() -> Path:
     """安装目录：冻结包 = exe 所在目录；源码树 = 仓库根。"""
     if is_frozen():
+        if sys.platform == "darwin":
+            for parent in Path(sys.executable).resolve().parents:
+                if parent.suffix == ".app":
+                    return parent.parent
         return Path(sys.executable).resolve().parent
     return repo_root()
 
@@ -53,6 +72,10 @@ def install_mods_dir() -> Path | None:
     `repo/mods` 误当成「安装器授信」目录。"""
     if not is_frozen():
         return None
+    if sys.platform == "darwin":
+        for parent in Path(sys.executable).resolve().parents:
+            if parent.suffix == ".app":
+                return parent / "Contents" / "Resources" / "mods"
     return install_root() / "mods"
 
 
@@ -78,7 +101,8 @@ def base_dir() -> Path:
         return Path(os.environ.get("APPDATA") or Path.home())
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support"
-    return Path.home() / ".config"
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or "")
+    return xdg if xdg.is_absolute() else Path.home() / ".config"
 
 
 _INSTANCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")

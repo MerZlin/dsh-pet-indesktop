@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from .menu_dispatch import connect_action
+
 import logging
-import sys
 
 from PySide6.QtGui import QActionGroup, QGuiApplication, QIcon
 from PySide6.QtWidgets import QMenu
@@ -187,7 +188,7 @@ def _add_actions(submenu: QMenu, window, names) -> None:
     icon = _action_icon()
     for name in names:
         action = submenu.addAction(icon, name)
-        action.triggered.connect(
+        connect_action(action,
             lambda _checked=False, value=name: window.play_animation(value)
         )
         _request_thumbnail(window, action, name)
@@ -304,22 +305,22 @@ def _populate_speed(window, menu: QMenu) -> None:
         action.setCheckable(True)
         action.setChecked(abs(current - value) < 0.01)
         group.addAction(action)
-        action.triggered.connect(lambda _checked=False, speed=value: window.set_playback_speed(speed))
+        connect_action(action, lambda _checked=False, speed=value: window.set_playback_speed(speed))
 
 
 def _populate_golden_spin(window, menu: QMenu) -> None:
     action = menu.addAction("立即回旋")
-    action.triggered.connect(window.trigger_golden_spin)
+    connect_action(action, window.trigger_golden_spin)
     direct = menu.addAction("点击触发回旋")
     direct.setCheckable(True)
     direct.setChecked(bool(window.config.get("golden_spin_on_click")))
-    direct.triggered.connect(
+    connect_action(direct,
         lambda checked=False: window.set_config_flag("golden_spin_on_click", bool(checked))
     )
     skip = menu.addAction("点击时跳过点击动画")
     skip.setCheckable(True)
     skip.setChecked(bool(window.config.get("golden_spin_direct")))
-    skip.triggered.connect(
+    connect_action(skip,
         lambda checked=False: window.set_config_flag("golden_spin_direct", bool(checked))
     )
 
@@ -340,14 +341,14 @@ def core_items(window) -> dict[str, MenuItem]:
             action.setCheckable(True)
             action.setChecked(character.id == window.character_id)
             group.addAction(action)
-            action.triggered.connect(
+            connect_action(action,
                 lambda _checked=False, cid=character.id: window.set_character(cid)
             )
         # 重命名挂在「切换角色」里面，不新增菜单项 id：菜单模板与菜单/设置
         # 一一对应的账（coverage.py）都不用动。
         menu.addSeparator()
         rename = menu.addAction("重命名当前角色…")
-        rename.triggered.connect(lambda _checked=False: window.rename_character())
+        connect_action(rename, lambda _checked=False: window.rename_character())
 
     def populate_scale(menu: QMenu) -> None:
         group = QActionGroup(menu)
@@ -357,10 +358,10 @@ def core_items(window) -> dict[str, MenuItem]:
             action.setCheckable(True)
             action.setChecked(abs(window.state.scale - step) < 0.001)
             group.addAction(action)
-            action.triggered.connect(lambda _checked=False, s=step: window.set_scale(s))
+            connect_action(action, lambda _checked=False, s=step: window.set_scale(s))
         menu.addSeparator()
         custom = menu.addAction("自定义大小…")
-        custom.triggered.connect(lambda: window.open_settings("appearance"))
+        connect_action(custom, lambda: window.open_settings("appearance"))
 
     def populate_animations(menu: QMenu) -> None:
         _populate_animations(window, menu)
@@ -525,7 +526,7 @@ def core_items(window) -> dict[str, MenuItem]:
 def availability(window) -> dict[str, bool]:
     manager = getattr(getattr(window, "host", None), "pets", None)
     return {
-        "autostart": sys.platform == "win32",
+        "autostart": autostart_mod.supported(),
         "move_to_primary": _multi_screen(),
         "spawn_pet": manager is not None,
         "clear_spawned_pets": manager is not None,

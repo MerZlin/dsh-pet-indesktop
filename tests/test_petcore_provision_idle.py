@@ -10,8 +10,13 @@ VP9/WebP 转换让任务管理器看到 9% CPU、持续约一分钟。这些 cli
 from __future__ import annotations
 
 import threading
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from petcore import paths
 from petcore.media import provision
 
 
@@ -84,3 +89,69 @@ def test_provision_requires_a_writable_character_root(monkeypatch, tmp_path) -> 
     host = SimpleNamespace(window=SimpleNamespace(character=None))
     assert provision.start_background_provision(host) is False
     assert provision._started is False
+
+
+def _frozen_resources(monkeypatch, tmp_path, platform):
+    if platform == "darwin":
+        package = tmp_path / "Pet 中文.app"
+        executable = package / "Contents/MacOS/dsh-pet-core"
+        resources = package / "Contents/Resources"
+        internal = package / "Contents/Frameworks"
+    else:
+        package = tmp_path / "package"
+        executable = package / "dsh-pet-core"
+        resources = internal = package / "_internal"
+    monkeypatch.setattr(paths, "sys", SimpleNamespace(
+        frozen=True, platform=platform, executable=str(executable), _MEIPASS=str(internal),
+    ))
+    return resources
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_frozen_posix_provision_never_modifies_writable_bundle(monkeypatch, tmp_path, platform):
+    from pet import frameseq_provision
+
+    resources = _frozen_resources(monkeypatch, tmp_path, platform)
+    character = _host(resources / "assets").window.character
+    root = Path(character.root)
+    assert os.access(root, os.W_OK)
+    before = set(root.rglob("*"))
+
+    def encode(_videos, output, **_kwargs):
+        output.mkdir()
+        return _report()
+
+    # OS media boundary: a converter invocation would publish files in this root.
+    monkeypatch.setattr(frameseq_provision, "provision_once", encode)
+    assert provision.provision_character(character) is None
+    assert set(root.rglob("*")) == before
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_frozen_posix_external_character_can_still_be_provisioned(monkeypatch, tmp_path, platform):
+    from pet import frameseq_provision
+
+    _frozen_resources(monkeypatch, tmp_path, platform)
+    character = _host(tmp_path / "user-data/mods").window.character
+    calls = []
+    report = _report()
+    monkeypatch.setattr(frameseq_provision, "provision_once", lambda *a, **k: calls.append(a) or report)
+    assert provision.provision_character(character) is report
+    assert calls[0][1] == Path(character.root) / "frameseq"
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_frozen_posix_bundle_does_not_start_a_provision_thread(monkeypatch, tmp_path, platform):
+    resources = _frozen_resources(monkeypatch, tmp_path, platform)
+    monkeypatch.setattr(provision, "_started", False)
+    done = threading.Event()
+    monkeypatch.setattr(provision, "provision_character", lambda _character: done.set())
+    monkeypatch.setattr(provision.logger, "info", lambda *a, **k: None)
+    started = provision.start_background_provision(
+        _host(resources / "assets"), initial_delay=0, idle_wait=0, idle_provider=lambda: 0,
+    )
+    if started:
+        assert done.wait(5), "Unexpected worker must finish before fixture cleanup"
+    assert started is False
+    assert provision._started is False
+    assert not done.is_set()

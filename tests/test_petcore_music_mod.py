@@ -405,6 +405,7 @@ def test_player_registry_only_launches_configured_paths(tmp_path, monkeypatch):
     assert ok is False and "路径不可用" in message
 
     launched: list[str] = []
+    monkeypatch.setattr(players_mod, "sys", SimpleNamespace(platform="win32"))
     monkeypatch.setattr(players_mod.os, "startfile", launched.append, raising=False)
     exe = tmp_path / "cloudmusic.exe"
     exe.write_bytes(b"MZ")

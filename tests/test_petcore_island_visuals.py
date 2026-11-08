@@ -519,7 +519,8 @@ def test_bevel_draws_both_halves(make_island) -> None:
 def test_capsule_has_no_header_dot_and_content_starts_at_the_padding(make_island) -> None:
     """头标（左侧强调色圆点）已退役：内容直接从 CONTENT_PAD 起排，不留空槽。"""
     island = make_island(
-        {"island_show_name": False, "island_show_status": False, "island_metrics": []}
+        {"island_show_name": False, "island_show_status": False, "island_metrics": [],
+         "island_info_mode": "custom", "island_custom_text": ""}
     )
     island._update_size()  # noqa: SLF001
     layer = island._content_layer()  # noqa: SLF001

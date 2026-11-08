@@ -876,6 +876,11 @@ class ChatComposer(QFrame):
             self.toolbar, "composer-record-button", "mic", "语音输入"
         )
         self.record_button.setCheckable(True)
+        from ...platform.desktop import capabilities
+        microphone = capabilities()["microphone"]
+        self.record_button.setEnabled(microphone.supported)
+        if not microphone.supported:
+            self.record_button.setToolTip(microphone.reason)
         self.record_button.clicked.connect(self._toggle_record)
         footer.addWidget(self.record_button)
         self.hint = QLabel("内容会保存到当前角色的本地会话")

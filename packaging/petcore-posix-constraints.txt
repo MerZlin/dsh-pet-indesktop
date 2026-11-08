@@ -1,0 +1,4 @@
+# Apply alongside requirements.txt in an isolated candidate-build venv.
+PySide6==6.11.3; sys_platform == "linux"
+PySide6==6.12.0; sys_platform == "darwin"
+PyInstaller==6.22.3

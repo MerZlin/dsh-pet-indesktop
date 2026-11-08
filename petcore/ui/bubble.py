@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..platform import window_policy
+
 import ctypes
 import os
 import sys
@@ -327,6 +329,7 @@ class SpeechBubble(QWidget):
         super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        window_policy.install(self)
 
         self._content_kind = "text"
         self._anchor: QRect | None = None
@@ -473,7 +476,7 @@ class SpeechBubble(QWidget):
     def _apply_window_flags(self) -> None:
         """重建旗标（setWindowFlags 会隐窗，可见时要原地恢复并摆回自己的层）。"""
         was_visible = self.isVisible()
-        self.setWindowFlags(self._window_flags())
+        self.setWindowFlags(window_policy.passive_flags(self._window_flags()))
         # 构造期窗口还没 show，提前 winId() 会把宿主窗口带出 2px 边框；
         # 等可见（或 showEvent）再补原生样式。
         if was_visible:
@@ -485,6 +488,7 @@ class SpeechBubble(QWidget):
 
     def _apply_native_style(self) -> None:
         if os.name != "nt":
+            window_policy.apply(self)
             return
         try:
             hwnd = int(self.winId())
@@ -519,7 +523,7 @@ class SpeechBubble(QWidget):
             return
         if self._raises_by_design():
             self.show()
-            self.raise_()
+            window_policy.raise_passive(self)
             return
         anchor = _window_above(_hwnd(self.parentWidget()))
         self.show()

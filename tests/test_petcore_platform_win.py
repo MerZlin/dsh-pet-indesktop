@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -12,6 +13,12 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from petcore.platform import win as win_mod
 from petcore.platform.win import PerPixelInputController, forward_left_click
+
+
+@pytest.fixture(autouse=True)
+def windows_boundary(monkeypatch):
+    # Win32 calls below already use fake user32; keep dispatch local to this module.
+    monkeypatch.setattr(win_mod, "os", SimpleNamespace(name="nt"))
 
 
 @pytest.fixture(scope="module")

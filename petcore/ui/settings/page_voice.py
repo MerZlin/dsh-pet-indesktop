@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from ...contracts.speech import SpeechRequest
 from ...net.errors import describe as describe_net_error
+from ...platform import desktop
 from ...platform.mic import MicRecorder
 from ...net.tts import PROVIDER_SPECS
 from .base import (
@@ -277,6 +278,13 @@ class VoicePage(SettingsPage):
             self.fallback_combo.addItem(
                 self._provider_label(provider_id, label, available, reason), provider_id
             )
+        system_speech = desktop.capabilities()["system_speech"]
+        if not system_speech.supported:
+            for combo in (self.backend_combo, self.fallback_combo):
+                index = combo.findData("sapi")
+                if index >= 0:
+                    combo.model().item(index).setEnabled(False)
+                    combo.setItemText(index, "Windows 语音（不支持）")
         self._select(self.fallback_combo, str(self.config().get("speech_fallback") or ""))
         card.add_row(
             "回退后端",
@@ -427,6 +435,11 @@ class VoicePage(SettingsPage):
 
     def _build_asr(self) -> None:
         card = self.section("语音输入")
+        microphone = desktop.capabilities()["microphone"]
+        if not microphone.supported:
+            card.setEnabled(False)
+            card.setToolTip(microphone.reason)
+            self.add_note(microphone.reason + " 已保存的语音输入配置会保留。")
         self.asr_enabled = make_checkbox(self)
         self.asr_enabled.setChecked(bool(self.config().get("asr_enabled", True)))
         self.asr_enabled.toggled.connect(self._on_changed)
@@ -440,7 +453,7 @@ class VoicePage(SettingsPage):
         self.asr_device.setMinimumWidth(220)
         self.asr_device.addItem("系统默认麦克风", 0)
         try:
-            for device in MicRecorder().devices():
+            for device in (MicRecorder().devices() if microphone.supported else []):
                 self.asr_device.addItem(
                     str(device.name or f"麦克风 {device.index + 1}"), int(device.index)
                 )
@@ -448,7 +461,14 @@ class VoicePage(SettingsPage):
             pass
         saved_device = int(self.config().get("asr_device") or 0)
         index = self.asr_device.findData(saved_device)
-        self.asr_device.setCurrentIndex(index if index >= 0 else 0)
+        self._missing_asr_device = None
+        if index < 0:
+            saved_name = str(self.config().get("asr_device_name") or "")
+            self._missing_asr_device = (saved_device, saved_name)
+            name = saved_name or f"麦克风 {saved_device + 1}"
+            self.asr_device.addItem(f"{name}（当前不可用）", saved_device)
+            index = self.asr_device.count() - 1
+        self.asr_device.setCurrentIndex(index)
         self.asr_device.currentIndexChanged.connect(self._on_changed)
         card.add_row(
             "麦克风",
@@ -643,6 +663,11 @@ class VoicePage(SettingsPage):
 
     def _sync_voice_options(self, *, write: bool = False) -> None:
         provider = self._backend()
+        supported = provider != "sapi" or desktop.capabilities()["system_speech"].supported
+        self.preview_button.setEnabled(supported)
+        self.voice_combo.setEnabled(supported)
+        if not supported:
+            self.status_label.setText(desktop.capabilities()["system_speech"].reason)
         spec = PROVIDER_SPECS.get(provider)
         options = tuple(getattr(spec, "voice_options", ()) or ())
         self.voice_combo.blockSignals(True)
@@ -740,10 +765,7 @@ class VoicePage(SettingsPage):
             "asr_model": self.asr_model.text().strip(),
             "asr_language": self.asr_language.text().strip() or "zh",
             "asr_device": int(self.asr_device.currentData() or 0),
-            "asr_device_name": (
-                "" if int(self.asr_device.currentData() or 0) == 0
-                else str(self.asr_device.currentText() or "")
-            ),
+            "asr_device_name": self._selected_asr_device_name(),
             "asr_stream_enabled": bool(self.asr_stream.isChecked()),
             "asr_partial_interval_ms": int(self.asr_partial_interval.value()),
             "asr_auto_send": bool(self.asr_auto_send.isChecked()),
@@ -755,6 +777,13 @@ class VoicePage(SettingsPage):
             "voice_mimo": str(self.config().get("speech_mimo_voice") or ""),
             "voice_local": str(self.config().get("speech_local_voice") or ""),
         }
+
+    def _selected_asr_device_name(self) -> str:
+        index = int(self.asr_device.currentData() or 0)
+        missing = self._missing_asr_device
+        if missing is not None and index == missing[0]:
+            return missing[1]
+        return str(self.asr_device.currentText() or "") if index else ""
 
     def _current_for_write(self) -> dict:
         values = self._current()

@@ -351,3 +351,14 @@ headless，本机两个发行名同版本并存、都提供 `cv2` 顶层模块�
   不会回退到别的包）。
 - **转码说明**：wav 由 QtMultimedia 的 `QAudioDecoder` 离线转出（统一 44.1kHz /
   双声道 / Int16），只为免去每次点击新建 `QMediaPlayer`；mp3 原文件保留不动。
+
+## petcore Linux 候选包的 Fcitx5 Qt 插件（2026-11-07）
+
+- 来源：[fcitx/fcitx5-qt 5.1.14](https://github.com/fcitx/fcitx5-qt/tree/5.1.14)。
+  Qt6 平台输入上下文源码标记 `BSD-3-Clause`；署名保留上游源文件的 SPDX 记录。
+- 构建使用与 PySide6 完全同版本的 Qt 6.11.3 头文件/工具，运行时动态链接随包 Qt。
+  未修改 Fcitx 源码；只调整生成插件的运行期库搜索路径。
+- 候选包带 `licenses/fcitx5-qt/` 的原始许可、
+  `licenses/fcitx5-qt-5.1.14-source.tar.gz`（保留全部上游署名的源码快照）、
+  `licenses/qtbase/`，并收集 PySide6 Essentials/Addons、shiboken6 的发行元数据与许可。
+  此条不表示候选包已完成构建，当前交付状态见 [POSIX 报告](docs/PR-REPORT-PETCORE-POSIX-2026-11-07.md)。

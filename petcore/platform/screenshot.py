@@ -51,6 +51,12 @@ class ScreenshotError(RuntimeError):
         super().__init__(message or self.reason)
 
 
+def ensure_capture_permission(*, request: bool = False) -> None:
+    from .macos import capture_allowed
+    if not capture_allowed(request=request):
+        raise ScreenshotError("permission_denied", "请在系统设置 → 隐私与安全性 → 屏幕录制中允许桌宠（源码运行时允许终端/Python），然后重启应用。")
+
+
 def _target_screen(window=None) -> QScreen | None:
     if window is not None:
         try:
@@ -85,6 +91,7 @@ def grab_screen_image(screen: QScreen | None = None, window=None) -> tuple[QImag
     裁切时按屏幕换算。留着 QPixmap 会让覆盖层的 ``QPainter.drawImage`` 抛
     TypeError——整层画不出来，看起来就是一整屏灰色。
     """
+    ensure_capture_permission()
     target = screen or _target_screen(window)
     if target is None:
         raise ScreenshotError("no_screen", "没有可用的显示器")

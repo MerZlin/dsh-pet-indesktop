@@ -26,16 +26,19 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-def _wait_until(predicate, timeout: float = 3.0) -> bool:
-    from PySide6.QtWidgets import QApplication
+def _wait_until(predicate, timeout: float = 10.0) -> bool:
+    from PySide6.QtCore import QEventLoop, QTimer
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        QApplication.processEvents()
-        if predicate():
-            return True
-        time.sleep(0.01)
-    QApplication.processEvents()
+    loop = QEventLoop()
+    poll = QTimer()
+    poll.timeout.connect(lambda: loop.quit() if predicate() else None)
+    budget = QTimer()
+    budget.setSingleShot(True)
+    budget.timeout.connect(loop.quit)
+    poll.start(10)
+    budget.start(int(timeout * 1000))
+    if not predicate():
+        loop.exec()
     return bool(predicate())
 
 
@@ -279,7 +282,9 @@ def test_asr_channel_cancel_does_not_emit_text(app, tmp_path: Path) -> None:
     try:
         assert channel.start() is True
         channel.cancel()
-        assert _wait_until(lambda: channel.recording is False)
+        # The worker clears recording before its queued Qt signal is delivered.
+        # Observe completion in both threads before checking the signal payload.
+        assert _wait_until(lambda: not channel.recording and bool(texts or failed))
         assert texts == []
         assert failed == ["cancelled"]
         assert recorder.cancelled is True

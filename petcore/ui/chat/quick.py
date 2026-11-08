@@ -178,6 +178,11 @@ class QuickChatBubble(QWidget):
         self.record_button.setToolTip("语音输入")
         self.record_button.setAccessibleName("语音输入")
         self.record_button.setCheckable(True)
+        from ...platform.desktop import capabilities
+        microphone = capabilities()["microphone"]
+        self.record_button.setEnabled(microphone.supported)
+        if not microphone.supported:
+            self.record_button.setToolTip(microphone.reason)
         self.record_button.clicked.connect(self._toggle_record)
         footer.addWidget(self.record_button)
         self.send_button = QPushButton("发送", self.surface)

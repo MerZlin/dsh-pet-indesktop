@@ -26,6 +26,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 MOD_DIR = Path(__file__).resolve().parents[1] / "examples" / "petcore-mods" / "media.music"
@@ -51,6 +53,13 @@ sampling = importlib.import_module(f"{HOST_PKG}.sampling")
 diagnostics = importlib.import_module(f"{HOST_PKG}.diagnostics")
 recognizer = importlib.import_module(f"{HOST_PKG}.recognizer")
 now_playing = importlib.import_module(f"{HOST_PKG}.now_playing")
+
+
+@pytest.fixture(autouse=True)
+def available_fake_sources(monkeypatch):
+    # These tests inject fake readers; availability is the matching OS boundary.
+    monkeypatch.setattr(sampling.audio_sessions, "available", lambda: (True, ""))
+    monkeypatch.setattr(sampling.window_source, "available", lambda: (True, ""))
 
 #: 测试用的源超时：默认 8 秒会让这条用例跑满 8 秒，注入一个能区分"有界"与
 #: "无界"的小值即可（断言的上限留足 CI 的余量）。

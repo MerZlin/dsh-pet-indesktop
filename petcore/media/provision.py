@@ -17,6 +17,8 @@ import threading
 import time
 from pathlib import Path
 
+from .. import paths
+
 logger = logging.getLogger("petcore.media.provision")
 
 _started = False
@@ -37,6 +39,9 @@ def provision_character(
 ):
     """对单个角色跑一轮供给，返回 ``ProvisionReport``；不可用时返回 None。"""
     root = Path(getattr(character, "root", ""))
+    if paths.is_read_only_bundle_path(root):
+        logger.info("随包角色资源保持只读，使用已有帧序列或 WebM 播放")
+        return None
     videos = root / "videos"
     if not videos.is_dir():
         return None
@@ -97,6 +102,9 @@ def start_background_provision(
     if character is None:
         return False
     root = Path(getattr(character, "root", ""))
+    if paths.is_read_only_bundle_path(root):
+        logger.info("随包角色资源保持只读，不启动后台帧序列供给")
+        return False
     if not root.is_dir() or not os.access(root, os.W_OK):
         return False
     _started = True

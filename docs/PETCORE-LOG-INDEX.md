@@ -206,3 +206,17 @@
 | L169 | 2026-11-05 | QQ 桥接修复 + 外部产物审查 | QQ 设置页改读 `api_credentials`（修 token 生成/保存永远「钥匙串不可用」），写入后 `persisted()` 回读；webhook 接受裸 `Authorization`/`?access_token=`/尾斜杠；采纳补丁包 4 修（schema 异常类型、旧根路径守卫、`os.replace` 退避、历史坏时间戳）；拒绝明文 secret_store、8792 代理、护栏与加固版整体重构。 | qq-bridge、webhook-token、api-credentials、authorization、onebot、roots、os-replace、history-buckets、audit、guardrails |
 | L170 | 2026-11-05 | 0.5.0 签名安装包（含 L166–L169） | `rel-storage-2026-11-05a` 签名 setup：315,747,992 B / SHA256 5d9abf14… / Valid；构建内 `--check --strict` 退出 0（daily 1200、builtin images 24）；petcore 门禁 3559 passed/1 skipped；全量仍在 legacy `test_quick_chat` 原生崩溃（L137 已登记）。 | build、installer、signing、setup、sha256、strict、l166-l169 |
 | L171 | 2026-11-05 | v4.3–v4.4 功能对照与重写记录 | 新增 `docs/PETCORE-V43-V44-PARITY-2026-11-05.md`：v4.3.0–v4.4.0 功能矩阵、7 builtin + 12 mod 归属、未做/形态不同、10 项重写记录；INDEX 登记，旧 2026-10-22 matrix 标为历史快照；无代码改动。 | parity、v4.3、v4.4、core-mod、rewrite、gaps、doc |
+| L172 | 2026-11-07 | Linux/macOS 源码与候选构建入口 | xcb/XFixes、逻辑视口、Cocoa 被动窗口/菜单、恢复入口、用户自启、资源/ABI 构建门；Windows 本机证据与 VM 待验边界见 POSIX 报告。 | linux、macos、xwayland、xfixes、viewport、spaces、autostart、candidate、fcitx、glibc |
+| L173 | 2026-11-07 | POSIX 能力界面与验证收口 | GPU/FPS/SAPI/录音入口禁用并保留配置，失联麦克风原名回归；Cocoa 策略限定真实后端；148 项分组满载三遍，保留早期原生销毁挂起与整仓失败证据。 | posix、capability、settings、microphone、sapi、lifecycle、stress |
+| L174 | 2026-11-08 | Ubuntu 原生验收首轮 | GNOME 跨应用输入、菜单首次点击、中文提交及 12 项边缘视口通过；恢复窗口退出先红后绿；Linux 累计 3600 passed/18 skipped，完整验收继续。 | ubuntu、gnome、xcb、recovery、quit、native、portable-tests |
+| L175 | 2026-11-08 | 导出源码候选身份与复核 | 无 Git 导出目录记录实际文件 SHA256，归档前检测源码变化；Linux/Windows 35+114 项满载各三遍通过，Ubuntu 22.04 构建环境准备中。 | build、source-manifest、sha256、stress、ubuntu22 |
+| L176 | 2026-11-08 | 随包角色资源只读 | 冻结 POSIX 包即使可写也不执行运行期帧序列供给；已有帧序列/WebM 继续播放，外部角色包不受影响；4 项先红后绿。 | bundle、readonly、codesign、frameseq、provision |
+| L177 | 2026-11-08 | 整仓回归与首轮候选构建修正 | 整仓正常结束但 8 项失败；ASR 取消回归等待 Qt 排队结果，Fcitx 的 Qt 构建显式关闭 OpenGL 输入；原生构建继续。 | asr、queued-signal、cmake、fcitx、opengl、candidate |
+| L178 | 2026-11-08 | 动图事件同步与 Qt 构建依赖 | Linux 累计暴露固定 300ms 的帧相位假设，改等次帧信号；最小容器补 libGL/libpulse 后实际导入 QtGui/Multimedia 通过。 | qmovie、event-loop、libgl、libpulse、native-build |
+| L179 | 2026-11-08 | Fcitx 元数据与精确来源校验 | Qt 元数据不含补丁号；完整版本改由源码、qmake 与插件摘要复核，候选构建继续。 | fcitx、metadata、qt、provenance、sha256、build-cache |
+| L180 | 2026-11-08 | 最小 Linux 桌面依赖补齐 | 317 ELF 审计发现 GTK/Wayland/Xrandr/speechd 缺库，补构建环境后重新构建；冻结 strict 已在 Ubuntu 24.04 通过。 | elf、gtk、wayland、speechd、xrandr、candidate |
+| L181 | 2026-11-08 | 候选原生输入与 GIO 隔离 | 冻结 IBus/Fcitx 中文与菜单退出通过；发现新版宿主 GVfs 混载，冻结 Linux 使用独立 GIO 模块目录。 | candidate、ibus、fcitx、gio、glib、gvfs、abi |
+| L182 | 2026-11-08 | 冻结 Linux 文件选择器 ABI | GTK IBus 宿主模块同样混载；冻结 Linux 改用随包 Qt 选择器，源码/其他平台不变。 | gtk、ibus、file-dialog、qt、native、abi |
+| L183 | 2026-11-08 | Linux 安装候选与登录自启验收 | 第六轮包实际文件选择/中文/菜单退出通过，中文路径升级保留数据，真实重登自启及 1290 文件只读复核通过。 | candidate、install、autostart、ibus、file-dialog、readonly |
+| L184 | 2026-11-08 | Linux 候选与 24 组性能交付 | 单/四宠四场景各三组完成；用户取消 30 分钟观察，保留中止记录；Windows 整仓 7 项既有失败明确列出。 | performance、cpu、rss、input-region、candidate、cancelled-memory |
+| L185 | 2026-11-08 | Linux 里程碑推送范围 | 用户授权提交 Linux 及必需的 POSIX 共用代码，保留架构图与本机产物；macOS 原生验收继续，整仓既有失败不隐去。 | git、linux、shared-platform、macos-pending、handoff |

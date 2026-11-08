@@ -528,6 +528,8 @@ def test_core_host_wires_one_shared_controller(app, tmp_path: Path, monkeypatch)
     from petcore.ui.fullscreen_hide import FullscreenHideController
     from petcore.ui.pet_manager import PetManager
 
+    monkeypatch.setattr(fs, "supported", lambda: True)
+
     # 只跳过真实角色素材扫描：CoreHost / PetManager 都是真的（同 click_listeners）。
     monkeypatch.setattr("petcore.content.collect.load_all", lambda **_kw: [])
     config = Config(tmp_path)

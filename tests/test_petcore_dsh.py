@@ -227,7 +227,12 @@ def test_installer_updates_profile_and_backs_up(tmp_path: Path) -> None:
     assert "dsh-pet-channel" not in doc["dsh"]["profile"]["bundles"]
     assert Path(result.backup).is_file()
     assert (home / ".dsh" / "local-plugins" / "dsh-pet-bridge" / "index.js").is_file()
-    assert calls
+    if os.name == "nt":
+        assert calls
+    else:
+        link = profile / "node_modules" / "@dsh-pet" / "bridge"
+        assert link.is_symlink()
+        assert link.resolve() == home / ".dsh" / "local-plugins" / "dsh-pet-bridge"
 
 
 def test_installer_reports_missing_profile(tmp_path: Path) -> None:
@@ -240,7 +245,10 @@ def test_installer_reports_missing_profile(tmp_path: Path) -> None:
     assert result.reason == "no_profile"
 
 
-def test_installer_rolls_back_profile_when_link_fails(tmp_path: Path) -> None:
+def test_installer_rolls_back_profile_when_link_fails(tmp_path: Path, monkeypatch) -> None:
+    def fail_symlink(*args, **kwargs):
+        raise PermissionError("test: cannot create link")
+    monkeypatch.setattr(dsh_install.os, "symlink", fail_symlink)
     home = tmp_path / "home"
     profile = dsh_install.profile_dir(home)
     profile.mkdir(parents=True)

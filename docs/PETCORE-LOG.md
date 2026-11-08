@@ -6760,3 +6760,246 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_petcore.ps1 `
   4.4 场景扮演、分层记忆 v2、聊天分页、非 Windows 平台层。
 - 形态不同：统一 16 项功能页（改为 12 mod + 7 内置 feature + 安装器任务）、
   聊天窗关闭销毁（petcore 隐藏复用）、Android（独立 Java 应用）。
+
+## L172 · 2026-11-07 · Linux/macOS 源码适配与候选构建入口
+
+**范围与理由**：按批准方案实现 `platform/desktop`、`x11_input`、`input_region`、
+`macos`、`window_policy`、用户级 autostart、`engine/viewport` / `ui/pet_surface`，
+接入 PetWindow/气泡/灵动岛/菜单/恢复窗口/设置诊断；补 strict 资源门、专用 POSIX
+构建/签名/原生二进制检查/候选 workflow，以及平台与原生自动化测试。
+逐文件意图和增删数字见 [本批报告](PR-REPORT-PETCORE-POSIX-2026-11-07.md#二修改文件说明)，
+历史 #39/#383/#137/#321/#335/#354/#418/#71/#432/#22 映射与操作命令见
+[PETCORE-POSIX](PETCORE-POSIX.md)。用户原有架构图修改保留，未提交/推送/合并。
+
+**验证**：新增平台/窗口/菜单/构建缺陷先红后绿，随后覆盖隐藏断连、Mac 轮询释放、
+右键两种顺序、Qt 原生菜单关闭信号、四边/负坐标/DPR。Windows 原生 14 条通过，
+`--check --strict` 返回 0。Qt 输入微基准每档 1000 次：256/512/1024 平均
+0.512/1.079/3.095 ms；10,000 次缓存刷新无新提交。Windows DPR1.5 的设置原生抓图
+发现并修复窄窗说明裁切。完整命令、全量/架构/文档门与高负载三遍结果以报告为准。
+
+**状态与风险**：用户明确「先做，VMware 装好后告知」；Linux/macOS 产物与桌面、
+Spaces、IME、自启登录、混合屏及长时性能待 VM。#383 未合并、#418 关闭未合并，
+不继承它们的验证结论。已知独立 HTTP 503 测试在未改代码上失败，不伪造全绿。
+
+## L173 · 2026-11-07 · POSIX 能力界面与验证收口
+
+**范围与理由**：GPU/FPS 勾选、SAPI 音色/试听、录音设置及两种聊天的话筒按钮接入
+共享平台能力；保留跨平台保存的选择、不可用麦克风编号与原始名称。Cocoa 策略只在
+真实 Cocoa 安装，窗口引用改为弱引用，避免给其他 QPA 增加无效的事件过滤器。
+
+**验证**：能力界面 3 项先红后绿，另复现并修复麦克风名被不可用显示后缀污染。
+设置/语音/聊天/ASR 组 145 passed；Windows 原生语音页浅/深、720/1100 抓图。
+Qt 时序两组分进程在 16 worker / CPU 100% 下各复跑三遍，每轮 34+114 passed，
+六个进程退出 0。标签布局回归直接测试 AboutPage，完整 SettingsDialog 仍由设置族
+和原生 UI 探针覆盖；早期压力下 Qt 原生收尾挂起保留记录，未证明已修复。
+完整数字、失败基线、整仓 WebM 原生崩溃和 VM 限制均见
+[POSIX 交付报告](PR-REPORT-PETCORE-POSIX-2026-11-07.md)。未提交/推送。
+最终累计门禁 3613 passed / 3 skipped / 1 既有 HTTP failed（269.84 秒），ruff、
+`--check --strict` 与差异空白检查通过；不宣称整仓全绿或原生包验收完成。
+
+## L174 · 2026-11-08 · Ubuntu 原生验收首轮与恢复窗口退出修复
+
+**环境与证据**：Ubuntu 24.04.5 x86_64、GNOME Wayland/XWayland、Python 3.12.3、
+Qt 6.11.3，VMware 4 vCPU/4 GiB。通过专用 SSH 密钥传送当前脏工作树快照；
+首次源码包 SHA256 为 `f09571f2f34e44f8a1fb8c451942aaed4276bcbe651c8992c0bca328cf33cae5`。
+真实桌面和 Xvfb 的跨进程输入各 1 passed/1 Cocoa skipped；POSIX 组 53 passed，
+源码 `--check --strict` 退出 0。真实右键菜单首次点击打开设置，窗口激活/获得焦点，
+IBus libpinyin 经按键提交“中文”、Esc 取消；三档缩放 × 四边的 12 项原生视口均在
+工作区内。完整性能、安装/登录自启、macOS 与候选构建仍在验收中。
+
+**缺陷与修复**：首轮实际无托盘，RecoveryWindow 的 closeEvent 一律 ignore，导致
+QApplication.quit 也被拒绝。独立进程回归先以 watchdog 退出码 73 失败；修复后只在
+host 已进入退出状态时接受关闭，普通标题栏关闭仍最小化。Windows 回归 2 passed，
+Ubuntu xcb 独立进程 1 passed。后两轮系统托盘已可用，未复现停顿，不能据此掩盖首轮。
+
+**测试可移植性**：Linux 广泛回归首轮 3579 passed/18 skipped/20 failed（219.98s）。
+修正 15 个既有测试文件的操作系统边界注入、路径分隔符、中文字体/时间字形假设，
+以及依赖被忽略的本地生成 spec 的资源门；全部 20 个失败项随后通过。保留 Windows
+专有能力的假 OS 测试与 POSIX 不支持矩阵，不把 Windows 能力移植到 Linux。Windows
+相关 338 项通过（14.07s）。Linux 累计 petcore + 架构/文档守卫 3600 passed/18 skipped
+（214.11s，退出 0）。逐文件增删见交付报告表；Windows 累计/压力门继续复核。
+
+**自启进度**：用户 XDG 条目重复启停、中文/空格解释器和数据根、独立 instance 的
+读写通过；已真实注销，重新登录检查尚未完成。VMware 截图可读但自动鼠标/按键无
+响应，重连后仍然如此；SSH 正常，已请用户协助登录，不把这项工具障碍归为产品失败。
+
+**范围**：产品代码仅补 RecoveryWindow 退出条件；新建子进程回归位于
+test_petcore_desktop_shell.py。临时探针、原始日志、截图、样本位于
+`.scratch/petcore-posix/vm-2026-11-08/`（不提交）。用户原有架构图修改保留，未提交/推送。
+
+## L175 · 2026-11-08 · 导出源码构建身份与累计复核
+
+**问题与实现**：VM 收到的是工作树快照，没有 `.git`；原候选脚本会在归档之后因
+`git rev-parse HEAD` 失败而中止。构建器现在在构建前对代码、资源、依赖声明和构建
+脚本生成 `source-files.json` 与内容 SHA256，归档前复核源码未变。有 Git 时另记
+HEAD/dirty；导出目录明确记 null，不伪造提交号，也不读取父目录仓库。候选 workflow
+一并上传清单。文件哈希分块读取，未向桌宠运行期增加工作。
+
+**验证与成本**：两个导出/修改/缺失输入回归先失败，随后 Windows 打包与 workflow
+组 71 passed，Ubuntu 打包组 8 passed，ruff 通过。Ubuntu VM 三次实际扫描 706 文件、
+119450303 字节，耗时 0.539/0.171/0.176 秒；每次构建前后各扫描一次，无新常驻线程或
+网络请求，新增成本是构建期读取文件和写一份证据清单。逐文件增删见 POSIX 交付报告。
+
+**累计结果**：L174 的 Windows 累计回归 3614 passed/3 skipped/1 既有 HTTP failed
+（295.17s，正常退出 1）；Linux 3600 passed/18 skipped。新窗口组 35 项、相关组
+114 项分别满载复跑三遍：Linux 4 workers、CPU 平均 99.90%；Windows 16 workers、
+CPU 100%；全部六组正常退出 0。导出身份两项回归在上述累计运行后新增，单列验证。
+Ubuntu 22.04.5/glibc 2.35 容器已经实际启动，构建工具环境准备中；不是候选包验收。
+VMware 自动输入无响应后，改用 SSH 调用 Linux 虚拟键盘完成真实重登；会话 158
+中桌宠自动启动并可见，中文/空格路径保持，测试自启条目已移除。构建工具镜像已完成；
+macOS 正在启动，原生验收待继续。未提交/推送/发布。
+
+## L176 · 2026-11-08 · POSIX 随包角色资源禁止运行期改写
+
+**发现**：帧序列首跑供给只检查 `os.access(W_OK)`；用户拥有的 `.app` 通常可写，
+会在签名目录内生成帧序列。Linux onedir 的 `_internal` 同样不应成为运行期缓存。
+`paths.is_read_only_bundle_path()` 识别整个 macOS `.app`（含 Frameworks/Resources
+链接目标）和 Linux `_MEIPASS`。直接供给入口及后台线程入口均拒绝这些目录；已有
+合法帧序列仍可读取，缺失时沿用 auto 的 WebM 回退。外部用户角色包继续按原路径供给，
+Windows 和源码运行的供给行为保持原有契约；编码档位、世代判据及旧 `pet/` 未改。
+
+**先红后绿**：可写目录的两平台写入/后台起线程回归共 4 failed，外部角色包对照
+2 passed；修正后供给与 POSIX 打包组 16 passed（1.24s），ruff 通过。
+这是 OS 边界模拟与真实临时目录的回归，不冒充已执行 macOS codesign 验证。
+随后路径、角色包、渲染、架构与文档相关组 459 passed（9.42s）。逐文件增删归入
+POSIX 报告；本批累计/native 门和随包默认素材实测继续。
+
+**开销**：检查只在供给请求/启动时执行，不进入每帧或稳态定时器；命中只读包后不建
+供给线程、不启动编码子进程、不写资源。正式 VM 性能和冻结包安装验证仍未完成。
+
+## L177 · 2026-11-08 · 整仓回归与首轮 Linux 候选构建修正
+
+**实测发现**：Windows 整仓正常退出 1，11722 passed/23 skipped/8 failed（1801.08s）。
+没有重现上一轮原生崩溃，但不能据此宣称已修复。测试采集先于 L176；完整日志/XML
+保留于 POSIX VM 证据目录。五项旧打包、既有 HTTP、历史文档品牌检查各有失败，
+另有 ASR 取消测试在 worker 清空 recording 后、Qt 排队信号送达前提前断言。
+
+**修正**：ASR 产品通道不变；测试同时等结束状态和结果信号，等待器使用 QEventLoop/
+QTimer 与 10 秒预算。原失败在整仓日志，修正后 ASR/供给组 22 passed（19.82s），
+Windows/Linux 各 22 项满载三遍均正常退出 0，CPU 均值分别为 100%/99.925%。
+Ubuntu 22.04 候选首次实际执行时 Qt 配置报 OpenGL
+功能测试失败：关闭 FEATURE_opengl 不会把 INPUT_opengl 设置为 no，Qt 仍执行强制
+诊断。Fcitx 构建入口补显式 INPUT_opengl=no；构建镜像实际缺少 libx11-dev，workflow
+补依赖，脚本在 Qt 编译前做 pkg-config 前检。保留失败目录，再用新输出原生复核。
+这只改构建参数，不增加桌宠运行期开销；候选包未生成，不能列作构建通过。
+
+**证据边界**：cgroup 性能采样器已完成原生短测（completed=true、退出 0），单/四宠
+拖动持续、隐藏可见数为 0、输入无降级；该次与依赖下载并行，仅验证采样器，不算
+3×60 秒或 30 分钟性能结论。逐文件增删归入 POSIX 报告，正式采样仍待运行。
+
+## L178 · 2026-11-08 · 动图事件同步与 Qt 构建依赖补齐
+
+**累计结果**：L176/L177 后 Windows petcore 与守卫 3622 passed/3 skipped/1 既有
+HTTP failed（290.03s）；Linux 为 3607 passed/18 skipped/1 animated_image failed
+（243.68s）。Linux 该轮与 Qt 编译并行，原始失败与 XML 保留。动图测试固定等
+300ms 后检查当前帧>=1，循环动画此时可以已经回到首帧。现改为真实事件循环等待
+frameChanged 的次帧事件，10 秒预算；不修改动画产品代码。两端 ASR/供给/动图相关
+组各 31 passed（Windows 2.65s，Linux 3.16s），各满载三遍也均正常退出 0；Windows
+CPU 100%，Linux 99.931%（同时有 Qt 编译），逐轮耗时/命令见交付报告。
+
+**原生依赖探针**：Ubuntu 22.04 最小构建容器内 ldd 报缺 libGL.so.1/libpulse.so.0，
+实际 import QtGui 抛 ImportError、退出 1。workflow 构建依赖补 libgl1/libpulse0，
+容器补齐后 import QtGui/QtMultimedia 退出 0；PipeWire 可选加载警告保留，不能据此
+宣称音频实播通过。Qt 头文件/工具还在原生编译，尚无候选包；没有降低 ABI/ELF 门。
+
+**开销与边界**：本批只改测试同步和构建依赖，不向桌宠增加运行时代码、线程、写盘
+或网络操作；最终随包依赖及体积以构建审计为准。逐文件增删见 POSIX 报告。正式
+性能采样前另用独立进程散列实际代码/资源和 harness，避免身份扫描污染被测 RSS。
+
+## L179 · 2026-11-08 · Fcitx 插件版本元数据与精确构建来源
+
+Ubuntu 22.04 候选第二轮已完成 Qt 1593 项/Fcitx 22 项编译，但元数据校验失败。
+Qt 6.11.3 的 QPluginMetaData::Header 只存 major/minor，QFactoryLoader 重建补丁号 0；
+实际插件 version=396032（6.11.0）。原先要求其等于完整 6.11.3 的判断有误。
+构建及冻结诊断共用 fcitx_problems：元数据检查 major/minor，完整版本由同版本
+源码标签、提交、qmake QT_VERSION 与最终插件 SHA256 清单共同核对；缺清单或摘要
+变化仍失败。可指定编译缓存，但必须复核远端、标签/HEAD、干净源码，再重新配置/编译。
+
+回归先 8 failed（接口未实现），修正后打包/工作流 79 passed（1.03s），ruff 通过。
+本批只在构建及 --check 中散列插件，不增加动画帧路径、常驻线程或网络；原生候选
+复核和实测成本继续记录至 POSIX 报告。逐文件增删也归入该报告。
+
+## L180 · 2026-11-08 · 最小 Linux 构建环境的桌面动态依赖
+
+候选第三轮 Fcitx 构建来源校验、PyInstaller 均通过；原生审计遍历 317 个 ELF，
+发现 GTK/Pango/Cairo、Wayland cursor/egl、Xrandr 和 speechd 未解析。workflow 补齐
+libgtk-3-0/libspeechd2/libxrandr2/libwayland-cursor0/libwayland-egl1；没有放松审计。
+Ubuntu 24.04 对同一冻结目录执行 --check --strict 退出 0，Fcitx build_matches/loaded
+都为 true，但尚不能当作 Ubuntu 22.04 产物已通过或桌面输入已验收。第四轮在补齐
+依赖的新容器重新构建，原失败审计保存。只改构建依赖与文档；包体/运行开销以实测
+为准，逐文件增删及验证结果归入 POSIX 报告。
+
+## L181 · 2026-11-08 · 冻结 Linux 隔离宿主 GIO 扩展
+
+候选第四轮完成：345 个 ELF 的架构/glibc/动态依赖审计无问题，冻结 strict 无问题；
+412377385 字节，SHA256 574979be8ae25332eaba10649643f6bcfc293b0610fbd2499ae9d3a8f4c857cb。
+真实 GNOME 外部鼠标完成首击设置、IBus 中文提交、取消及正常菜单退出 0；Fcitx 也
+实际显示候选框、提交中文并正常退出。首轮 Fcitx 驱动把 --check 与 -s 合并造成
+选中仍为 keyboard-us；分开执行切换后通过。保留失败与纠正证据，不改产品来迁就
+测试。源码模式先前焦点超时由等待映射/活动窗及清除 AT-SPI 缓存解决。
+
+冻结 GUI 日志另发现宿主 GVfs 模块缺 g_task_set_static_name 符号：22.04 随包 GLib
+误载 24.04 系统模块。prepare_environment 仅在冻结 Linux 下设置包内 GIO_MODULE_DIR
+并去掉 GIO_EXTRA_MODULES，构建器创建空的独立模块目录。保留 GIO 本地实现，源码
+运行沿用系统设置；不提供宿主 GVfs 远程卷扩展。回归先 1 failed，修正后平台/打包/
+工作流 90 passed（1.55s），ruff 通过；新候选需再次实机复核。来源说明与逐文件
+增删、实测开销归入 POSIX 报告。
+
+## L182 · 2026-11-08 · 冻结 Linux 的文件选择器使用随包 Qt
+
+L181 后 Linux petcore/架构/文档累计 3617 passed/18 skipped（229.11s），候选第五轮
+345 ELF 与 strict 全过；中文/空格路径重复注册、移除、4→5 替换均保留包外数据摘要。
+文件选择器进一步触发 GTK IBus 宿主模块缺 g_task_set_static_name。平台窗口策略
+在冻结 Linux QApplication 创建前设置 AA_DontUseNativeDialogs，让 Qt 选择器沿用
+随包 Qt 输入法；其他平台与源码运行不改。三个分支测试先红，平台/窗口/桌面壳/
+打包组 65 passed（2.78s），ruff 通过；第六轮候选重建后仍需真实选择/取消复核。
+
+锁屏后 loginctl unlock-session 的截图曾退化为 1×1 黑图；发送授权测试 VM 的真实
+uinput Shift 后恢复 1280×800 可见桌面。该探针支持显示未唤醒的解释，不能把黑图
+当作 petcore 渲染失败或完整桌面证据。正式性能前要求未锁定且截图可见。
+开销仅启动时一次 Qt 属性设置，无新增线程/网络/磁盘；逐文件增删与实测归入报告。
+
+## L183 · 2026-11-08 · Linux 安装候选与真实登录自启
+
+第六轮候选 412375065 B，SHA256 0bf0116acd32d3c449ec11a031645bc893ebf0686edb9e5acfeb6f472a7aab3a，
+审计与 strict 通过，本机拷贝摘要一致。Ubuntu24.04 GNOME 的外部驱动确认首次菜单
+设置、Qt 文件选择打开/取消、IBus 中文提交和菜单正常退出 0；无先前 GTK/GIO ABI 错误，
+仍保留 AT-SPI warning 与部分英文按钮限制。中文路径升级保留包外数据；冻结自启反复
+启停后真实注销登录，19:15:20 会话建立，19:15:22 程序启动，截图确认可见。测试自启
+已移除。运行后与归档逐文件比对 1290 文件/866619483 B，无新增、缺失、变化。
+
+本批只补验收文档，未改运行代码；详细命令、产物身份、截图、逐文件增删见 POSIX 报告。
+完整性能与最终门禁继续，Mac 按用户要求暂缓；不能据这些结果宣称全平台验收完成。
+
+同批补充原生应用入口、GNOME 托盘首次设置、隐藏恢复和穿透恢复：实际 uinput
+点击，X 服务端输入矩形 234→0→234，退出后 PID 消失，临时设备已释放。工具的
+继承 stdout 与 psutil 单参数拆分问题单独记录。H 源码 Linux 3620 passed/18 skipped
+（221.45s，退出 0），GNOME 原生输入 1 passed/1 skipped（1.41s）；文档守卫
+369 passed（3.66s），ruff/diff 检查通过。
+
+最终整仓正常退出 1：11741 passed/23 skipped/7 failed（1615.59s），均为前次记录的
+旧打包/历史文案/Windows HTTP 环境项，未放宽断言。19:32:53 在其结束后开始 Linux
+正式性能采样，源代码与 H 一致，原始数据与摘要另存；完成前不填最终性能结论。
+
+## L184 · 2026-11-08 · Linux 候选与 24 组原生性能
+
+单/四宠 × 待机/动画/拖动/隐藏，各 3×60–61 秒完成，无输入降级；拖动采样全部保持
+捕获，隐藏输入区域更新为 0 且解码停止。应用 CPU 单宠 3.43%–20.82%、四宠
+4.03%–50.61%（一核 100%）；全树 CPU 与 RSS/线程/区域成本详表、原始摘要见报告
+第十节。没有改前同环境基线，不宣称整体提升；短样本不能证明长期无内存增长。
+
+用户明确取消 30 分钟内存观察后，20:02:31 经托盘退出；应用 run() 返回 0，完整驱动
+因未完成长样本退出 1，原始状态与取消记录保留，未改写成全程成功。测试进程和 unit
+已清理。第六轮候选及 SHA、安装/托盘/自启证据已归档；Mac/多屏/KDE/Hyprland 等
+未验边界明确列出。Windows 整仓 11741 passed/23 skipped/7 既有 failed，非全绿。
+本批只更新文档与实测证据，产品代码未变；逐文件增删由报告清单统一记录。
+收尾文档/报告守卫 369 passed（16.56s），ruff/diff 检查通过；无运行码变化，不重复整仓。
+
+## L185 · 2026-11-08 · Linux 里程碑提交范围与 macOS 继续
+
+用户已知整仓 7 项既有失败后要求推送 Linux，再继续 macOS。Linux 与窗口策略、能力、
+自启、构建共用 POSIX 入口；提交保留其依赖的既有 Cocoa 分支，仍明确 macOS 尚未
+原生验收，后续专项修改单独记录。67 个任务文件按报告清单提交，架构图两个原始修改、
+`.scratch`、二进制产物和凭据排除。使用当前功能分支，远端预检与 HEAD 同步；不合并
+或发布 Release。运行代码未改，沿用 L182–L184 的完整回归/压力/原生证据，文档另检。
+暂存检查发现 menu_dispatch.py 多余的文件末尾空行，已去掉；无行为变化。

@@ -11,6 +11,9 @@ AIGC:
 
 # onedir 打包流水线（绿色版 zip + Inno Setup 安装包）
 
+petcore 的 Linux/macOS 候选构建使用独立入口，见 [PETCORE-POSIX](PETCORE-POSIX.md)；
+本页旧版发布流程不因此切换。目标平台原生验收状态见该文档与关联交付报告。
+
 Android 原生测试包使用独立 Gradle 工程，共用角色素材；其工具链、资源导出和
 验收见 [Android 悬浮桌宠](ANDROID.md)，不使用下述 PyInstaller 流程。
 

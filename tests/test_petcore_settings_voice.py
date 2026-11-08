@@ -347,7 +347,10 @@ def test_dispose_cancels_preview_owner(app, tmp_path: Path) -> None:
     page.deleteLater()
 
 
-def test_asr_settings_write_and_discard(app, tmp_path: Path) -> None:
+def test_asr_settings_write_and_discard(app, tmp_path: Path, monkeypatch) -> None:
+    from petcore.platform import desktop
+    original = desktop.capabilities
+    monkeypatch.setattr(desktop, "capabilities", lambda **_: original(platform="win32"))
     host = FakeHost(tmp_path)
     page = VoicePage(host)
     try:

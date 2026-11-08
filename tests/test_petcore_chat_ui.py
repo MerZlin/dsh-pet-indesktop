@@ -558,7 +558,10 @@ def test_apply_appearance_rebinds_a_recreated_pet_window(controller) -> None:
         replacement.deleteLater()
 
 
-def test_composer_mic_button_emits_record_signals(controller) -> None:
+def test_composer_mic_button_emits_record_signals(controller, monkeypatch) -> None:
+    from petcore.platform import desktop
+    original = desktop.capabilities
+    monkeypatch.setattr(desktop, "capabilities", lambda **_: original(platform="win32"))
     window = _open(controller)
     requested: list[bool] = []
     stopped: list[bool] = []

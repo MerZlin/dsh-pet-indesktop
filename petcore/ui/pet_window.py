@@ -3,13 +3,14 @@ from __future__ import annotations
 import logging
 import math
 import os
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor
+from PySide6.QtGui import QColor, QContextMenuEvent, QCursor, QImage, QPainter
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .. import paths
@@ -62,6 +63,8 @@ from ..media.images import screen_dpr
 from ..media.library import ClipLibrary
 from ..media.sound import SoundPlayer
 from ..platform import screens as screen_mod
+from ..platform import window_policy
+from ..platform.input_region import ALPHA_HIT_THRESHOLD, create_controller
 from ..platform.win import (
     PerPixelInputController,
     apply_click_through,
@@ -80,6 +83,7 @@ from .motion import MotionController
 from .renderer import frame_pixmap
 from .rename_dialog import alias_bubble_text, prompt_alias
 from .slingshot import SlingshotController
+from .pet_surface import PetSurface
 
 logger = logging.getLogger("petcore.ui.window")
 
@@ -100,7 +104,7 @@ class ScreenState:
     pos_y: float | None = None
 
 
-class PetWindow(QWidget):
+class PetWindow(PetSurface):
     #: 桌宠移动后发出（拖动、抛掷、漫游、碰撞分离都会走 ``moveEvent``）；
     #: 聊天窗用它做「跟随桌宠」的合并定位。
     pet_moved = Signal()
@@ -228,6 +232,7 @@ class PetWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
+        window_policy.install(self)
 
     def available_characters(self) -> list[CharacterSpec]:
         return list(self.host.characters())
@@ -327,6 +332,10 @@ class PetWindow(QWidget):
         self._head_pat_tracker.reset()
         if os.name == "nt":
             self._input_controller = PerPixelInputController(self, self.is_transparent_at)
+        else:
+            self._input_controller = create_controller(self)
+            if self._input_controller is not None:
+                self._input_controller.resume()
         if self.click_through:
             self._apply_click_through()
         if bool(self.config.get("edge_probe_enabled")):
@@ -470,6 +479,7 @@ class PetWindow(QWidget):
             )
         if self.always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
+        flags = window_policy.passive_flags(flags)
         was_visible = self.isVisible()
         position = self.pos() if not initial else None
         self.setWindowFlags(flags)
@@ -491,6 +501,10 @@ class PetWindow(QWidget):
 
     def _apply_native_style(self) -> None:
         if os.name != "nt":
+            window_policy.apply(self)
+            controller = getattr(self, "_input_controller", None)
+            if controller is not None:
+                controller.native_handle_changed()
             return
         try:
             hwnd = int(self.winId())
@@ -1091,12 +1105,17 @@ class PetWindow(QWidget):
 
     def _apply_click_through(self) -> None:
         self._cancel_pointer_holds()
-        if self.click_through and os.name != "nt":
-            # 非 Windows 没有 SendInput 转发能力：保持旧的整窗穿透语义。
-            if self._input_controller is not None:
-                self._input_controller.stop()
-                self._input_controller = None
-            apply_click_through(self, True)
+        if sys.platform != "win32":
+            controller = self._input_controller
+            if controller is not None and getattr(controller, "available", True):
+                controller.refresh()
+            else:
+                # setWindowFlag hides native widgets: preserve visibility for
+                # the rectangular fallback and its tray-based recovery path.
+                visible = self.isVisible()
+                self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, self.click_through)
+                if visible:
+                    self.show()
             return
         # Windows：穿透模式也不再整窗挂 WS_EX_TRANSPARENT，否则右键会被一起放走。
         # 逐像素轮询保留，只由「透明像素」决定是否穿透。
@@ -1204,7 +1223,7 @@ class PetWindow(QWidget):
             self._edge_probe.resume()
         # 右键菜单开着的时候不许把桌宠抬到菜单上面（菜单会话期间层级归菜单）。
         if not menu_open():
-            self.raise_()
+            window_policy.raise_passive(self)
         if self._paused_for_session:
             return
         if self._action_kind is not None and self._clip is not None:
@@ -1304,7 +1323,7 @@ class PetWindow(QWidget):
         iy = int((local.y() - target.y()) * image.height() / target.height())
         if not (0 <= ix < image.width() and 0 <= iy < image.height()):
             return True
-        return image.pixelColor(ix, iy).alpha() < 8
+        return image.pixelColor(ix, iy).alpha() < ALPHA_HIT_THRESHOLD
 
     def _frame_base_rect(self) -> QRect:
         """未应用 Q 弹时角色帧在窗口里的绘制矩形（命中测试的基准）。
@@ -1330,13 +1349,43 @@ class PetWindow(QWidget):
         return self._frame_base_rect()
 
     def paintEvent(self, _event) -> None:
-        from PySide6.QtGui import QPainter
-
         painter = QPainter(self)
+        # Explicitly clear the native surface on XWayland; never set a visual mask.
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        painter.fillRect(QWidget.rect(self), Qt.GlobalColor.transparent)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        painter.translate(self._draw_offset)
+        self._paint_content(painter)
+        painter.end()
+        if os.name != "nt" and self._input_controller is not None:
+            self._input_controller.refresh()
+
+    def input_revision(self):
+        image = self._image
+        return (
+            image.cacheKey() if image is not None else 0,
+            self.width(), self.height(), QWidget.width(self), QWidget.height(self),
+            self._draw_offset.x(), self._draw_offset.y(), float(self.devicePixelRatioF()),
+            self._probe_angle, self.effects.effect_angle(), self.effects.squash_rect() if self.effects.squash_active else None,
+            self._mirrored(), self.click_through, self.dragging, self._press_global is not None,
+            self.stream_capture_mode, self.stream_capture_keycolor,
+        )
+
+    def input_image(self):
+        dpr = float(self.devicePixelRatioF()) or 1.0
+        image = QImage(max(1, round(QWidget.width(self) * dpr)), max(1, round(QWidget.height(self) * dpr)), QImage.Format.Format_Alpha8)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        painter.scale(dpr, dpr)
+        painter.translate(self._draw_offset)
+        self._paint_content(painter, input_only=True)
+        painter.end()
+        return image
+
+    def _paint_content(self, painter, *, input_only=False) -> None:
         if self.stream_capture_mode and self.stream_capture_keycolor:
             painter.fillRect(self.rect(), self.stream_key_color)
         if self._pixmap is None:
-            painter.end()
             return
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         angle = self._probe_angle + self.effects.effect_angle()
@@ -1354,8 +1403,8 @@ class PetWindow(QWidget):
             painter.scale(-1, 1)
         painter.drawPixmap(target, self._pixmap)
         painter.restore()
-        self.slingshot.paint(painter)
-        painter.end()
+        if not input_only:
+            self.slingshot.paint(painter)
 
     def _head_pat_is_busy(self) -> bool:
         return bool(
@@ -1432,6 +1481,9 @@ class PetWindow(QWidget):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
+        event = self.logical_mouse_event(event)
+        if event.button() == Qt.MouseButton.RightButton:
+            self._right_context_delivered = False
         self._note_activity()
         self._head_pat_tracker.reset()
         self._last_cursor_local = event.position()
@@ -1504,6 +1556,7 @@ class PetWindow(QWidget):
             return int(DRAG_THRESHOLD)
 
     def mouseMoveEvent(self, event) -> None:
+        event = self.logical_mouse_event(event)
         self._last_cursor_local = event.position()
         if event.buttons():
             # 拖动/按住也算交互：按住不放时不该降帧。
@@ -1690,6 +1743,10 @@ class PetWindow(QWidget):
             self._pointer.right_cancel()
             return
         if not self.click_through:
+            if (sys.platform == "darwin" and not self._suppress_context_menu
+                    and not getattr(self, "_right_context_delivered", False)):
+                self._right_context_delivered = True
+                self._show_context_menu_at_cursor()
             return
         self._right_hold_timer.stop()
         armed = self._right_menu_armed
@@ -1972,6 +2029,11 @@ class PetWindow(QWidget):
 
     def contextMenuEvent(self, event) -> None:
         self._note_activity()
+        if sys.platform == "darwin" and event.reason() == QContextMenuEvent.Reason.Mouse:
+            if getattr(self, "_right_context_delivered", False):
+                event.accept()
+                return
+            self._right_context_delivered = True
         if self.click_through:
             # 穿透模式的菜单只由右键长按计时弹出，原生右键事件一律吞掉。
             event.accept()
@@ -2371,7 +2433,7 @@ class PetWindow(QWidget):
         self._stop_clip()
         self.library.close_all()
         if self._input_controller is not None:
-            self._input_controller.stop()
+            getattr(self._input_controller, "close", self._input_controller.stop)()
         super().closeEvent(event)
 
     def reload_characters(self, character: CharacterSpec) -> None:
@@ -2399,7 +2461,7 @@ class PetWindow(QWidget):
         self._stop_clip()
         self.library.close_all()
         if self._input_controller is not None:
-            self._input_controller.stop()
+            getattr(self._input_controller, "close", self._input_controller.stop)()
         try:
             self.bubble.closed.disconnect(self._on_bubble_closed)
         except (RuntimeError, TypeError):

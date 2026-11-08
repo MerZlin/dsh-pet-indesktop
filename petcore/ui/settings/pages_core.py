@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from ... import paths
 from ...engine.geometry import DEFAULT_SCALE, SCALE_MAX, SCALE_MIN, SCALE_STEPS
 from ...platform import autostart, hotkey_spec, screens
+from ...platform.desktop import capabilities as desktop_capabilities
 from ...storage import roots as storage_roots
 from ..download_progress import DownloadPanel, format_bytes
 from ..external_links import (
@@ -112,7 +113,7 @@ class GeneralPage(SettingsPage):
 
     def __init__(self, host, parent=None):
         super().__init__(host, parent)
-        self._autostart_supported = sys.platform == "win32"
+        self._autostart_supported = autostart.supported()
         self._autostart_initial = False
         if self._autostart_supported:
             try:
@@ -148,13 +149,13 @@ class GeneralPage(SettingsPage):
         self.autostart_check.setChecked(self._autostart_initial)
         if not self._autostart_supported:
             self.autostart_check.setEnabled(False)
-            self.autostart_check.setToolTip("仅在 Windows 上可用。")
-        hint = "登录 Windows 后自动运行 petcore。" if self._autostart_supported else "仅在 Windows 上可用。"
+            self.autostart_check.setToolTip("当前平台没有自启后端。")
+        hint = "登录系统后自动运行 petcore（当前实例）。" if self._autostart_supported else "当前平台没有自启后端。"
         card.add_row("开机自动启动", self.autostart_check, hint)
 
         # 全屏自动隐藏：全局键（一个共享 watcher 作用所有宠），勾选即时写配置并
         # 立刻作用到宿主；取消/关闭时由 discard_changes() 回滚到打开时的快照。
-        self._fullscreen_hide_supported = sys.platform == "win32"
+        self._fullscreen_hide_supported = desktop_capabilities()["fullscreen_detection"].supported
         self._initial_auto_hide_fullscreen = bool(
             self.config().get("auto_hide_fullscreen", True)
         )
@@ -933,8 +934,10 @@ class AppearancePage(SettingsPage):
         card.add_row(
             "点击穿透",
             self.click_through_check,
-            "仅左键穿透：左键单击点下层，左键长按拖动；右键单击互动、右键长按菜单。"
-            "关闭后恢复左键点击。影响所有桌宠，可从托盘菜单关闭。",
+            ("仅左键穿透：左键单击点下层，左键长按拖动；右键单击互动、右键长按菜单。"
+             if desktop_capabilities()["global_hotkeys"].supported
+             else "整窗穿透：鼠标交给下层应用；请通过托盘或恢复窗口关闭穿透。")
+            + "关闭后恢复鼠标交互。影响所有桌宠，可从托盘菜单关闭。",
         )
 
         self.stream_mode = QComboBox(self)
@@ -1004,12 +1007,14 @@ class AppearancePage(SettingsPage):
         self.hotkey_edit = QLineEdit(self)
         self.hotkey_edit.setPlaceholderText("例如 Ctrl+Alt+P（留空 = 不绑定）")
         self.hotkey_edit.setText(self._initial_hotkey)
+        self.hotkey_edit.setEnabled(desktop_capabilities()["global_hotkeys"].supported)
+        self.hotkey_edit.setToolTip(desktop_capabilities()["global_hotkeys"].reason)
         self.hotkey_edit.setMinimumWidth(220)
         self.hotkey_edit.editingFinished.connect(self._on_hotkey_finished)
         card.add_row(
             "显示/隐藏快捷键",
             self.hotkey_edit,
-            "全局快捷键，至少包含一个修饰键；留空表示不绑定。",
+            desktop_capabilities()["global_hotkeys"].reason or "全局快捷键，至少包含一个修饰键；留空表示不绑定。",
         )
 
         tabs.close()
@@ -1128,6 +1133,11 @@ class AppearancePage(SettingsPage):
         ):
             box = make_checkbox(metrics_row)
             box.setChecked(metric_id in current_metrics)
+            capability_name = {"gpu": "gpu", "fps": "game_fps"}.get(metric_id)
+            if capability_name:
+                capability = desktop_capabilities()[capability_name]
+                box.setEnabled(capability.supported)
+                box.setToolTip(capability.reason)
             box.toggled.connect(self._on_island_changed)
             holder = QWidget(metrics_row)
             holder_layout = QHBoxLayout(holder)
@@ -1329,6 +1339,11 @@ class AppearancePage(SettingsPage):
         button = getattr(self, "fps_permission_button", None)
         if label is None or button is None:
             return
+        capability = desktop_capabilities()["game_fps"]
+        if not capability.supported:
+            label.setText(capability.reason)
+            button.setEnabled(False)
+            return
         from ...platform import fps_permission
 
         try:
@@ -1526,6 +1541,8 @@ class AppearancePage(SettingsPage):
         edit = QLineEdit(self)
         edit.setPlaceholderText("例如 Ctrl+Alt+K（留空 = 不绑定）")
         edit.setText(str(self.config().get(key) or ""))
+        edit.setEnabled(desktop_capabilities()["global_hotkeys"].supported)
+        edit.setToolTip(desktop_capabilities()["global_hotkeys"].reason)
         edit.setMinimumWidth(220)
         edit.editingFinished.connect(
             lambda e=edit, k=key, n=kind: self._on_ai_hotkey_finished(e, k, n)
@@ -1533,7 +1550,7 @@ class AppearancePage(SettingsPage):
         card.add_row(
             label,
             edit,
-            "全局快捷键，至少包含一个修饰键；留空表示不绑定。",
+            desktop_capabilities()["global_hotkeys"].reason or "全局快捷键，至少包含一个修饰键；留空表示不绑定。",
         )
         return edit
 

@@ -246,7 +246,11 @@ def _check(
 
     configured_dir = talk_images.resolve_image_dir(config.get("self_talk_image_dir"))
     builtin_dir = talk_images.builtin_image_dir()
+    from .platform.desktop import diagnostic_report
+    from .platform.bundle import report as bundle_report
     report = {
+        "desktop": diagnostic_report(),
+        "bundle": bundle_report(paths.repo_root()),
         "version": __version__,
         "data_root": str(root),
         "cache_root": str(paths.cache_root() or root),
@@ -284,6 +288,9 @@ def _check(
     }
     problems: list[str] = []
     if strict:
+        if paths.is_frozen():
+            problems.extend(report["bundle"]["resource_problems"])
+            problems.extend(f"missing module: {name}" for name, found in report["bundle"]["modules"].items() if not found)
         # 构建门的唯一判据：这几项就是「包打全了没有」的证据（AGENTS 已写明
         # `self_talk_images` 是素材/Qt 插件是否正常的第一证据）。
         if menu_template_source != "json":
@@ -474,10 +481,12 @@ def main(argv: list[str] | None = None) -> int:
         print(message)
         return 0 if ok else 1
 
-    if raw[:1] == ["autostart"]:
+    autostart_index = _subcommand_index(raw, ("autostart",))
+    if autostart_index is not None:
         from .platform import autostart
-
-        action = raw[1] if len(raw) > 1 else "status"
+        action = raw[autostart_index + 1] if len(raw) > autostart_index + 1 else "status"
+        global_args, _ = _parser().parse_known_args(raw[:autostart_index] + raw[autostart_index + 2:])
+        autostart.configure(root=_resolve_root(global_args), instance=global_args.instance, working_directory=paths.repo_root())
         if action == "status":
             print("on" if autostart.is_enabled() else "off")
             return 0
@@ -561,6 +570,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         return _check(root, config, mod_dirs, args.out, strict=bool(args.strict))
     logger.info("starting petcore %s", __version__)
+    from .platform.desktop import prepare_environment, startup_problem
+    prepare_environment()
+    problem = startup_problem()
+    if problem:
+        logger.error(problem)
+        print(problem, file=sys.stderr)
+        return 2
     from .ui.app import run
 
     return run(

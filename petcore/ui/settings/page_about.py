@@ -51,7 +51,15 @@ class AboutPage(SettingsPage):
         return pages
 
     def _build_about_section(self) -> None:
+        from ...platform.desktop import CAPABILITY_LABELS, diagnostic_report
+        report = diagnostic_report(qpa=QApplication.platformName())
         info_card = self.section("版本信息")
+        info_card.add_row("桌面平台", QLabel(f"{report['platform']} / {report['qpa']}", self))
+        unsupported = [f"{CAPABILITY_LABELS.get(key, key)}：{item['reason']}" for key, item in report["capabilities"].items() if not item["available"]]
+        if unsupported:
+            label = QLabel("\n".join(unsupported), self)
+            label.setWordWrap(True)
+            info_card.add_row("平台能力", label, expand=True)
         info_card.add_row("petcore", QLabel(f"v{__version__}", self))
         info_card.add_row("数据目录", value_field(str(self._root), self))
         info_card.add_row("日志文件", value_field(str(self._log_path), self))
@@ -111,6 +119,8 @@ class AboutPage(SettingsPage):
         return tuple(getattr(result, "mods", ()) or ())
 
     def _report(self) -> dict:
+        from ...platform.desktop import diagnostic_report
+        desktop = diagnostic_report(qpa=QApplication.platformName())
         mods = []
         for mod in self._mods():
             manifest = getattr(mod, "manifest", None)
@@ -142,7 +152,13 @@ class AboutPage(SettingsPage):
                 }
                 for window in manager.each()
             ]
+            desktop["input_errors"] = [
+                {"slot": window.slot, "reason": window.property("desktop_input_error")}
+                for window in manager.each()
+                if callable(getattr(window, "property", None)) and window.property("desktop_input_error")
+            ]
         return {
+            "desktop": desktop,
             "version": __version__,
             "data_root": str(self._root),
             "log_path": str(self._log_path),

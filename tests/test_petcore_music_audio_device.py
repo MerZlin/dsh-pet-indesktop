@@ -52,7 +52,9 @@ class _Enumerator:
 
 
 def test_session_manager_uses_the_selected_endpoint(monkeypatch) -> None:
-    from pycaw.utils import AudioUtilities
+    # The OS boundary is fake on every runner; POSIX does not install pycaw.
+    AudioUtilities = SimpleNamespace(GetDeviceEnumerator=None, CreateDevice=None, GetSpeakers=None)
+    monkeypatch.setitem(sys.modules, "pycaw.utils", SimpleNamespace(AudioUtilities=AudioUtilities))
 
     calls: list[str] = []
     available = {"dev-a", "dev-b"}

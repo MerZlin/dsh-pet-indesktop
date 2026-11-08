@@ -294,10 +294,11 @@ def test_check_layer_appears_through_the_real_popup_path(qapp) -> None:
 
 
 def test_menu_rows_use_the_main_branch_height(qapp) -> None:
-    """行高 24px、菜单高 86px（主分支 modern 实测值）。
+    """基准行高 24px；平台字体更高时给中文留出上下各 3px。
 
     32px 行 + 18px 图标时图标只占行的 56%，比主分支（75%）矮一截，菜单整体也厚一档。
     """
+    from PySide6.QtGui import QFontMetrics
     from PySide6.QtWidgets import QMenu
 
     from petcore.ui.icons import icon
@@ -309,8 +310,9 @@ def test_menu_rows_use_the_main_branch_height(qapp) -> None:
         menu.addAction(icon(name), "待机呼吸休闲")
     menu.adjustSize()
     heights = [menu.actionGeometry(action).height() for action in menu.actions()]
-    assert heights == [24, 24, 24]
-    assert 80 <= menu.size().height() <= 92
+    expected = max(24, QFontMetrics(menu.font()).boundingRect("待机呼吸休闲").height() + 6)
+    assert heights == [expected] * 3
+    assert expected * 3 + 8 <= menu.size().height() <= expected * 3 + 20
     # 图标槽位贴左缘 9px（menu padding 6 + QMenu::icon left 9），比旧的 30px 缩进更紧凑。
     first = menu.actionGeometry(menu.actions()[0])
     assert first.x() <= 8

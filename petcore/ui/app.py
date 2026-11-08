@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .menu_dispatch import connect_action
+
 import inspect
 import logging
 import sys
@@ -1350,6 +1352,9 @@ class CoreHost:
                 color_setter(key_color, persist=False)
 
     def install_hotkeys(self) -> None:
+        from ..platform.desktop import capabilities
+        if not capabilities()["global_hotkeys"].supported:
+            return
         if self.hotkeys is None:
             self.hotkeys = GlobalHotkeyService(self.app)
             self.hotkeys.install()
@@ -1594,31 +1599,31 @@ class CoreHost:
         windows = pets.each() if pets is not None else ([self.window] if self.window else [])
         visible = any(window.isVisible() for window in windows if window is not None)
         toggle = menu.addAction("隐藏桌宠" if visible else "显示桌宠")
-        toggle.triggered.connect(lambda _checked=False: self.toggle_all_visible())
+        connect_action(toggle, lambda _checked=False: self.toggle_all_visible())
         click_through = menu.addAction("鼠标穿透")
         click_through.setCheckable(True)
         click_through.setChecked(self.all_click_through())
         click_through.setToolTip("鼠标点击穿过桌宠；关闭也要从这里操作")
-        click_through.triggered.connect(
+        connect_action(click_through,
             lambda checked=False: self.set_all_click_through(bool(checked))
         )
         if len(windows) > 1:
             all_visible = menu.addAction("显示全部")
-            all_visible.triggered.connect(lambda _checked=False: self.set_all_visible(True))
+            connect_action(all_visible, lambda _checked=False: self.set_all_visible(True))
             all_hidden = menu.addAction("隐藏全部")
-            all_hidden.triggered.connect(lambda _checked=False: self.set_all_visible(False))
+            connect_action(all_hidden, lambda _checked=False: self.set_all_visible(False))
 
         menu.addSeparator()
         balance = menu.addAction("显示余额")
-        balance.triggered.connect(lambda _checked=False: self.request_balance(force=True))
+        connect_action(balance, lambda _checked=False: self.request_balance(force=True))
         update = menu.addAction("检查更新")
-        update.triggered.connect(lambda _checked=False: self.check_for_updates())
+        connect_action(update, lambda _checked=False: self.check_for_updates())
         settings = menu.addAction("桌宠设置")
-        settings.triggered.connect(lambda _checked=False: self.open_settings())
+        connect_action(settings, lambda _checked=False: self.open_settings())
         data = menu.addAction("打开数据目录")
-        data.triggered.connect(lambda _checked=False: self.open_data_dir())
+        connect_action(data, lambda _checked=False: self.open_data_dir())
         reload_action = menu.addAction("重新加载扩展")
-        reload_action.triggered.connect(lambda _checked=False: self.reload_mods())
+        connect_action(reload_action, lambda _checked=False: self.reload_mods())
 
         if pets is not None and len(windows) > 1:
             menu.addSeparator()
@@ -1628,20 +1633,20 @@ class CoreHost:
                 state = submenu.addAction(
                     "隐藏" if window.isVisible() else "显示"
                 )
-                state.triggered.connect(
+                connect_action(state,
                     lambda _checked=False, w=window: self._toggle_one(w)
                 )
                 corner = submenu.addAction("回到右下角")
-                corner.triggered.connect(lambda _checked=False, w=window: w.return_corner())
+                connect_action(corner, lambda _checked=False, w=window: w.return_corner())
                 if slot != 0:
                     quit_one = submenu.addAction("退出这只")
-                    quit_one.triggered.connect(
+                    connect_action(quit_one,
                         lambda _checked=False, w=window: w.quit_from_menu()
                     )
 
         menu.addSeparator()
         quit_action = menu.addAction("退出")
-        quit_action.triggered.connect(lambda _checked=False: self.quit_app())
+        connect_action(quit_action, lambda _checked=False: self.quit_app())
 
     def _toggle_one(self, window) -> None:
         window.set_visible(not window.isVisible())
@@ -1802,6 +1807,11 @@ def _install_tray(host: CoreHost) -> TrayIcon:
         None,
     )
     tray.show()
+    from PySide6.QtWidgets import QSystemTrayIcon
+    if not QSystemTrayIcon.isSystemTrayAvailable() and QApplication.platformName() not in ("offscreen", "minimal"):
+        from .recovery import RecoveryWindow
+        host.recovery_window = RecoveryWindow(host)
+        host.recovery_window.show()
     return tray
 
 
@@ -1809,10 +1819,13 @@ def _wire_screens(app: QApplication, manager) -> None:
     def refresh(*_args) -> None:
         QTimer.singleShot(0, manager.handle_screens_changed)
 
-    for screen in app.screens():
+    def watch(screen):
         screen.geometryChanged.connect(refresh)
+        screen.availableGeometryChanged.connect(refresh)
         screen.logicalDotsPerInchChanged.connect(refresh)
-    app.screenAdded.connect(lambda screen: (screen.geometryChanged.connect(refresh), refresh()))
+    for screen in app.screens():
+        watch(screen)
+    app.screenAdded.connect(lambda screen: (watch(screen), refresh()))
     app.screenRemoved.connect(refresh)
     app.primaryScreenChanged.connect(refresh)
 
@@ -1846,7 +1859,13 @@ def run(
         # Config.load 自身（不含之后 import ui.app 的时间；后者算在 bootstrap 里）。
         stages.append(("config", float(config_ms)))
 
+    from ..platform import autostart, macos, window_policy
+    from ..platform.desktop import prepare_environment
+    prepare_environment()
+    window_policy.configure_application()
     app = QApplication.instance() or QApplication(sys.argv)
+    macos.configure_application()
+    autostart.configure(root=root, instance=instance, working_directory=paths.repo_root())
     app.setApplicationName(f"dsh-pet-core-{instance}" if instance else "dsh-pet-core")
     app.setQuitOnLastWindowClosed(False)
     palette = app.palette()

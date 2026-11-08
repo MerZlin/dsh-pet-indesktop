@@ -24,6 +24,9 @@ issue·PR 协作者/B 站粉丝分页搜索/全局唯一手写签名，随包快
 
 ## 1. 环境
 
+Linux/macOS 的源码适配与候选构建入口见 [POSIX 桌面说明](../docs/PETCORE-POSIX.md)。
+2026-11-07 状态：代码与本机回归阶段，目标虚拟机尚未部署；不代表已完成这两端的原生验收。
+
 Windows（Git Bash）：
 
 ```bash
