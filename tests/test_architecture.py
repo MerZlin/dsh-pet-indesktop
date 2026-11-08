@@ -307,7 +307,7 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 按文件约定只随实测校准，不为达标压行（拆分仍是待办）。
 # 2026-10-22 上调到 2722：AI 域新增「场景扮演」组的一行 claim（roleplay_enabled /
 # roleplay_scene），行本体在 _AiSettingsPage。实测 2722。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2722  # 2026-10-22：场景扮演组 claim 一行
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2724  # 2026-10-22：场景扮演组 claim 一行；2026-11-07：AI 碎碎念组 +2（两个单行挂钩：显隐联动尾调 + 保存落盘；实现全在 settings_pet_controls，接线在控件创建处直连）
 
 
 def _read(name: str) -> str:

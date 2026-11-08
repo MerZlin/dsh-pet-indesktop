@@ -212,6 +212,7 @@ PER_PET_SETTING_KEYS = frozenset({
     "self_talk_image_dir", "self_talk_image_scale", "self_talk_image_chance",
     "self_talk_min_interval", "self_talk_max_interval",
     "self_talk_speak_enabled", "self_talk_bubble_style", "bubble_text_scale",
+    "self_talk_ai_enabled", "self_talk_ai_personality",
     "click_show_balance", "click_show_self_talk",
     # 场景扮演（每只宠一张场景卡：角色级设定，不同角色可以演不同的戏）
     "roleplay_enabled", "roleplay_scene", "roleplay_cast",

@@ -132,6 +132,20 @@ def build_self_talk_rows(dialog) -> list[SettingRow]:
         SettingRow("self_talk_max", "最长间隔", "上一条气泡消失后，到下一条出现前的最长空闲时间。", dialog.max_spin),
         SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", dialog.texts_edit, stacked=True),
         SettingRow(
+            "self_talk_ai_enabled",
+            "碎碎念由 AI 生成",
+            "打开后随机自言自语不再抽候选内容，改为按下方性格设定调用「AI 设置」"
+            "里的当前模型现场生成（每句都不同）；没配模型或生成失败时自动回落候选内容。",
+            dialog.self_talk_ai_check,
+        ),
+        SettingRow(
+            "self_talk_ai_personality",
+            "性格设定",
+            "AI 碎碎念的人设描述，例：傲娇、毒舌但心软、爱用省略号。留空不生效。",
+            dialog.self_talk_ai_personality_edit,
+            stacked=True,
+        ),
+        SettingRow(
             "self_talk_images",
             "图片目录",
             "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。",

@@ -142,6 +142,10 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "ry",
         "scale",
         "screen_name",
+        # 2026-11-07 加 AI 碎碎念 2 键（self_talk_ai_enabled / personality；每宠键，
+        # 默认关 / 性格留空=不生效，自言自语仍走固定句池），白名单 +2。
+        "self_talk_ai_enabled",
+        "self_talk_ai_personality",
         "self_talk_bubble_style",
         "self_talk_duration_seconds",
         "self_talk_enabled",
