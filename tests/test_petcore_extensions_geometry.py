@@ -199,6 +199,21 @@ def test_minimum_window_is_no_worse_than_before(app, tmp_path: Path) -> None:
         dialog.close()
 
 
+def test_minimum_window_mod_controls_fit_without_horizontal_scroll(app, tmp_path: Path) -> None:
+    dialog = _dialog(app, tmp_path / "compact-controls", size=(720, 500))
+    try:
+        mods = dict(_extensions(dialog)._pages)["mods"]
+        assert mods.scroll.horizontalScrollBar().maximum() == 0
+        viewport = mods.scroll.viewport()
+        for control in (mods.feature_check, mods.filter_combo, mods.import_zip_button,
+                        mods.import_dir_button, mods.reload_button):
+            left = control.mapTo(viewport, control.rect().topLeft()).x()
+            assert left >= 0
+            assert left + control.width() <= viewport.width()
+    finally:
+        dialog.close()
+
+
 def test_font_change_reflows_the_open_dialog(app, tmp_path: Path) -> None:
     host = FakeHost(Path(tmp_path / "live"))
     host.settings_pages = lambda: [

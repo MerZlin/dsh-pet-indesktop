@@ -132,6 +132,45 @@ def test_mac_capture_permission_fails_before_grabbing(app, monkeypatch):
     assert calls == []
 
 
+def test_mac_capture_overlay_applies_spaces_before_activation_and_replays(app, monkeypatch):
+    from PySide6.QtCore import QEventLoop, QTimer
+    from petcore.platform import macos
+    from petcore.ui.screen.overlay import SelectionOverlay
+
+    native_calls, activation_checks = [], []
+    monkeypatch.setattr(macos, "is_cocoa", lambda: True)
+    monkeypatch.setattr(macos, "apply_window", lambda handle, **policy: native_calls.append((handle, policy)))
+
+    class ObservedOverlay(SelectionOverlay):
+        def activateWindow(self):  # noqa: N802 - observe the real Qt activation path
+            activation_checks.append(bool(native_calls))
+            super().activateWindow()
+
+    overlay = ObservedOverlay()
+    loop = QEventLoop()
+    try:
+        overlay.show()
+        assert activation_checks == [True]
+        assert all(call[1]["passive"] is False for call in native_calls)
+        assert not overlay.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        assert not overlay.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+        # Flush the queued Show policy before exercising a fresh native handle.
+        QTimer.singleShot(0, loop.quit)
+        loop.exec()
+        overlay.hide()
+        overlay.destroy()
+        native_calls.clear()
+        overlay.show()
+        assert activation_checks == [True, True]
+        assert native_calls[-1][0] == int(overlay.winId())
+        before_queued = len(native_calls)
+        QTimer.singleShot(0, loop.quit)
+        loop.exec()
+        assert len(native_calls) > before_queued
+    finally:
+        overlay.close()
+
+
 def test_x11_disconnect_during_hide_does_not_escape_qt_event(app, tmp_path):
     from petcore.platform.input_region import RegionInputController
     window = make_pet(tmp_path)

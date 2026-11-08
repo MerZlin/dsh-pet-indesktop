@@ -7003,3 +7003,138 @@ uinput Shift 后恢复 1280×800 可见桌面。该探针支持显示未唤醒�
 `.scratch`、二进制产物和凭据排除。使用当前功能分支，远端预检与 HEAD 同步；不合并
 或发布 Release。运行代码未改，沿用 L182–L184 的完整回归/压力/原生证据，文档另检。
 暂存检查发现 menu_dispatch.py 多余的文件末尾空行，已去掉；无行为变化。
+
+## L186 · 2026-11-08 · macOS 截图层 Spaces 策略与原生门
+
+Linux 里程碑已推送 8e82fb0c。续查 #321/#335/#418 后发现截图 SelectionOverlay
+未接入 Cocoa 策略、直接激活的遗漏；在 Windows 的真实 Qt 事件循环与 Cocoa 边界
+替身中，激活前检查先红 1 failed，补 install(passive=False) 与同步 apply 后绿。
+保留键盘能力，Show/句柄重建重放；不引入全进程激活拦截。原生测试增加真实句柄
+重建和截图层激活时的 Spaces/键盘/Esc 检查；尚未在 Cocoa 运行。
+
+相关 90 passed/3 skipped（4.02s），66 项时序族 16 CPU worker 满载三遍通过，
+CPU 样本均 100%，pytest 4.23/3.93/4.03s。非 Cocoa 两入口成本 3×100000 次测为
+523.544/528.216/532.952 ns/对；不作为 Mac 原生成本。整仓与最终文档门继续。
+Mac 已恢复到登录页，但 SSH 10061、Tools 未运行、自动输入无效，已请求用户登录并
+开启远程登录；未宣称原生完成。逐文件增删、性能限制与命令见
+[macOS 专项报告](PR-REPORT-PETCORE-MACOS-2026-11-08.md)。30 分钟内存观察仍按用户要求取消。
+
+用户启用 SSH 后确认 Mac 为 15.8.2 x86_64，用户目录部署 Python3.12.16/Qt6.12.0；
+Cocoa 结构门 2 passed/1 skipped（6.80s）。录屏/输入权限未授予，用户会话自动锁定，
+实际可见交互继续等待解锁；不能用缓存的 VMware 画面代替系统锁屏探针。
+Windows 整仓 11743 passed/24 skipped/8 failed（1581.50s），除既有七项外新增一次
+本地 HTTP ConnectionResetError；未变动的市场安全族单独复跑 26 passed（13.17s），
+保留整仓失败、未声称已修复。Mac offscreen 累计继续，逐文件与原始记录见专项报告。
+
+## L187 · 2026-11-08 · Mac 首轮累计回归与字体/时区修正
+
+Mac x86_64 / Qt 6.12.0 offscreen 累计 3614 passed/19 skipped/9 failed（392.36s）。
+六项旧测试假设所有平台都是 Tool 或直接 raise_；改验 macOS 普通窗口与实际被动
+置前策略，仍执行原平台分派。另三项逐一复现：气泡 CJK fallback 高度不足、扩展
+筛选行把窄内容撑宽、社区时间戳丢弃 offset。QLabel heightForWidth 兜底实际排版；
+筛选控件用既有 expand 行；缓存时间按 UTC 比较，历史无 offset 时间保留本地语义。
+
+新时区回归 Windows 先红 3 failed/2 passed；Mac 字体/窄窗 focused 先红
+4 failed/1 passed，修正后六族 89 passed/1 skipped（16.34s）。原生 Cocoa 修正前
+四档短文本已是 4 passed（19.61s），不能把 offscreen 字体缺陷描述为原生已复现。
+完整复跑、Cocoa 布局截图与成本记录继续；逐文件增删见
+[macOS 专项报告](PR-REPORT-PETCORE-MACOS-2026-11-08.md)。不改设置键、保存/取消或配色。
+
+## L188 · 2026-11-08 · Cocoa 窄窗截图复核
+
+L187 旧几何门已绿，但真实 Cocoa 控件截图显示 720×500 仍有 21px 横向溢出，
+复选框右侧被裁。新增实际控件边界与零横向滚动回归，Cocoa 先红 1 failed（29.64s），
+将「允许功能扩展」也改用既有 expand 行后绿 1 passed（29.58s）。不修改全局
+SettingsCard、设置语义或其余页面；继续复核最终 720/1100 图片。L187 累计仍按其
+冻结源码范围运行，L188 仅两行布局变化，补相关设置/关闭/几何门并分别记录。
+
+D 最终快照（4789f1a3…）1989 文件复核 changed=[]；Mac 累计 3632 passed/19 skipped
+（234.19s），4 worker 满载三遍各 117 passed/1 skipped，CPU 均值 99.329%。
+Cocoa 最终 720/1100 图片已检查，横向溢出均为 0；Windows 85 项设置相关通过，
+459 项文档/架构通过。用户已解锁，但录屏/自动输入权限仍待正常系统确认。
+
+## L189 · 2026-11-08 · 无窗口 macOS 诊断读取录屏权限
+
+真实 VM 的 --check --strict 虽退出 0，但截图能力 available=true；独立系统探针
+同时为 false。原因是能力查询被 is_cocoa() 门挡住，未创建 QApplication 的 CLI
+从未执行权限预检。新增不创建窗口、不请求授权的 CoreGraphics preflight 公共入口，
+桌面截图与 CLI 读取同一权限来源；offscreen/minimal 虚拟后端仍不探测原生权限。
+系统 API 读取失败保留 supported=true、available=false 并说明不能检查。
+
+公共能力 seam 五项先红（1.09s），修复后平台/窗口/设置/截图相关 73 passed（3.80s）。
+保留 D 快照完整门禁，E 批次另跑真实 CLI 与累计回归；未改 TCC 数据库或授权偏好。
+逐文件、原生差异、成本与最终结果见 [macOS 报告](PR-REPORT-PETCORE-MACOS-2026-11-08.md)。
+
+E 快照实际 strict 通过且正确报告录屏暂不可用；累计 3637 passed/19 skipped
+（234.90s），1989 源码文件复核未变。外层 zsh 驱动变量名错误独立记录，不掩去。
+无 QApplication 的能力查询冷调用 22.448ms，三组各 1000 次均值 8.783/8.064/8.104ms；
+无新增轮询或线程，原生 TCC 调用成本见报告。Windows L187 整仓 11752 passed、
+24 skipped、7 项既有失败；L189 最终累计门继续，未提交或推送 Mac 修改。
+
+## L190 · 2026-11-08 · Cocoa 实际鼠标暴露 GIF 帧类型差异
+
+用户完成权限确认，重启桌面验收工具后录屏/PostEvent 都为 true；SSH 进程仍为 false，
+后续输入从 GUI LaunchAgent 执行。首轮合成窗口缺少动画初始化，原始失败保留；改为
+完整启动的 GIF 角色后发现真实产品问题：GifClip.currentPixmap 返回 QPixmap，
+PetWindow 透明命中调用 pixelColor 导致 AttributeError，Mac 输入轮询反复报错。
+
+新增真实 GIF 解码/Qt 事件循环/桌宠公开命中回归，Windows 先红 1 failed（1.65s）；
+媒体 PetClip.current_image 在 currentPixmap 兼容分支转换为 QImage，WebM/帧序列的
+currentImage 分支不变。修复后 GIF/输入/帧节拍相关 34 passed（1.54s）。
+不修改 pet/ 或用测试替身跳过实际 GIF 解码；新增文件 tests/test_petcore_gif_input.py。
+clip.py +4/-1；其余逐文件清单与原生续测、成本见 [Mac 报告](PR-REPORT-PETCORE-MACOS-2026-11-08.md)。
+正在运行的 E Windows 整仓于约 65% 主动停止，保留中止日志，不记作通过；原生问题
+处理完后再统一跑最终累计门，避免反复测试中间版本。用户取消的 30 分钟观察不恢复。
+
+## L191 · 2026-11-08 · Cocoa 托盘菜单会话
+
+- 原生 full-ui-4 发现菜单栏图标右键触发 aboutToShow 后立即关闭；首版把动态 QMenu
+  交给 NSMenu 跟踪，在 aboutToShow 清空重建动作使跟踪失效，左击还同时切换显隐。
+- `petcore/ui/tray.py` 的 Cocoa 状态图标现在通过 activation 打开同一 QMenu popup；
+  动态重建与桌宠右键走同一菜单会话，左键/右键均打开操作菜单，其他平台保持原语义。
+- `tests/test_petcore_tray.py` 新增真实 QMenu/Qt 事件循环首次选择回归：先红 1 failed
+  （1.02s），修复后托盘/平台窗口/菜单 71 passed（2.90s），ruff 通过。
+- Mac 原生输入 29 步已通过；完整设置首次点击、系统拼音中文提交、聊天键盘也通过。
+  托盘修复的原生复验、累计门禁与性能另补；30 分钟观察仍取消。
+- 同批补齐 popup 的菜单会话登记：会话断言先红 1 failed（1.02s），随后
+  81 passed / 1 skipped（3.22s）；G 原生 full-ui-6 已验证托盘设置、隐藏恢复与菜单退出 0，
+  会话登记的最终快照继续复验。没有新增持久设置。
+
+## L192 · 2026-11-08 · Mac 验收续测与平台提示
+
+- H 原生验证灵动岛被动显示/隐藏/恢复不改变外部前台；普通 NSWindow、无键盘焦点、
+  无系统阴影，在全屏 Space 保持可见；实际截图复制与 Esc 取消、退出正常。
+- Windows 最终整仓 11760 passed / 24 skipped / 7 failed（1561.88s），逐项比较与基线
+  相同；Mac 两条累计命令合计 3639 passed / 19 skipped，三次 4 核压力各 127 passed / 1 skipped。
+- 补测发现托盘穿透提示还沿用 Windows 专属文案，先红 1 failed（2.91s），统一为
+  “已开启鼠标穿透，可从托盘菜单关闭”后托盘 9 passed（5.67s）。只改提示字符串，
+  不改变输入或设置行为；此处不重复整仓，后续相关门与原生结果见报告。
+- 正式性能首轮留下 18 个有效 60 秒样本，四宠拖动未收到按下事件后中止；保留失败，
+  不计为完整 24 组。托盘连续恢复补测及 Windows 原生退出超时仍在定位，未当作通过。
+- 后续独立进程完成四宠拖动/隐藏各三组 ≥60 秒，退出 0，合计 18+6 个有效样本；
+  两个进程的 RSS 起点分开记录。隐藏无输入刷新/状态提交、无解码子进程，CPU 仍约
+  单核 3.55–4.57%；不宣称长期内存稳定。详表与未通过门禁见报告第十七、十八节。
+
+## L193 · 2026-11-08 · Mac 人工恢复与登录自启证据
+
+- 用户人工托盘开启/关闭穿透后确认恢复；无输入注入的观察器记录状态往返及真实
+  spontaneous press/release，completed=true、退出 0。保留此前自动化异常，不声称已修复。
+- 用户重新登录后，正式测试 LaunchAgent 自动启动 I 源码，PPID 1，含中文/空格的
+  argv/cwd 与生成值一致；窗口及状态图标 on-screen，独立截图确认真实显示。
+- 通过 CLI 关闭测试自启，再卸载测试项/截图工具，剩余 owned pids/jobs 为空；
+  caffeinate 已结束。1990 个 I 清单文件 changed=[]；17 文件补充证据已归档。
+- 本批只更新文档证据，不改变运行行为，不重复整仓/性能；逐文件增删、原始命令及
+  仍未通过/未覆盖项见 [Mac 报告](PR-REPORT-PETCORE-MACOS-2026-11-08.md) 第二十节。
+  arm64 包仍缺原生构建机，Windows 压力退出门未过，未提交/推送 Mac 修改。
+- 最终文档/架构/报告/CI 守卫 459 passed（9.05s），ruff 与 diff --check 通过；
+  补充归档已下载并核对 SHA256，用户原有架构图修改未动。
+
+## L194 · 2026-11-08 · macOS 里程碑提交范围
+
+用户在获知现有结果与限制后授权推送 Mac 修改。范围为 Mac 报告逐文件清单的
+24 个文件；保留架构图未提交修改和本机证据，不发布 Release。仅整理交付文档，
+运行代码与 I 验收快照一致，复用已有整仓及 Mac 三轮压力记录，并复核 ruff、托盘与
+文档守卫。Windows 既有失败、原生退出压力超时及 arm64 包缺失不改写为通过。
+逐文件增删与验证详情见 [Mac 报告](PR-REPORT-PETCORE-MACOS-2026-11-08.md) 第二十一节。
+本次复核 468 passed（8.69s）、ruff 与 diff --check 通过；909 个代码/测试清单文件
+与 I 摘要一致，未重复已记录的长测。

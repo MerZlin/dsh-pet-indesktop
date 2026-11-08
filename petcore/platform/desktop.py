@@ -65,10 +65,15 @@ def capabilities(*, platform=None, qpa=None, environ=None) -> dict[str, DesktopC
     result["autostart"] = DesktopCapability(desktop, desktop, "" if desktop else "当前平台没有自启后端。")
     result["desktop_input"] = ready
     result["screen_capture"] = DesktopCapability(desktop, desktop)
-    if platform == "darwin" and sys.platform == "darwin":
+    if platform == "darwin" and sys.platform == "darwin" and qpa not in ("offscreen", "minimal"):
         from . import macos
-        if macos.is_cocoa() and not macos.capture_allowed():
-            result["screen_capture"] = DesktopCapability(True, False, "需要在系统设置的屏幕录制权限中允许此应用；点击截图入口可请求授权。")
+        try:
+            granted = macos.screen_capture_preflight()
+        except (OSError, AttributeError):
+            result["screen_capture"] = DesktopCapability(True, False, "无法检查系统录屏权限，请在桌面会话中重新运行诊断。")
+        else:
+            if not granted:
+                result["screen_capture"] = DesktopCapability(True, False, "需要在系统设置的屏幕录制权限中允许此应用；点击截图入口可请求授权。")
     if platform == "linux":
         if qpa.startswith("wayland"):
             result["desktop_input"] = DesktopCapability(False, False, "原生 Wayland 暂不支持桌宠定位；请安装 XWayland 并使用 QT_QPA_PLATFORM=xcb。")

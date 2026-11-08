@@ -37,6 +37,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
 
 from ...contracts.screen import ACTION_ASK, ACTION_COPY, ACTION_OCR, ACTION_TRANSLATE
+from ...platform import window_policy
 from .selection import (
     MIN_SELECTION_SIDE,
     SelectionRect,
@@ -179,6 +180,7 @@ class SelectionOverlay(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
+        window_policy.install(self, passive=False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.CrossCursor)
@@ -235,6 +237,9 @@ class SelectionOverlay(QWidget):
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         super().showEvent(event)
+        # Apply before activation: Cocoa otherwise may switch to the accessory
+        # app's previous Space. Keep this interactive surface keyboard-capable.
+        window_policy.apply(self, passive=False)
         # 键鼠都要吃：无激活窗口的覆盖层收不到 Esc/Enter。
         self.raise_()
         self.activateWindow()

@@ -390,9 +390,11 @@ def _assert_text_fits(bubble) -> None:
     assert bubble.label.heightForWidth(bubble.label.width()) <= bubble.label.height()
 
 
-def test_short_text_stays_single_line_across_consecutive_shows(app) -> None:
+@pytest.mark.parametrize("scale", [0.5, 1.0, 1.5, 3.0])
+def test_short_text_stays_single_line_across_consecutive_shows(app, scale) -> None:
     bubble = SpeechBubble()
     try:
+        bubble.set_text_scale(scale)
         for text in ("今天天气", "今天天气", "好的没问题", "一二三四五六七八九十"):
             bubble.show_text(text, QRect(600, 600, 80, 80))
             app.processEvents()

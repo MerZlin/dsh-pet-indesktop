@@ -1,8 +1,9 @@
 # petcore Linux / macOS 桌面适配
 
 基线：`feat/petcore-vpet-architecture`，2026-11-07。这是**源码与候选构建入口**说明，
-不是 Linux/macOS 桌面认证。用户将在 VMware 安装环境后继续验收；当前没有这两端的
-候选包、安装成功记录或原生性能结果。已执行证据见
+不是完整 Linux/macOS 桌面认证。2026-11-08 已完成 Ubuntu GNOME 候选安装与原生
+短样本验收；Intel macOS 源码的真实交互、人工穿透恢复、登录自启及 24 组短样本已验，
+arm64 包与未覆盖项见 [专项报告](PR-REPORT-PETCORE-MACOS-2026-11-08.md)。已执行证据见
 [交付报告](PR-REPORT-PETCORE-POSIX-2026-11-07.md)，总体架构见
 [PETCORE-ARCHITECTURE](PETCORE-ARCHITECTURE.md)，旧版打包说明见
 [ONEDIR_PACKAGING](ONEDIR_PACKAGING.md)。
@@ -131,7 +132,7 @@ LSUIElement/最低 14.4/高分屏，ad-hoc 签名并 `codesign --verify --deep -
 | 菜单与输入法 | 托盘/右键首次点击打开设置；中文和候选框正常；取消设置保留原值。 |
 | macOS | 被动显示不抢焦点，主动窗口可输入；Spaces/全屏；拒绝录屏权限不先隐藏桌宠、不黑屏。 |
 | 安装自启 | 中文/空格路径、重复启停、实际注销登录、替换包保留数据、只有用户级入口。 |
-| 性能 | 1/4 宠 × 待机/动画/拖动/隐藏，各 3×60 秒；CPU/RSS/线程/区域更新与耗时；另观察 30 分钟内存。 |
+| 性能 | 1/4 宠 × 待机/动画/拖动/隐藏，各 3×60 秒；CPU/RSS/线程/区域更新与耗时；本轮 30 分钟内存观察按用户要求取消。 |
 
 ```bash
 QT_QPA_PLATFORM=xcb xvfb-run -a .venv/bin/python -m pytest -q tests/test_petcore_native_desktop.py

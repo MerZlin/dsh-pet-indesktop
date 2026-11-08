@@ -692,7 +692,10 @@ class SpeechBubble(QWidget):
             self.subtitle_label.setFixedWidth(width)
             self.subtitle_label.setFixedHeight(max(1, subtitle_height))
 
-        height = max(1, len(lines)) * metrics.lineSpacing() + 2
+        # Fallback CJK glyphs can be taller than the primary font's line spacing.
+        # QLabel measures the same shaped text that it will actually paint.
+        height = max(max(1, len(lines)) * metrics.lineSpacing() + 2,
+                     self.label.heightForWidth(width))
         self.label.setFixedSize(width, height)
 
         if len(self._pages) > 1:

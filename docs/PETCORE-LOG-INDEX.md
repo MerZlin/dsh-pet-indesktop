@@ -220,3 +220,12 @@
 | L183 | 2026-11-08 | Linux 安装候选与登录自启验收 | 第六轮包实际文件选择/中文/菜单退出通过，中文路径升级保留数据，真实重登自启及 1290 文件只读复核通过。 | candidate、install、autostart、ibus、file-dialog、readonly |
 | L184 | 2026-11-08 | Linux 候选与 24 组性能交付 | 单/四宠四场景各三组完成；用户取消 30 分钟观察，保留中止记录；Windows 整仓 7 项既有失败明确列出。 | performance、cpu、rss、input-region、candidate、cancelled-memory |
 | L185 | 2026-11-08 | Linux 里程碑推送范围 | 用户授权提交 Linux 及必需的 POSIX 共用代码，保留架构图与本机产物；macOS 原生验收继续，整仓既有失败不隐去。 | git、linux、shared-platform、macos-pending、handoff |
+| L186 | 2026-11-08 | macOS 截图层 Spaces 策略 | 截图层先应用跨 Space 策略再激活，保留键盘能力并重放句柄策略；先红后绿，Mac 原生结构门通过。 | macos、cocoa、spaces、capture、focus、native |
+| L187 | 2026-11-08 | Mac 字体与时区回归 | 首轮累计九项失败逐一定位；保留 Cocoa 被动策略断言，修气泡排版高度、窄窗筛选行和缓存 offset 比较。 | macos、font-metrics、timezone、extensions、regression |
+| L188 | 2026-11-08 | Cocoa 窄窗视觉复核 | 原生截图发现仍有 21px 横向溢出；加零滚动及控件完整边界回归，再调整功能扩展行。 | cocoa、screenshot、compact、settings、geometry |
+| L189 | 2026-11-08 | 无窗口 Mac 录屏权限诊断 | CLI 不创建 QApplication 也执行只读 CoreGraphics 预检，拒绝或探测失败均明确不可用；五项先红后绿。 | macos、tcc、diagnostics、headless、preflight |
+| L190 | 2026-11-08 | 原生 GIF 透明命中 | 授权后的真实鼠标验证暴露 QPixmap/QImage 帧差异，实际 GIF 回归先红后绿；媒体层统一输入帧，原生续测中。 | macos、gif、qpixmap、qimage、alpha、native-input |
+| L191 | 2026-11-08 | Cocoa 托盘菜单会话 | 原生菜单动态重建导致立即关闭，状态图标改用共用 QMenu popup；首次选择回归先红后绿。 | cocoa、tray、menu、activation、native |
+| L192 | 2026-11-08 | Mac 验收续测与平台提示 | 灵动岛、全屏与截图通过，18+6 个有效短样本；补正穿透文案，保留托盘与退出未通过项。 | native、island、fullscreen、performance、stress、wording |
+| L193 | 2026-11-08 | Mac 人工恢复与登录自启 | 真人穿透恢复及重新登录自启通过，截图与事件记录互证，清理测试项并复核源码只读。 | manual、tray、autostart、relogin、cleanup、evidence |
+| L194 | 2026-11-08 | macOS 里程碑推送范围 | 用户授权推送 Mac 代码、回归与证据文档，保留架构图及未过门禁，不发布正式包。 | git、macos、scope、verification、limitations |

@@ -15,11 +15,11 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 #: 抓取时间缺失/损坏时的兜底比较值。
-_EPOCH = datetime.min
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -135,11 +135,11 @@ def _stamp(value: Any) -> datetime:
         return _EPOCH
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
+        # Old stamps without an offset used local time. Aware stamps must retain
+        # their instant when bundles/caches move between machines or timezones.
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError, OSError):
         return _EPOCH
-    # 统一成 naive，避免 aware/naive 比较抛 TypeError；跨时区只影响「谁更新」
-    # 的边界，不会丢数据。
-    return parsed.replace(tzinfo=None)
 
 
 def newer(left: str, right: str) -> bool:
@@ -155,7 +155,7 @@ def age_seconds(fetched_at: str, *, now: float | None = None) -> float | None:
     stamp = _stamp(fetched_at)
     if stamp == _EPOCH:
         return None
-    current = datetime.fromtimestamp(float(now if now is not None else time.time()))
+    current = datetime.fromtimestamp(float(now if now is not None else time.time()), timezone.utc)
     return max(0.0, (current - stamp).total_seconds())
 
 

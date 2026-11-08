@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -69,11 +70,12 @@ def test_stream_mode_uses_a_regular_top_level_window(app, tmp_path: Path) -> Non
         window.shutdown()
 
 
-def test_tool_mode_is_the_default(app, tmp_path: Path) -> None:
+def test_passive_window_type_is_the_default(app, tmp_path: Path) -> None:
     window = _window(tmp_path, False)
     try:
-        assert window.windowFlags() & MASK == Qt.WindowType.Tool
-        assert window.bubble.windowFlags() & MASK == Qt.WindowType.Tool
+        expected = Qt.WindowType.Window if sys.platform == "darwin" else Qt.WindowType.Tool
+        assert window.windowFlags() & MASK == expected
+        assert window.bubble.windowFlags() & MASK == expected
         assert window.windowTitle() == ""
     finally:
         window.shutdown()
@@ -90,8 +92,9 @@ def test_set_stream_capture_mode_round_trips_window_and_bubble(app, tmp_path: Pa
         assert window.bubble.windowFlags() & MASK == Qt.WindowType.Window
 
         window.set_stream_capture_mode(False, persist=False)
-        assert window.windowFlags() & MASK == Qt.WindowType.Tool
-        assert window.bubble.windowFlags() & MASK == Qt.WindowType.Tool
+        expected = Qt.WindowType.Window if sys.platform == "darwin" else Qt.WindowType.Tool
+        assert window.windowFlags() & MASK == expected
+        assert window.bubble.windowFlags() & MASK == expected
         assert Config.load(tmp_path).get("stream_capture_mode") is True
     finally:
         window.shutdown()

@@ -157,6 +157,7 @@ def test_tray_menu_toggles_click_through_for_every_pet(app) -> None:
     action.trigger()
     assert all(window.click_through for window in windows.values())
     assert any("鼠标穿透" in text for text in windows[0].said)
+    assert all("仅左键" not in text and "右键长按" not in text for text in windows[0].said)
 
     menu.aboutToShow.emit()
     checked = next(item for item in menu.actions() if item.text() == "鼠标穿透")
@@ -202,3 +203,47 @@ def test_repeated_tray_refresh_releases_owned_submenus(app):
         assert not _windows[1].isVisible()
     finally:
         shiboken6.delete(menu)
+
+
+def test_cocoa_status_activation_opens_shared_menu_without_toggling(app, monkeypatch):
+    """The Cocoa status item must not clear a tracking NSMenu or hide pets."""
+    from PySide6.QtCore import QEventLoop, QTimer, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QMenu
+
+    from petcore.platform import macos
+    from petcore.ui.menu import menu_open
+    from petcore.ui.menu_dispatch import connect_action
+    from petcore.ui.tray import TrayIcon
+
+    monkeypatch.setattr(macos, "is_cocoa", lambda: True)
+    menu = QMenu()
+    calls = []
+    action = menu.addAction("Settings")
+    connect_action(action, lambda: calls.append(("settings", menu.isVisible())))
+    tray = TrayIcon(lambda _parent: menu, Path("missing.ico"), lambda: calls.append("toggle"))
+    try:
+        assert tray.contextMenu() is None
+        for reason in (tray.ActivationReason.Trigger, tray.ActivationReason.Context):
+            tray.activated.emit(reason)
+            assert menu.isVisible()
+            assert menu_open()
+            assert calls == []
+            menu.close()
+            assert not menu_open()
+        tray.activated.emit(tray.ActivationReason.Trigger)
+        loop = QEventLoop()
+        watchdog = QTimer()
+        watchdog.setSingleShot(True)
+        watchdog.timeout.connect(loop.quit)
+        poll = QTimer()
+        poll.timeout.connect(lambda: loop.quit() if calls else None)
+        poll.start(10)
+        watchdog.start(5000)
+        QTimer.singleShot(0, lambda: QTest.mouseClick(menu, Qt.MouseButton.LeftButton,
+                                                    pos=menu.actionGeometry(action).center()))
+        loop.exec()
+        assert calls == [("settings", False)]
+    finally:
+        menu.close()
+        tray.hide()

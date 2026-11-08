@@ -148,6 +148,8 @@
 
 ## PR 报告存档
 
+- [petcore macOS 适配与原生验收记录（2026-11-08）](PR-REPORT-PETCORE-MACOS-2026-11-08.md)：Linux 推送后的截图/字体/时区/权限/GIF/托盘修复，Intel Cocoa、人工穿透恢复、登录自启、24 组性能及未过门禁；继续 macOS 验收或构建 arm64 包前必读。
+
 - [petcore Linux/macOS 源码适配与候选构建（2026-11-07）](PR-REPORT-PETCORE-POSIX-2026-11-07.md)：平台启动/输入/窗口/菜单/恢复/自启、构建门、历史缺陷映射、本机证据与 VM 待验清单。**改 POSIX 平台分支或开始原生候选验收前必读**；操作入口见 [PETCORE-POSIX](PETCORE-POSIX.md)。
 
 - [QQ 桥接修复 + 两份外部产物审查（2026-11-05）](PR-REPORT-QQ-BRIDGE-AND-UPSTREAM-AUDIT-2026-11-05.md)：QQ 设置页真正的 token 断点是读 `host.credentials` 而非 `api_credentials`（运行时能生成、设置页看不见），改为 `api_credentials` + `persisted()` 回读；webhook 接受裸 `Authorization`/`?access_token=`/尾斜杠，`?token=` 的「query 算进路径」说法被真实 loopback 回归否定；采纳补丁包 4 个缺陷修复，拒绝其护栏、明文 `secret_store.py`、8792 代理与加固版整体重构。**改 QQ 互通、webhook 鉴权、钥匙串凭据或搬迁旧根前必读**。

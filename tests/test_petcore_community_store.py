@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -175,3 +176,23 @@ def test_age_seconds_handles_missing_and_old_stamps() -> None:
     assert model.age_seconds("not-a-date") is None
     age = model.age_seconds("2026-10-27T12:00:00+08:00", now=1793102400.0)
     assert age is not None and age > 0
+
+
+@pytest.mark.parametrize("stamp", [
+    "2026-10-27T04:00:00Z",
+    "2026-10-27T12:00:00+08:00",
+    "2026-10-26T21:00:00-07:00",
+])
+def test_age_seconds_compares_instants_across_timezones(stamp) -> None:
+    now = datetime(2026, 10, 27, 5, tzinfo=timezone.utc).timestamp()
+    assert model.age_seconds(stamp, now=now) == 3600
+
+
+def test_newer_uses_offsets_when_merging_snapshots() -> None:
+    assert model.newer("2026-10-27T04:00:00Z", "2026-10-27T12:00:00+08:00")
+    assert not model.newer("2026-10-27T12:00:00+08:00", "2026-10-27T05:00:00Z")
+
+
+def test_naive_stamp_preserves_legacy_local_time_semantics() -> None:
+    local = datetime(2026, 10, 27, 12)
+    assert model.age_seconds(local.isoformat(), now=local.timestamp() + 3600) == 3600

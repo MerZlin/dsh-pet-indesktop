@@ -86,6 +86,40 @@ def test_capabilities_distinguish_os_support_and_missing_session():
     assert capabilities(platform="win32")["global_hotkeys"].supported
 
 
+@pytest.mark.parametrize("qpa", ["", "cocoa"])
+@pytest.mark.parametrize("granted", [False, True])
+def test_mac_diagnostics_preflight_capture_without_a_cocoa_app(monkeypatch, qpa, granted):
+    from petcore.platform import desktop, macos
+
+    calls = []
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    monkeypatch.setattr(macos, "is_cocoa", lambda: False)
+    def preflight():
+        calls.append("preflight")
+        return granted
+    monkeypatch.setattr(macos, "_capture_api", lambda: (
+        preflight, lambda: pytest.fail("diagnostics must not request permission"),
+    ))
+    capability = desktop.capabilities(qpa=qpa, environ={})["screen_capture"]
+    assert calls == ["preflight"]
+    assert capability.supported
+    assert capability.available is granted
+    assert bool(capability.reason) is not granted
+
+
+def test_mac_diagnostics_reports_permission_probe_failure(monkeypatch):
+    from petcore.platform import desktop, macos
+
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    monkeypatch.setattr(macos, "is_cocoa", lambda: False)
+    def unavailable():
+        raise OSError("framework unavailable")
+    monkeypatch.setattr(macos, "_capture_api", unavailable)
+    capability = desktop.capabilities(qpa="cocoa", environ={})["screen_capture"]
+    assert capability.supported and not capability.available
+    assert "检查" in capability.reason
+
+
 @pytest.mark.parametrize("platform", ["linux", "darwin"])
 def test_autostart_roundtrip_uses_argv_root_instance_and_cwd(tmp_path, monkeypatch, platform):
     monkeypatch.setattr(autostart.sys, "platform", platform)

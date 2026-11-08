@@ -132,19 +132,24 @@ def test_cocoa_pet_is_normal_window_and_replays_policy(app, tmp_path):
     if sys.platform != "darwin" or app.platformName() != "cocoa":
         pytest.skip("requires native Cocoa, not offscreen")
     from petcore.config import Config
-    from petcore.platform import macos, window_policy
+    from petcore.platform import macos
     from petcore.ui.pet_window import PetWindow
     pet = PetWindow(Config(tmp_path), tmp_path, SimpleNamespace(characters=lambda: [], build_menu=lambda *_: None))
     try:
-        pet.show()
-        QApplication.sync()
-        window_policy.apply(pet)
-        window = macos._window(int(pet.winId()))
         panel_class = macos._objc().objc_getClass(b"NSPanel")
-        assert not macos._send(window, "isKindOfClass:", C.c_bool, (C.c_void_p,), (panel_class,))
-        assert not macos._send(window, "hasShadow", C.c_bool)
-        assert not macos._send(window, "canBecomeKeyWindow", C.c_bool)
-        assert macos._send(window, "collectionBehavior", C.c_ulong) & 1
+        for rebuild in (False, True):
+            if rebuild:
+                pet.hide()
+                pet.destroy()
+            pet.show()
+            QApplication.sync()
+            window = macos._window(int(pet.winId()))
+            # Exercise the installed event filter, not a direct apply() call.
+            wait_until(lambda: macos._send(window, "collectionBehavior", C.c_ulong) & 1)
+            assert not macos._send(window, "isKindOfClass:", C.c_bool, (C.c_void_p,), (panel_class,))
+            assert not macos._send(window, "hasShadow", C.c_bool)
+            assert not macos._send(window, "canBecomeKeyWindow", C.c_bool)
+            assert not macos._send(window, "hidesOnDeactivate", C.c_bool)
         assert macos.set_ignores_mouse(int(pet.winId()), True)
         assert macos._send(window, "ignoresMouseEvents", C.c_bool)
         assert macos.set_ignores_mouse(int(pet.winId()), False)
@@ -152,3 +157,39 @@ def test_cocoa_pet_is_normal_window_and_replays_policy(app, tmp_path):
     finally:
         pet.shutdown()
         pet.close()
+
+
+def test_cocoa_capture_overlay_joins_spaces_before_becoming_interactive(app):
+    if sys.platform != "darwin" or app.platformName() != "cocoa":
+        pytest.skip("requires native Cocoa, not offscreen")
+    from PySide6.QtTest import QTest
+    from petcore.platform import macos
+    from petcore.ui.screen.overlay import SelectionOverlay
+
+    policies_at_activation = []
+
+    class ObservedOverlay(SelectionOverlay):
+        def activateWindow(self):  # noqa: N802 - observe the real Qt activation path
+            window = macos._window(int(self.winId()))
+            policies_at_activation.append((
+                macos._send(window, "collectionBehavior", C.c_ulong),
+                macos._send(window, "hidesOnDeactivate", C.c_bool),
+                macos._send(window, "canBecomeKeyWindow", C.c_bool),
+            ))
+            super().activateWindow()
+
+    overlay = ObservedOverlay()
+    cancelled = []
+    overlay.cancelled.connect(cancelled.append)
+    try:
+        overlay.show()
+        QApplication.sync()
+        assert policies_at_activation
+        flags, hides, key_capable = policies_at_activation[-1]
+        assert flags & 1 and flags & (1 << 8) and not flags & 2
+        assert not hides and key_capable
+        QTest.keyClick(overlay, Qt.Key.Key_Escape)
+        wait_until(lambda: bool(cancelled))
+        assert cancelled == ["esc"]
+    finally:
+        overlay.close()

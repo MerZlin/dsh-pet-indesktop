@@ -1686,10 +1686,9 @@ class CoreHost:
         say = getattr(target, "say", None)
         if callable(say):
             message = (
-                "已开启鼠标穿透（仅左键）：左键点下层/长按拖动，右键单击互动、右键长按菜单。"
-                "可从托盘菜单关闭"
+                "已开启鼠标穿透，可从托盘菜单关闭"
                 if value
-                else "已关闭鼠标穿透（恢复左键点击）"
+                else "已关闭鼠标穿透，恢复桌宠鼠标交互"
             )
             try:
                 say(message, 5000)

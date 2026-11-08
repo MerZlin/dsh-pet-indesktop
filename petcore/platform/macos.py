@@ -97,12 +97,16 @@ def _capture_api():
     return preflight, ask
 
 
+def screen_capture_preflight() -> bool:
+    """Read TCC without creating a GUI or requesting access (also used by --check)."""
+    return bool(_capture_api()[0]())
+
+
 def capture_allowed(*, request: bool = False) -> bool:
     if not is_cocoa():
         return True
-    preflight, ask = _capture_api()
-    if preflight():
+    if screen_capture_preflight():
         return True
     if request:
-        ask()
-    return bool(preflight())
+        _capture_api()[1]()
+    return screen_capture_preflight()

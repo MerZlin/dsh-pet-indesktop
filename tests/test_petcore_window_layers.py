@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 from petcore.config import Config
 from petcore.contracts.content import CharacterSpec
+from petcore.platform import window_policy
 from petcore.ui.bubble import SpeechBubble
 from petcore.ui.menu import (
     active_menu,
@@ -104,28 +105,30 @@ def plain_window(app, tmp_path: Path):
 
 @pytest.fixture
 def raises(monkeypatch):
-    """记录 ``SpeechBubble.raise_()`` 的真实调用（仍然是 Qt 原实现）。"""
+    """Observe passive ordering while executing the actual platform dispatch."""
     calls: list[SpeechBubble] = []
-    original = SpeechBubble.raise_
+    original = window_policy.raise_passive
 
     def spy(self):
-        calls.append(self)
+        if isinstance(self, SpeechBubble):
+            calls.append(self)
         return original(self)
 
-    monkeypatch.setattr(SpeechBubble, "raise_", spy)
+    monkeypatch.setattr(window_policy, "raise_passive", spy)
     return calls
 
 
 @pytest.fixture
 def pet_raises(monkeypatch):
     calls: list[PetWindow] = []
-    original = PetWindow.raise_
+    original = window_policy.raise_passive
 
     def spy(self):
-        calls.append(self)
+        if isinstance(self, PetWindow):
+            calls.append(self)
         return original(self)
 
-    monkeypatch.setattr(PetWindow, "raise_", spy)
+    monkeypatch.setattr(window_policy, "raise_passive", spy)
     return calls
 
 

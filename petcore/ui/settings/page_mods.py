@@ -50,6 +50,7 @@ class ModsPage(SettingsPage):
             "允许功能扩展",
             self.feature_check,
             "仅从用户数据目录加载 feature 包；保存后点「重新加载扩展」生效。",
+            expand=True,
         )
 
         card = self.section("已安装的扩展")
@@ -64,6 +65,7 @@ class ModsPage(SettingsPage):
             self.filter_combo,
             "「基础扩展」随程序内置（其中已并入 Core 的会标注出来）；"
             "「加装扩展」来自安装向导勾选投放或手动导入。",
+            expand=True,
         )
         self.mods_list = QListWidget(self)
         self.mods_list.setObjectName("modsList")

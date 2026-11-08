@@ -127,7 +127,10 @@ class PetClip:
             return getter()
         getter = getattr(self._impl, "currentPixmap", None)
         if callable(getter):
-            return getter()
+            image = getter()
+            # QMovie/GifClip exposes QPixmap; hit testing requires pixel alpha
+            # from QImage, just like the WebM and frame-sequence backends.
+            return image.toImage() if hasattr(image, "toImage") else image
         return None
 
     def warm_first_frame(self) -> None:
