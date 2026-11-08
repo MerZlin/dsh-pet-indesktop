@@ -28,6 +28,7 @@ from .music.lyric_controller import (
     LEAD_MIN_SECONDS,
     LYRIC_LEAD_SECONDS,
 )
+from .music.now_playing import media_session_supported
 from .music.title import FOOBAR_FORMAT_MAX_CHARS
 from .config import (
     DEFAULT_CONTEXT_MENU_APPEARANCE,
@@ -430,11 +431,12 @@ def build_pet_controls(host) -> None:
     host.music_sing_check.setChecked(bool(host.config.get("music_sing_enabled", False)))
     host.music_lyric_check = ToggleSwitch(host)
     host.music_lyric_check.setChecked(bool(host.config.get("music_lyric_enabled", False)))
-    # 浏览器媒体会话开关只在 Windows 创建：SMTC 是 Windows 专属能力，非 Windows
-    # 建了也没效果（违反 settings 门禁「永久不支持的能力不创建控件」）。与
-    # cursor_hidden_passthrough_check 同一处置——控件与设置行一起条件创建。
+    # 浏览器媒体会话开关只在有系统媒体会话的平台创建（Windows SMTC / macOS
+    # MediaRemote）：Linux 建了也没效果（违反 settings 门禁「永久不支持的能力不创建
+    # 控件」）。与 cursor_hidden_passthrough_check 同一处置——控件与设置行一起条件
+    # 创建，判据是同一个 now_playing.media_session_supported。
     host.music_browser_media_check = None
-    if sys.platform == "win32":
+    if media_session_supported():
         host.music_browser_media_check = ToggleSwitch(host)
         host.music_browser_media_check.setChecked(
             bool(host.config.get("music_browser_media_enabled", False))

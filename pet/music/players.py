@@ -14,6 +14,14 @@
 搜索结果进程内缓存：目录扫描有几十毫秒开销，而右键菜单每次打开都要问一遍。
 因此缓存查询拆成两条路径：**GUI 线程（右键菜单）只读缓存**（``cached_player``，
 绝不碰文件系统），真正的扫描留给后台线程与点击路径（``find_player``）。
+
+**macOS**（2026-11）：四个播放器都有 mac 版，装出来是一个 ``.app`` 应用包（目录）。
+定位走 :data:`_MAC_APPS` 登记的安装布局：先看「应用程序」文件夹（``/Applications``、
+``~/Applications``）里的已知包名，找不到再把这两个文件夹**浅扫一层**、按各应用包
+自己声明的 ``CFBundleIdentifier`` 认（包名被改过 / App Store 版用了别的名字时靠它）。
+与 Windows 侧同一条纪律：纯本地、有界（条目数上界），不起进程（不调 Spotlight）、
+不联网。手填路径在 mac 上可以是 ``.app``。「会话身份」（:func:`session_key`）同样以
+应用包 Info.plist 里写的为准，不写死。
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import plistlib
 import sys
 import threading
 from pathlib import Path
@@ -74,6 +83,27 @@ _LAUNCHER_CONFIG_MAX_BYTES = 64 * 1024
 _CUR_PATH_MAX_CHARS = 256
 _VERSION_NAME_MAX_CHARS = 32
 
+# macOS 安装布局：key -> (「应用程序」里的候选包名, 已知 bundle id)。
+#
+# 包名覆盖官网安装包与 App Store 两种常见命名（英文包名 / 中文包名）。bundle id 用于
+# 包名对不上时的浅扫匹配（:func:`_search_mac_app` 第二步），**不用来判会话身份**——
+# 身份以找到的包里 Info.plist 自己写的为准（:func:`session_key`）。来源（2026-11 检索，
+# 未在真机复核）：网易云 ``com.netease.163music`` 与酷狗 ``com.kugou.mac.Music`` 有多个
+# 公开安装记录；汽水 ``com.soda.music`` 只有一处（MacUpdater）；QQ音乐
+# ``com.tencent.QQMusicMac`` 未检索到公开记录——写错也只是少一条浅扫线索，包名命中照样找得到。
+_MAC_APPS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "netease": (("NeteaseMusic.app", "网易云音乐.app"), ("com.netease.163music",)),
+    "qqmusic": (("QQMusic.app", "QQ音乐.app"), ("com.tencent.QQMusicMac",)),
+    "kugou": (("KugouMusic.app", "酷狗音乐.app", "KuGou.app"), ("com.kugou.mac.Music",)),
+    "soda": (("汽水音乐.app", "Soda Music.app", "SodaMusic.app"), ("com.soda.music",)),
+}
+# macOS「应用程序」根目录（系统级 + 用户级）。
+_MAC_APP_ROOTS = ("/Applications", "~/Applications")
+# 按 bundle id 浅扫时每个根目录最多看多少个条目（正常一两百个应用；超出的不再看）。
+_MAC_SCAN_MAX_ENTRIES = 512
+# Info.plist 的读取上界（正常几 KB）。
+_INFO_PLIST_MAX_BYTES = 1024 * 1024
+
 # 进程内缓存：player_key -> 路径或 None（None 也要缓存，否则每次都白扫一遍）。
 _cache: dict[str, str | None] = {}
 
@@ -116,7 +146,7 @@ def find_player(player_key: str, manual_path: str = "") -> str | None:
     manual = str(manual_path or "").strip()
     if manual:
         expanded = Path(manual).expanduser()
-        if expanded.is_file():
+        if _is_launchable(expanded):
             return str(expanded)
         # 手填了但文件不存在：不静默忽略，也别退回自动搜——
         # 否则用户会以为"我填的路径生效了"，实际用的是搜到的另一个。
@@ -139,7 +169,8 @@ def cached_player(player_key: str, manual_path: str = "") -> tuple[str, str | No
     - :data:`CACHED_COLD`：缓存冷（从未扫过），``path`` 为 ``None``。调用方应按
       "乐观可用"处理，并触发一次 :func:`warm_cache_async` 把扫描挪去后台。
 
-    手填路径是一次 ``is_file()``（单次 stat，不是目录扫描）：非空时以它为准，
+    手填路径是一两次 stat（``is_file()``；mac 上 ``.app`` 是目录，再多看一眼
+    ``Contents/``），不是目录扫描：非空时以它为准，
     命中 found、失效 not-found，与 :func:`find_player` 同语义（不静默回退自动
     搜索），也不写缓存。
 
@@ -150,7 +181,7 @@ def cached_player(player_key: str, manual_path: str = "") -> tuple[str, str | No
     manual = str(manual_path or "").strip()
     if manual:
         expanded = Path(manual).expanduser()
-        if expanded.is_file():
+        if _is_launchable(expanded):
             return CACHED_FOUND, str(expanded)
         return CACHED_MISSING, None
     if player_key in _cache:
@@ -199,6 +230,8 @@ def _search(player_key: str) -> str | None:
 
 
 def _search_filesystem(player_key: str) -> str | None:
+    if sys.platform == "darwin":
+        return _search_mac_app(player_key)
     if sys.platform != "win32":
         return None
     _, exe_name, dir_names = PLAYERS[player_key]
@@ -383,6 +416,110 @@ def _shallow_scan(root: Path, exe_name: str) -> str | None:
     except Exception:
         log.debug("搜索播放器路径失败：%s", root, exc_info=True)
     return None
+
+
+def _is_app_bundle(path: Path) -> bool:
+    """是不是一个 macOS 应用包：``*.app`` 目录且带 ``Contents/``（只 stat，不读内容）。"""
+    try:
+        return path.suffix.lower() == ".app" and (path / "Contents").is_dir()
+    except OSError:
+        return False
+
+
+def _is_launchable(path: Path) -> bool:
+    """手填 / 搜到的路径能不能交给启动：普通文件；macOS 上还可以是 ``.app`` 应用包。"""
+    try:
+        if path.is_file():
+            return True
+    except OSError:
+        return False
+    return sys.platform == "darwin" and _is_app_bundle(path)
+
+
+def _search_mac_app(player_key: str) -> str | None:
+    """macOS：「应用程序」里的已知包名 → 同两个文件夹浅扫一层、按 bundle id 认。
+
+    第二步只看根目录下**直接**的 ``*.app``（不进子目录、条目数有上界
+    :data:`_MAC_SCAN_MAX_ENTRIES`），每个包读一次 Info.plist。挑选是确定性的：命中多个
+    时按（根目录次序, 包名）取第一个，不赌 ``iterdir`` 的枚举顺序。
+    """
+    names, bundle_ids = _MAC_APPS.get(player_key, ((), ()))
+    roots = [Path(root).expanduser() for root in _MAC_APP_ROOTS]
+    for root_path in roots:
+        for name in names:
+            candidate = root_path / name
+            if _is_app_bundle(candidate):
+                return str(candidate)
+    wanted = {bundle_id.lower() for bundle_id in bundle_ids}
+    if not wanted:
+        return None
+    for root_path in roots:
+        hits = [
+            candidate for candidate in _mac_app_entries(root_path)
+            if bundle_identifier(str(candidate)).lower() in wanted
+        ]
+        if hits:
+            return str(min(hits, key=lambda candidate: candidate.name))
+    return None
+
+
+def _mac_app_entries(root: Path) -> list[Path]:
+    """``root`` 下直接的应用包（最多 :data:`_MAC_SCAN_MAX_ENTRIES` 个条目；失败返回空）。"""
+    entries: list[Path] = []
+    try:
+        for index, child in enumerate(root.iterdir()):
+            if index >= _MAC_SCAN_MAX_ENTRIES:
+                log.debug("应用程序目录条目超过上限 %d，只检查已读到的：%s",
+                          _MAC_SCAN_MAX_ENTRIES, root)
+                break
+            if _is_app_bundle(child):
+                entries.append(child)
+    except OSError:
+        return []
+    return entries
+
+
+def app_bundle_root(path: str) -> str:
+    """路径落在某个 ``.app`` 里面时（手填成了 ``Contents/MacOS/<程序>``）收回到应用包本身。
+
+    启动 mac 应用要 ``open`` 应用包；直接执行包里的二进制会绕过 LaunchServices
+    （没有 Dock 图标、不走单实例），甚至从终端里开出来。不在 ``.app`` 里的路径原样返回。
+    """
+    text = str(path or "")
+    parts = Path(text).parts
+    for index, part in enumerate(parts):
+        if part.lower().endswith(".app"):
+            return str(Path(*parts[: index + 1]))
+    return text
+
+
+def bundle_identifier(app_path: str) -> str:
+    """读应用包 Info.plist 里的 ``CFBundleIdentifier``；读不到返回空串（不抛）。"""
+    info = Path(app_bundle_root(app_path)) / "Contents" / "Info.plist"
+    try:
+        with open(info, "rb") as handle:
+            raw = handle.read(_INFO_PLIST_MAX_BYTES + 1)
+    except OSError:
+        return ""
+    if len(raw) > _INFO_PLIST_MAX_BYTES:
+        return ""
+    try:
+        data = plistlib.loads(raw)
+    except Exception:
+        return ""
+    value = data.get("CFBundleIdentifier") if isinstance(data, dict) else None
+    return value.strip() if isinstance(value, str) else ""
+
+
+def session_key(path: str) -> str:
+    """播放器在系统媒体会话里的身份（交给 ``now_playing.play_session_for``）。
+
+    Windows：可执行文件名（SMTC 的 app id 形如 ``cloudmusic.exe``）；macOS：应用包的
+    bundle id（MediaRemote 按它报「正在播放」应用）。
+    """
+    if sys.platform == "darwin":
+        return bundle_identifier(path)
+    return os.path.basename(str(path or ""))
 
 
 def clear_cache() -> None:

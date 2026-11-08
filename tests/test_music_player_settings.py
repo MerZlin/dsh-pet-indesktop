@@ -578,8 +578,12 @@ def test_detected_path_is_written_to_config_on_save(dialog, monkeypatch):
 # 都只在 Windows 创建——与 cursor_hidden_passthrough 的处置一致。
 
 
-def test_browser_media_row_is_absent_on_non_windows(monkeypatch):
-    """非 Windows 平台：即使控件存在，设置行也不出现（平台闸门优先）。"""
+def test_browser_media_row_follows_media_session_platforms(monkeypatch):
+    """平台闸门：有系统媒体会话的平台（Windows SMTC / macOS MediaRemote）才有这一行。
+
+    macOS 上浏览器同样会把网页媒体报进系统「正在播放」（2026-11 起 mac 读它），
+    所以开关在 mac 上是真生效的，不再属于"永久不支持"；Linux 仍然没有这一行。
+    """
     import sys
 
     from pet.settings_widgets import ToggleSwitch
@@ -591,13 +595,68 @@ def test_browser_media_row_is_absent_on_non_windows(monkeypatch):
     assert settings_music.browser_media_supported() is False
     assert settings_music.browser_media_rows(host) == []
 
+    for platform in ("darwin", "win32"):
+        monkeypatch.setattr(sys, "platform", platform)
+        assert settings_music.browser_media_supported() is True, platform
+        rows = settings_music.browser_media_rows(host)
+        assert [row.objectName() for row in rows] == ["settingRow_music_browser_media"], platform
+
+
+def test_browser_media_widget_is_built_on_mac(monkeypatch, tmp_path):
+    """macOS：控件本体也要建出来（行与控件同一个平台判据，不留游离开关）。"""
+    import pet.modern_settings_dialog as settings_mod
+    from pet import settings_pet_controls
+    from pet.config import Config
+    from pet.modern_settings_dialog import ModernSettingsDialog
+
+    app = _qapp()
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    monkeypatch.setattr(settings_pet_controls.sys, "platform", "darwin")
+    dialog = ModernSettingsDialog(Config(tmp_path), include_ai=False)
+    try:
+        assert dialog.music_browser_media_check is not None, "mac 上应建出浏览器媒体开关"
+        assert _row(dialog, "music_browser_media") is not None
+        assert dialog.foobar_lyrics_check is None, "foobar 窗口标题源仍是 Windows 专属"
+        dialog.music_browser_media_check.setChecked(True)
+        dialog._save()
+        assert Config(tmp_path).get("music_browser_media_enabled") is True
+    finally:
+        dialog.reject()
+        app.processEvents()
+
+
+def test_player_picker_chooses_app_bundles_on_mac(monkeypatch):
+    """mac 上播放器是 .app 应用包：选择器的过滤器与行说明都要说 .app，不说 .exe。"""
+    import sys
+
     monkeypatch.setattr(sys, "platform", "darwin")
-    assert settings_music.browser_media_rows(host) == []
+    assert "*.app" in settings_music.player_name_filter()
+    assert "*.exe" not in settings_music.player_name_filter()
+    assert ".app" in settings_music._player_row_hint("网易云音乐")
+    assert "可执行文件" not in settings_music._player_row_hint("网易云音乐")
+    assert "应用程序" in settings_music.detect_row_hint()
 
     monkeypatch.setattr(sys, "platform", "win32")
-    assert settings_music.browser_media_supported() is True
-    rows = settings_music.browser_media_rows(host)
-    assert [row.objectName() for row in rows] == ["settingRow_music_browser_media"]
+    assert settings_music.player_name_filter() == settings_music.EXE_NAME_FILTER
+    assert "可执行文件" in settings_music._player_row_hint("网易云音乐")
+    assert "盘符" in settings_music.detect_row_hint()
+
+
+def test_lyric_and_sing_hints_state_the_platform_truth(monkeypatch):
+    """「显示歌词」「音乐自动唱歌」的说明按平台写实：不在 mac 上说"仅 Windows 可用"。"""
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    lyric = settings_music.lyric_row_hint()
+    assert "仅 Windows" not in lyric and "正在播放" in lyric
+    assert "正在播放" in settings_music.sing_row_hint()
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert "支持系统播放控件" in settings_music.lyric_row_hint()
+    assert settings_music.sing_row_hint() == "检测到后台播放音乐时，自动播放唱歌动画。"
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert "Windows 与 macOS" in settings_music.lyric_row_hint()
 
 
 def test_browser_media_row_is_absent_when_widget_missing():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -1217,6 +1218,35 @@ def _music_launch_bridge(pet) -> _MusicLaunchBridge:
     return bridge
 
 
+#: 「打开播放器」启动后等它出现在系统媒体会话里的轮询节奏（最多 10 次 × 1 秒）。
+_LAUNCH_POLL_SECONDS = 1.0
+_LAUNCH_POLL_ATTEMPTS = 10
+#: macOS 经 LaunchServices 启动应用包；``open`` 自身在应用起来（或报错）后就返回。
+_MAC_OPEN = "/usr/bin/open"
+_MAC_OPEN_TIMEOUT_SECONDS = 15.0
+
+
+def _open_mac_app(path: str) -> bool:
+    """macOS：``open <应用包>`` 启动播放器；返回 ``open`` 是否成功。
+
+    要 open 的是**应用包**（手填成包内二进制时先收回到 ``.app``）：直接执行包里的
+    程序会绕过 LaunchServices——不走单实例、没有正常的 Dock 图标。只在 worker 线程调。
+    """
+    from ..music import players as music_players
+
+    try:
+        result = subprocess.run(
+            [_MAC_OPEN, music_players.app_bundle_root(path)],
+            capture_output=True,
+            timeout=_MAC_OPEN_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        log.debug("open 启动播放器失败：%s", path, exc_info=True)
+        return False
+    return result.returncode == 0
+
+
 def _launch_player_and_play(player_key: str, pet) -> None:
     """打开指定播放器并尽量让它开始播放。
 
@@ -1228,6 +1258,10 @@ def _launch_player_and_play(player_key: str, pet) -> None:
     **路径解析（find_player）也在 worker 线程里**：缓存冷时它要浅扫目录（实测
     6s+），以前这段跑在 GUI 线程，点一下菜单就卡住。找不到时不静默 return，
     而是经 queued 信号回 GUI 线程弹气泡说明可以在配置文件里手动指定路径。
+
+    **macOS**：路径是 ``.app`` 应用包，经 ``open`` 启动（:func:`_open_mac_app`）；会话
+    身份是应用包的 bundle id（``music_players.session_key``），"出现在会话里"指它成了
+    系统的「正在播放」应用。``open`` 失败时同样弹气泡说明，不静默等满 10 秒。
     """
     from ..music import players as music_players, now_playing
 
@@ -1253,20 +1287,29 @@ def _launch_player_and_play(player_key: str, pet) -> None:
                 except RuntimeError:
                     pass
                 return
-            exe_name = os.path.basename(exe)
+            # 会话身份：Windows 是 exe 名，macOS 是应用包的 bundle id。
+            exe_name = music_players.session_key(exe)
             # 先给已经在跑的会话发播放指令：这条路径是确定的。
             if now_playing.play_session_for(exe_name):
                 return
-            # 没在跑：启动它，然后轮询等它出现在 SMTC 里。
+            # 没在跑：启动它，然后轮询等它出现在系统媒体会话里。
             try:
                 if sys.platform == "win32":
                     os.startfile(exe)  # noqa: S606 - 路径来自受控的播放器搜索
+                elif sys.platform == "darwin":
+                    if not _open_mac_app(exe):
+                        try:
+                            bridge.notice.emit(
+                                f"打不开{label}：可在 设置 → 桌宠 → 音乐关联 里重新指定它的程序位置")
+                        except RuntimeError:
+                            pass
+                        return
                 else:
                     QProcess.startDetached(exe, [])
             except Exception:
                 return
-            for _ in range(10):          # 最多等 10 秒
-                time.sleep(1.0)
+            for _ in range(_LAUNCH_POLL_ATTEMPTS):  # 最多等 10 秒
+                time.sleep(_LAUNCH_POLL_SECONDS)
                 if now_playing.play_session_for(exe_name):
                     return
         finally:
