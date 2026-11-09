@@ -61,7 +61,9 @@ jobs:
       # venv bin 前置进 PATH 后，后续步骤与 build_linux.sh（PYTHON_BIN 默认取
       # PATH 的 python3）零改动。
       - name: Setup uv
-        uses: astral-sh/setup-uv@v10
+        # 精确 pin：setup-uv 上游不维护 vN 浮动主版本 tag（只有 vX.Y.Z），
+        # 写 @v10 会在 job 装配期直接解析失败。
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Create venv (uv CPython 3.11) and install dependencies
         run: |
