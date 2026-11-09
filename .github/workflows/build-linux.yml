@@ -48,6 +48,9 @@ jobs:
         run: |
           apt-get update
           apt-get install -y git perl binutils build-essential zip unzip zstd ca-certificates curl libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libfontconfig1 libdbus-1-3 fonts-noto-cjk cmake extra-cmake-modules qt6-base-private-dev libxkbcommon-dev libxcb1-dev libx11-dev
+          # 容器内以 root 运行，工作区文件属主是宿主 runner 用户（UID 不同），
+          # git 会以 dubious ownership 拒绝 rev-parse —— 全局放行本工作区一次。
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Checkout
         uses: actions/checkout@v4
