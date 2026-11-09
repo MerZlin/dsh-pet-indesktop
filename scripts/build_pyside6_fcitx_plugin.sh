@@ -60,10 +60,18 @@ cmake -S "$FCITX_SOURCE" -B "$BUILD_DIR" \
 # CMake 用系统 Qt6 头文件完成目标配置；先编译对象，最终链接改为 PySide6 自带 Qt 运行库。
 set +e
 cmake --build "$BUILD_DIR" --target fcitx5platforminputcontextplugin-qt6 -j2 >"$WORK_DIR/compile.log" 2>&1
+BUILD_RC=$?
 set -e
 LINK_FILE="$BUILD_DIR/qt6/platforminputcontext/CMakeFiles/fcitx5platforminputcontextplugin-qt6.dir/link.txt"
 if [[ ! -f "$LINK_FILE" ]]; then
     cat "$WORK_DIR/compile.log" >&2
+    exit 1
+fi
+# 编译若失败（对象文件没生成），后面的手动链接只会报一堆「cannot find *.o」，
+# 真正的编译错误被吞在 compile.log 里——这里直接摊开，失败要能被看见。
+if [[ $BUILD_RC -ne 0 ]] && ! ls "$BUILD_DIR"/qt6/platforminputcontext/CMakeFiles/fcitx5platforminputcontextplugin-qt6.dir/*.o >/dev/null 2>&1; then
+    echo "对象文件编译失败（退出码 $BUILD_RC），compile.log 末尾如下：" >&2
+    tail -60 "$WORK_DIR/compile.log" >&2
     exit 1
 fi
 perl -pi -e "s#/usr/lib/[^ ]*/libQt6Widgets\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Widgets.so.6#g; s#/usr/lib/[^ ]*/libQt6Gui\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Gui.so.6#g; s#/usr/lib/[^ ]*/libQt6DBus\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6DBus.so.6#g; s#/usr/lib/[^ ]*/libQt6Core\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Core.so.6#g" "$LINK_FILE"
