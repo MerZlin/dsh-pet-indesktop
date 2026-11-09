@@ -116,6 +116,7 @@ Android 原生悬浮桌宠已提供本地测试版构建入口，支持 Android 
 ### Linux（x86_64）
 
 1. **获取**：到 [Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases) 页面，在对应版本的 Assets 里下载 `dsh-pet-standalone-webm-chat-linux-x86_64.zip`（或无 Chat 版 `dsh-pet-standalone-webm-linux-x86_64.zip`）。若你手上的版本没有附 Linux 产物，请到 [Issues](https://github.com/MerZlin/dsh-pet-indesktop/issues) 反馈——**不要自己去 Actions 页面点构建**，那是维护者发布流程的一部分。
+   - **系统基线**：发布包要求 glibc ≥ 2.35、libstdc++（GLIBCXX）≥ 3.4.30，即 **Ubuntu 22.04 及以上**可直跑（22.04 基线自 2026-11 issue #432 修复起生效；**此前所有已发布的 Linux 包**都在 Ubuntu 24.04 基线构建，22.04 上启动会报 `GLIBC_2.38 not found`，需等修复后的重新构建；更老的发行版如 Ubuntu 20.04 请从源码运行）。
 2. **解压**：得到 `dsh-pet-standalone-webm-chat/` 目录，运行其中的同名二进制：
    ```bash
    unzip dsh-pet-standalone-webm-chat-linux-x86_64.zip

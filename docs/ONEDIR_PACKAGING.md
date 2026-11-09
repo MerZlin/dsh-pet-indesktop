@@ -405,12 +405,39 @@ Actions → *Run workflow* 手动运行，两个输入：
 
 手动运行**不会**创建或改写 Release：`Publish Release` 只在 `push` + `refs/tags/` 时执行，
 tag 推送的既有发布行为不变。每个工作流会把「这次构建的是哪棵树 + 装了什么」写进 run
-summary（`git rev-parse HEAD`、`github.sha`、`python --version`、`node --version`、
-`pip freeze`）——三端 artifact 对不对得上，看这一步的 SHA。
+summary（`git rev-parse HEAD`、`github.sha`、`python --version`、`pip freeze`；node
+版本只在 Windows/macOS 宿主 runner 上记录，Linux 容器无 node 且构建链不用它）
+——三端 artifact 对不对得上，看这一步的 SHA。
 
 `pr-test.yml` 同样是 PR/push/手动三种触发：手动运行也有 `source_ref`，用于三端跨平台
 对齐同一棵树。**PR 事件仍检出合并提交**（`refs/pull/N/merge`，见 run summary 里同时
 记录的 head sha 与 merge sha）——"集成后才有红绿判定"的语义不为对齐需求让步。
+
+### Linux 构建基线：ubuntu:22.04 容器 + uv Python（issue #432，2026-11-10）
+
+**Linux 包的 glibc 基线 = 构建机基线**：PyInstaller 在 Linux 上会把构建机上解析到的
+动态库依赖整份拷进 `_internal/`（libX11/libgtk/libcrypto/libstdc++ 等），Python 本体
+的 `libpython` 也随构建环境进包。2026-11 定位（issue #432）：`ubuntu-latest` 别名早已
+整体漂到 24.04（glibc 2.38），叠加 `actions/setup-python` 的 CPython 工件也换到
+24.04 基线重编——**此前所有已发布 Linux 包在 Ubuntu 22.04 上启动即
+`GLIBC_2.38 not found`**，且全程零告警（没有任何仓库提交引入过它）。两条基线因此钉死：
+
+1. **`container: ubuntu:22.04`**（不是 `runs-on: ubuntu-22.04`）：托管镜像别名/标签
+   会漂移、会退役，退役即静默复发；jammy 容器全生命周期 glibc 恒为 2.35。
+2. **uv 管的 CPython 3.11**（`uv python install` + `uv venv`，不用 setup-python）：
+   python-build-standalone 系构建实测 `libpython` 底线 GLIBC_2.17，带校验和、不受
+   上游工件重编漂移影响。
+
+产物地板由 `scripts/check_elf_symbol_floor.py` 硬门（`build_linux.sh` 每变体出包后
+调用，Windows/macOS 不适用）：任何 ELF 引用的 GLIBC > 2.35 或 GLIBCXX > 3.4.30
+（jammy 系统上限）即构建失败——runner 镜像、Python 工件、pip wheel 任一环节再漂移，
+出包当场红。守卫测试：`tests/test_elf_symbol_floor.py`（门禁行为 + 接线）、
+`tests/test_ci_workflows.py::TestLinuxBuildBaseline`（容器与 uv 接线）。
+
+Fcitx 插件（`scripts/build_pyside6_fcitx_plugin.sh`）不受影响：它只用系统 Qt6 dev 包
+（jammy = 6.2）做 CMake 目标配置，私有 QPA 头文件仍按 PySide6 的 Qt 精确版本从
+qtbase.git 取并覆盖，最终链接改写回 PySide6 自带 Qt——该脚本设计未变。frameseq
+缓存 key 只含平台串/Python 次版本/包版本，不含发行版——切容器不触发 28 min 重转。
 
 ### 帧序列素材在 CI 里怎么来
 
