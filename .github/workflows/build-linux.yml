@@ -38,21 +38,23 @@ jobs:
       PYTHONIOENCODING: utf-8
 
     steps:
+      # 必须排在 Checkout 之前：jammy 裸容器没有 git，actions/checkout 会退化成
+      # 「下载仓库 tarball 解压」——不留 .git 目录，后续 git rev-parse / 插件脚本的
+      # git clone 都会挂。容器内以 root 运行（无 sudo）。
+      # PySide6 在 Linux 上 import 需要系统 EGL/GL 等库；构建 Fcitx 插件还需要
+      # CMake、ECM 和 Qt6 私有开发头文件；binutils 的 readelf/nm 供 ELF 符号版本
+      # 门禁与插件自检，zstd 供 actions/cache，zip/unzip 供打包与校验步骤。
+      - name: Install container toolchain + system libraries (PySide6)
+        run: |
+          apt-get update
+          apt-get install -y git perl binutils build-essential zip unzip zstd ca-certificates curl libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libfontconfig1 libdbus-1-3 fonts-noto-cjk cmake extra-cmake-modules qt6-base-private-dev libxkbcommon-dev libxcb1-dev libx11-dev
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           # 手动构建用 source_ref 指定要构建的树（三端对齐同一提交）；留空即回落
           # github.sha（= 事件默认检出的提交，tag 推送时就是该 tag 指向的提交）。
           ref: ${{ github.event.inputs.source_ref || github.sha }}
-
-      # PySide6 在 Linux 上 import 需要系统 EGL/GL 等库；构建 Fcitx 插件还需要
-      # CMake、ECM 和 Qt6 私有开发头文件。容器内以 root 运行（无 sudo），且
-      # ubuntu:22.04 裸容器连 git/perl/binutils/zip 都没有，一并补齐：
-      # binutils 的 readelf/nm 供 ELF 符号版本门禁与插件自检，zstd 供 actions/cache。
-      - name: Install system libraries (PySide6)
-        run: |
-          apt-get update
-          apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libfontconfig1 libdbus-1-3 fonts-noto-cjk cmake extra-cmake-modules qt6-base-private-dev libxkbcommon-dev libxcb1-dev libx11-dev git perl binutils build-essential zip unzip zstd ca-certificates curl
 
       # 不用 actions/setup-python（issue #432 的第二个元凶）：它的 CPython 工件
       # 本身已被上游迁到 24.04 基线重编（libpython3.11.so.1.0 要求 GLIBC_2.38），
