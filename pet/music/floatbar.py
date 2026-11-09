@@ -2509,12 +2509,12 @@ class MusicFloatBar(QWidget):
             fade = 1.0 - 0.08 * layer
             glow = QColor(color)
             glow.setAlpha(max(0, int(_RING_GLOW_ALPHA * fade)))
-            painter.setPen(QPen(glow, 2.3))
+            painter.setPen(QPen(glow, 1.15))
             painter.drawPath(path)
 
             core = QColor(color)
             core.setAlpha(int(165 * fade))
-            painter.setPen(QPen(core, 0.9))
+            painter.setPen(QPen(core, 0.45))
             painter.drawPath(path)
 
     def _vinyl_label_color(self) -> QColor:
