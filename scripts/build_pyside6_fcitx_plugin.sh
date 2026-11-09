@@ -72,21 +72,30 @@ cmake -S "$FCITX_SOURCE" -B "$BUILD_DIR" \
     "-DCMAKE_CXX_FLAGS=-I$WORK_DIR/header-overlay -include $COMPAT_HEADER"
 
 # CMake 用系统 Qt6 头文件完成目标配置；先编译对象，最终链接改为 PySide6 自带 Qt 运行库。
-# 编译（含 cmake 自己对系统 Qt 的链接）任何一步非零都必须当场摊开 compile.log：
-# 否则部分源文件编译失败时，对象目录里仍有别的 .o，手动链接只会报一堆
-# 「cannot find *.o」而真正的编译错误永远不可见（jammy 上就是这么丢的）。
+# 注意：cmake 自己的链接步（链系统 Qt）可以红——overlay 头是按 PySide6 的 Qt 版本取的，
+# 引用的符号（如带时间戳的 handleExtendedKeyEvent）在老系统 Qt 里不存在，链接失败是常态；
+# 对象文件是否齐全才是「编译是否成功」的判据，以 link.txt 列举的对象清单为准。
+# 编译失败必须当场摊开 compile.log：部分源文件失败时对象目录仍有别的 .o，
+# 手动链接只会报「cannot find *.o」而真正的编译错误永远不可见。
 set +e
 cmake --build "$BUILD_DIR" --target fcitx5platforminputcontextplugin-qt6 -j2 >"$WORK_DIR/compile.log" 2>&1
 BUILD_RC=$?
 set -e
-if [[ $BUILD_RC -ne 0 ]]; then
-    echo "cmake --build 失败（退出码 $BUILD_RC），compile.log 末尾：" >&2
-    tail -80 "$WORK_DIR/compile.log" >&2
-    exit 1
-fi
 LINK_FILE="$BUILD_DIR/qt6/platforminputcontext/CMakeFiles/fcitx5platforminputcontextplugin-qt6.dir/link.txt"
 if [[ ! -f "$LINK_FILE" ]]; then
     cat "$WORK_DIR/compile.log" >&2
+    exit 1
+fi
+MISSING_OBJ=0
+while read -r obj; do
+    if [[ ! -f "$BUILD_DIR/qt6/platforminputcontext/$obj" ]]; then
+        MISSING_OBJ=1
+        echo "缺少对象文件：$obj" >&2
+    fi
+done < <(grep -oE '[^ ]+\.o\b' "$LINK_FILE" | sort -u)
+if [[ $MISSING_OBJ -eq 1 ]]; then
+    echo "对象编译失败（cmake --build 退出码 $BUILD_RC），compile.log 末尾：" >&2
+    tail -80 "$WORK_DIR/compile.log" >&2
     exit 1
 fi
 perl -pi -e "s#/usr/lib/[^ ]*/libQt6Widgets\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Widgets.so.6#g; s#/usr/lib/[^ ]*/libQt6Gui\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Gui.so.6#g; s#/usr/lib/[^ ]*/libQt6DBus\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6DBus.so.6#g; s#/usr/lib/[^ ]*/libQt6Core\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Core.so.6#g" "$LINK_FILE"
