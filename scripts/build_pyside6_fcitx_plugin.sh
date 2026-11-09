@@ -99,19 +99,24 @@ if [[ $MISSING_OBJ -eq 1 ]]; then
     exit 1
 fi
 perl -pi -e "s#/usr/lib/[^ ]*/libQt6Widgets\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Widgets.so.6#g; s#/usr/lib/[^ ]*/libQt6Gui\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Gui.so.6#g; s#/usr/lib/[^ ]*/libQt6DBus\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6DBus.so.6#g; s#/usr/lib/[^ ]*/libQt6Core\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Core.so.6#g" "$LINK_FILE"
+MANUAL_LINK_LOG="$WORK_DIR/manual-link.log"
 if ! (
     cd "$BUILD_DIR/qt6/platforminputcontext"
-    /bin/sh "$LINK_FILE"
+    /bin/sh "$LINK_FILE" 2>"$MANUAL_LINK_LOG"
 ); then
-    echo "手动链接（改写为 PySide6 Qt）失败。" >&2
+    echo "手动链接（改写为 PySide6 Qt）失败，末尾输出：" >&2
+    tail -30 "$MANUAL_LINK_LOG" >&2 2>/dev/null || true
 fi
 
 # 构建产物必须存在且引用 PySide6 Qt 版本的扩展按键接口，避免回退到系统 Qt 6.4 ABI。
 BUILT_PLUGIN="$BUILD_DIR/qt6/platforminputcontext/libfcitx5platforminputcontextplugin.so"
-if [[ ! -f "$BUILT_PLUGIN" ]] || ! nm -D --demangle "$BUILT_PLUGIN" | grep -q 'handleExtendedKeyEvent'; then
+NM_HIT="$(nm -D --demangle "$BUILT_PLUGIN" 2>&1 | grep 'handleExtendedKeyEvent' || true)"
+if [[ ! -f "$BUILT_PLUGIN" ]] || [[ -z "$NM_HIT" ]]; then
     echo "Fcitx5 Qt6 插件构建不完整（cmake --build 退出码 $BUILD_RC）。诊断信息：" >&2
-    echo "---- 对象目录内容（$BUILD_DIR/qt6/platforminputcontext/CMakeFiles）：" >&2
-    ls -laR "$BUILD_DIR/qt6/platforminputcontext/CMakeFiles" >&2 2>/dev/null || echo "(目录不存在)" >&2
+    echo "---- 产物存在性：$([[ -f "$BUILT_PLUGIN" ]] && ls -la "$BUILT_PLUGIN" || echo "缺失：$BUILT_PLUGIN")" >&2
+    echo "---- nm 结果：${NM_HIT:-（无 handleExtendedKeyEvent 符号）}" >&2
+    echo "---- 手动链接输出（$MANUAL_LINK_LOG）：" >&2
+    cat "$MANUAL_LINK_LOG" >&2 2>/dev/null || echo "(无输出)" >&2
     echo "---- link.txt 前 3 行：" >&2
     head -3 "$LINK_FILE" >&2 2>/dev/null || true
     echo "---- compile.log 末尾 80 行：" >&2
