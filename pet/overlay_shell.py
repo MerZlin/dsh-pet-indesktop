@@ -1680,10 +1680,17 @@ class OverlayShell(QObject):
 
     @staticmethod
     def _window_physical_origin(overlay) -> QPoint:
-        """窗口的**原生（物理）**左上角；取不到时退回逻辑原点。
+        """窗口的**原生（物理）**左上角；取不到原生几何时退回「逻辑原点 × DPR」。
 
         混合 DPI 下逻辑原点不能当物理用：Qt 官方文档的 islands-of-screens ——
         屏的位置不随缩放变，逻辑桌面不是连续平面。跨窗换算必须走物理坐标。
+
+        非 Windows（macOS/X11）没有 ``GetWindowRect``，此前直接返回**逻辑**原点，
+        而三个调用方（``_sprite_pos_in``、``_place_sprite_in_physical_screen``、
+        多窗物理域）都按物理像素消费它（局部坐标 × DPR）。2x 屏上副窗的物理原点
+        因此被算成一半，两张窗的判定区在物理空间里互相重叠——副屏靠近主屏的那半
+        边被误判成落在主屏窗里（macOS 双 2x 屏实测：副屏左侧约 49% 宽度放不下，
+        见 issue #354）。
         """
         fallback = overlay.geometry().topLeft()
         try:
@@ -1693,10 +1700,21 @@ class OverlayShell(QObject):
             rect = wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(int(overlay.winId()), ctypes.byref(rect))
         except Exception:  # noqa: BLE001 - 非 Windows / 无原生窗时退回逻辑原点
-            return fallback
+            return OverlayShell._logical_to_physical(fallback, overlay)
         if rect.right <= rect.left and rect.bottom <= rect.top:
-            return fallback
+            return OverlayShell._logical_to_physical(fallback, overlay)
         return QPoint(rect.left, rect.top)
+
+    @staticmethod
+    def _logical_to_physical(point: QPoint, overlay) -> QPoint:
+        """逻辑点 → 窗口物理像素点（按该窗 DPR；取不到 DPR 时按 1.0，行为不变）。"""
+        try:
+            dpr = float(overlay.devicePixelRatioF())
+        except Exception:  # noqa: BLE001 - 无原生窗的替身
+            dpr = 1.0
+        if dpr <= 0:
+            dpr = 1.0
+        return QPoint(int(round(point.x() * dpr)), int(round(point.y() * dpr)))
 
     def _sprite_pos_in(self, sprite, source_overlay, target_overlay) -> QPointF:
         """这只的左上角换算到 ``target_overlay`` 的局部逻辑坐标（跨 DPI 正确）。
