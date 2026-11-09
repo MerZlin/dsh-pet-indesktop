@@ -83,7 +83,13 @@ perl -pi -e "s#/usr/lib/[^ ]*/libQt6Widgets\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Widge
 # 构建产物必须存在且引用 PySide6 Qt 版本的扩展按键接口，避免回退到系统 Qt 6.4 ABI。
 BUILT_PLUGIN="$BUILD_DIR/qt6/platforminputcontext/libfcitx5platforminputcontextplugin.so"
 if [[ ! -f "$BUILT_PLUGIN" ]] || ! nm -D --demangle "$BUILT_PLUGIN" | grep -q 'handleExtendedKeyEvent'; then
-    echo "Fcitx5 Qt6 插件构建不完整。" >&2
+    echo "Fcitx5 Qt6 插件构建不完整（cmake --build 退出码 $BUILD_RC）。诊断信息：" >&2
+    echo "---- 对象目录内容（$BUILD_DIR/qt6/platforminputcontext/CMakeFiles）：" >&2
+    ls -laR "$BUILD_DIR/qt6/platforminputcontext/CMakeFiles" >&2 2>/dev/null || echo "(目录不存在)" >&2
+    echo "---- link.txt 前 3 行：" >&2
+    head -3 "$LINK_FILE" >&2 2>/dev/null || true
+    echo "---- compile.log 末尾 80 行：" >&2
+    tail -80 "$WORK_DIR/compile.log" >&2 2>/dev/null || true
     exit 1
 fi
 mkdir -p "$(dirname "$OUTPUT_PLUGIN")"
