@@ -49,13 +49,27 @@ for header in qplatformcursor.h qplatforminputcontext.h qplatforminputcontextplu
     cp "$QTBASE_SOURCE/src/gui/kernel/$header" "$HEADER_OVERLAY/$header"
 done
 
+# 兼容宏：overlay 的 6.11 头里用了 6.8+ 才有的版本化移除宏
+# QT_GUI_REMOVED_SINCE（如 qwindowsysteminterface.h 的 #if QT_GUI_REMOVED_SINCE(6, 8)），
+# 该宏只在构建好的 Qt 里定义、源码头不带；老系统 Qt dev（如 jammy 6.2）没有它，
+# 预处理器会直接报 missing binary operator。按目标 ABI（PySide6 的 Qt）语义定义为 0
+# （被移除的旧重载不再声明），并用 #ifndef 包住以免在有定义的环境里打架。
+# 不走 -D 是因为带括号的宏定义过 CMake→make→sh 链会被未加引号的括号炸掉。
+COMPAT_HEADER="$WORK_DIR/qt-overlay-compat.h"
+cat > "$COMPAT_HEADER" <<'EOF'
+/* 构建 PySide6 Fcitx 插件时的 overlay 头兼容宏（jammy Qt 6.2 dev + 6.11 overlay）。 */
+#ifndef QT_GUI_REMOVED_SINCE
+#define QT_GUI_REMOVED_SINCE(major, minor) 0
+#endif
+EOF
+
 cmake -S "$FCITX_SOURCE" -B "$BUILD_DIR" \
     -DBUILD_ONLY_PLUGIN=ON \
     -DENABLE_QT4=OFF \
     -DENABLE_QT5=OFF \
     -DENABLE_QT6=ON \
     -DENABLE_QT6_WAYLAND_WORKAROUND=OFF \
-    "-DCMAKE_CXX_FLAGS=-I$WORK_DIR/header-overlay"
+    "-DCMAKE_CXX_FLAGS=-I$WORK_DIR/header-overlay -include $COMPAT_HEADER"
 
 # CMake 用系统 Qt6 头文件完成目标配置；先编译对象，最终链接改为 PySide6 自带 Qt 运行库。
 # 编译（含 cmake 自己对系统 Qt 的链接）任何一步非零都必须当场摊开 compile.log：
