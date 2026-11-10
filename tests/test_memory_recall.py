@@ -125,7 +125,11 @@ def test_load_grouped_is_four_groups_and_newest_first(tmp_path):
             NOW + timedelta(minutes=4),
         ]
     )
-    mem = ChatMemory(tmp_path / "memory.json", clock=lambda: next(ticks))
+    # next(..., 兜底)：load()/load_grouped() 现在也走注入时钟（超期归档判定），
+    # 刻度耗尽后停在最后一个时刻，而不是 StopIteration。
+    mem = ChatMemory(
+        tmp_path / "memory.json",
+        clock=lambda: next(ticks, NOW + timedelta(minutes=4)))
     mem.add("旧事实", layer="fact")
     mem.add("新事实", layer="fact")
     mem.add("偏好", layer="user")
