@@ -104,7 +104,10 @@ def scan(
         return {"elf_count": 0, "offenders": [], "max_glibc": None,
                 "max_glibcxx": None,
                 "problems": [f"目录不存在：{app_dir}"]}
-    if shutil.which("readelf") is None:
+    readelf = shutil.which("readelf")
+    if readelf is None:
+        # 缺 readelf 必须判失败（门禁不能静默通过），但不能崩：Windows/macOS
+        # runner 没有 binutils，扫描仍要数完 ELF 并把问题带上，由 main() 红出来。
         problems.append("缺少 readelf（binutils）——无法扫描 ELF 符号版本")
 
     for path in sorted(app_dir.rglob("*")):
@@ -117,7 +120,9 @@ def scan(
         if head != _ELF_MAGIC:
             continue
         elf_count += 1
-        glibc, glibcxx = extract_max_versions(_read_elf_symbols(path))
+        glibc = glibcxx = None
+        if readelf is not None:
+            glibc, glibcxx = extract_max_versions(_read_elf_symbols(path))
         if version_exceeds(glibc, glibc_floor) or version_exceeds(glibcxx, glibcxx_floor):
             offenders.append((path, glibc, glibcxx))
         if global_glibc is None or (glibc is not None and glibc > global_glibc):

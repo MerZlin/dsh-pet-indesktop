@@ -127,6 +127,18 @@ def test_non_elf_files_are_ignored(gate, tmp_path):
     assert report["offenders"] == []
 
 
+def test_missing_readelf_fails_gracefully(gate, tmp_path, monkeypatch):
+    """缺 readelf（Windows/macOS runner 无 binutils）必须「判失败」而不是崩。"""
+    (tmp_path / "fake.so").write_bytes(b"\x7fELFtruncated")
+    monkeypatch.setattr(gate.shutil, "which", lambda name: None)
+
+    report = gate.scan(tmp_path, gate.DEFAULT_GLIBC_FLOOR, gate.DEFAULT_GLIBCXX_FLOOR)
+
+    assert report["elf_count"] == 1
+    assert any("readelf" in problem for problem in report["problems"])
+    assert report["offenders"] == []
+
+
 def test_zero_elf_fails(gate, tmp_path):
     """一个 ELF 都扫不到 = --app-dir 八成给错了路径：必须失败而不是静默通过。"""
     (tmp_path / "empty.txt").write_text("", encoding="utf-8")
