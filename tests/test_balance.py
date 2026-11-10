@@ -207,15 +207,21 @@ def test_friday_evening_next_peak_skips_weekend():
 
 
 def test_statutory_holiday_name_reports_free_days_only():
-    """festival_calendar 的节假日边界：只认放假日，补班日与表外日期返回 None。"""
+    """festival_calendar 的节假日边界：只认放假日，补班日与表外日期返回 None。
+
+    表外断言必须选跨 lunar-python 版本稳定的日期：新版（2026-11 起 CI 解析到）
+    会对表外的固定日期/历法法定节假按规则计算（如 2027-01-01 返回「元旦节」），
+    旧版一律 None——2027-01-01 这类日期的断言会随版本翻转。表外**普通工作日**
+    （如 2027-03-10）两种版本都返回 None，锁住的才是「无数据 → 未知」降级语义。
+    """
     from pet.festival.calendar import statutory_holiday_name
 
     assert statutory_holiday_name(date(2026, 10, 1)) == "国庆节"
     assert statutory_holiday_name(date(2026, 2, 16)) == "春节"
     # 调休补班的周六（2026-10-10）是上班日，不属于放假日
     assert statutory_holiday_name(date(2026, 10, 10)) is None
-    # 内嵌安排表之外（2026-10-11 起）降级为 None = 「未知」，不是「确认上班」
-    assert statutory_holiday_name(date(2027, 1, 1)) is None
+    # 内嵌安排表之外的普通工作日降级为 None = 「未知」，不是「确认上班」
+    assert statutory_holiday_name(date(2027, 3, 10)) is None
 
 
 def test_statutory_holidays_are_idle_all_day():
@@ -276,16 +282,23 @@ def test_format_switch_time_same_iso_week_uses_bare_weekday():
 
 
 def test_pricing_degrades_without_holiday_calendar_data():
-    """2027 起 HolidayUtil 无内嵌数据：不抛异常，退回星期规则。"""
-    # 2027-01-01 是周五，表外日期按工作日高峰判
-    assert balance.deepseek_pricing_tier(_bj(10, day=1, month=1, year=2027)) == "peak"
-    assert balance.deepseek_pricing_tier(_bj(13, day=1, month=1, year=2027)) == "idle"
-    # 周末规则与表无关
-    assert balance.deepseek_pricing_tier(_bj(10, day=2, month=1, year=2027)) == "idle"
-    # 切换扫描同样可用（不因表耗尽而抛错）
-    tier, when = balance._next_pricing_switch(_bj(10, day=1, month=1, year=2027))
+    """表外日期无节假日数据：不抛异常，退回星期规则。
+
+    用表外**普通工作日**（2027-03-10 周三）做降级断言：新版 lunar-python 会
+    对表外的固定日期/历法法定节假按规则计算（2027-01-01 已是「元旦节」→ 全天
+    idle），旧版一律 None——旧断言里 2027-01-01 判 peak 会随 lunar-python
+    版本翻转。普通工作日两种版本都无数据，星期规则降级语义才是要锁的东西。
+    """
+    # 2027-03-10 是周三，表外普通工作日按工作日高峰判
+    assert balance.deepseek_pricing_tier(_bj(10, day=10, month=3, year=2027)) == "peak"
+    assert balance.deepseek_pricing_tier(_bj(13, day=10, month=3, year=2027)) == "idle"
+    # 周末规则与表无关（2027-03-13 周六）
+    assert balance.deepseek_pricing_tier(_bj(10, day=13, month=3, year=2027)) == "idle"
+    # 切换扫描同样可用（不因表耗尽而抛错）：周三 10:00 的下一档是 12:00 转 idle
+    tier, when = balance._next_pricing_switch(_bj(10, day=10, month=3, year=2027))
     assert tier == "idle"
-    assert when.date() == date(2027, 1, 1)
+    assert when.date() == date(2027, 3, 10)
+    assert (when.hour, when.minute) == (12, 0)
 
 
 def test_chat_session_title_roundtrip():

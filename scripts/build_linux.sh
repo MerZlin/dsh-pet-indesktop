@@ -181,6 +181,10 @@ for variant in "${variant_list[@]}"; do
     "$PYTHON_BIN" scripts/verify_bundle_tts.py --app-dir "$DIST_DIR/$name"
     # 中文编码自检（issue #26）：字节码/资源/文件名被编码污染即中止。
     "$PYTHON_BIN" scripts/check_bundle_encoding.py --dir "$DIST_DIR/$name"
+    # ELF 符号版本地板（issue #432）：产物里任何 ELF 引用的 GLIBC/GLIBCXX 不得超
+    # 22.04 基线（2.35 / 3.4.30）。PyInstaller 会把构建机的系统库整份拷进包——
+    # 构建基线一旦上漂，这道门当场红，而不是等老发行版用户报 GLIBC not found。
+    "$PYTHON_BIN" scripts/check_elf_symbol_floor.py --app-dir "$DIST_DIR/$name"
     # Bridge 零依赖防线（2026-09 事故：缺 @deepseek-ai/dsh-llm 导致用户整个
     # dsh 插件树加载失败）：剥掉 --add-data 可能带入的 node_modules 残留，
     # 校验 dist 副本清单零依赖并跑 hermetic 冒烟（见 fix_bridge_bundle.py）。

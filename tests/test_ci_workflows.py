@@ -431,7 +431,10 @@ class TestBuildWorkflowStructure:
         assert "git rev-parse HEAD" in text
         assert "GITHUB_STEP_SUMMARY" in text
         assert "pip freeze" in text
-        assert "node --version" in text
+        # node 只在宿主 runner 上有：Linux 构建跑在 ubuntu:22.04 容器里（issue
+        # #432，见 TestLinuxBuildBaseline），容器无 node 且构建链不用它。
+        if name != "linux":
+            assert "node --version" in text
 
     @pytest.mark.parametrize("name", sorted(BUILDS))
     def test_frameseq_prepare_runs_once_before_build_with_cache(self, name):
@@ -476,6 +479,35 @@ class TestBuildWorkflowStructure:
         # `--uninstall-cleanup` 会动 hooks/registry，不许当启动冒烟用
         for path in (PR_TEST, BUILDS[name]):
             assert "--uninstall-cleanup" not in _text(path), path.name
+
+
+class TestLinuxBuildBaseline:
+    """Linux 构建基线守卫（issue #432）：22.04 容器 + uv Python，缺一即红。
+
+    事故复盘：`ubuntu-latest` 别名整体漂到 24.04（glibc 2.38）没人察觉，叠加
+    setup-python 的 CPython 工件也换到 24.04 基线重编——PyInstaller 把构建机
+    的系统库整份拷进包，Ubuntu 22.04 用户启动即 GLIBC not found，从第一个
+    Linux 包起如此。下面两条守卫防的就是"有人把容器行简化掉 / 换回
+    setup-python"这两个静默复发入口；产物地板本身由
+    scripts/check_elf_symbol_floor.py 在 build_linux.sh 里逐变体硬门
+    （接线由 tests/test_elf_symbol_floor.py 守）。
+    """
+
+    def test_linux_job_pins_2204_container(self):
+        job = _block(_text(BUILDS["linux"]), "build-linux:")
+        assert "container: ubuntu:22.04" in _without_comments(job), (
+            "Linux 构建必须钉在 ubuntu:22.04 容器上（issue #432 的发布基线）；"
+            "拿掉容器 = 基线跟着会漂移/退役的托管镜像走，产物地板立刻失控"
+        )
+
+    def test_linux_build_uses_uv_python_not_setup_python(self):
+        body = _without_comments(_text(BUILDS["linux"]))
+        assert "setup-python" not in body, (
+            "setup-python 的 CPython 工件已换到 24.04 基线（libpython 要求 "
+            "GLIBC_2.38），在 22.04 容器里连启动都过不了（issue #432）"
+        )
+        assert "uv python install 3.11" in body
+        assert "uv pip install" in body and "requirements.txt" in body
 
 
 # ------------------------------------------------- 产物上传 / Release 事件边界

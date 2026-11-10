@@ -145,6 +145,7 @@
 
 ## PR 报告存档
 
+- [Linux 发布包 glibc 基线钉回 22.04（2026-11-10）](PR-REPORT-LINUX-GLIBC-FLOOR-2026-11-10.md)：issue #432 根因 = 构建基线随 `ubuntu-latest` 别名漂到 24.04（PyInstaller 把构建机系统库整份拷进包）+ setup-python 的 CPython 工件换 24.04 基线重编——**此前所有 Linux 包在 22.04 上从未启动过**。修复 = `container: ubuntu:22.04` + uv CPython 3.11 + `scripts/check_elf_symbol_floor.py` 出包硬门（v4.4.0 旧包实测点名 42 个 GLIBC_2.38 超标文件，修复产物 356 ELF 最高 2.35/3.4.30，本机 22.04 实测启动）；同批修 Fcitx 插件脚本三处可维护性坑（overlay 宏断层/诊断被 set -e 吞/nm-grep SIGPIPE 假阳性）与 3 例 main 既有红（lunar-python 新版表外规则 ×2 + 记忆 load 绕过注入时钟 ×1）。改 Linux 构建 workflow、`build_pyside6_fcitx_plugin.sh`、ELF 门禁地板、或再遇「老发行版 GLIBC not found」「容器 checkout 不留 .git」「插件编译错误被 cannot find *.o 掩盖」时必读。**先例**：① Linux 产物地板 = 构建机地板，动 runner/容器/Python 来源前先想这条；② 别用会漂移/会退役的镜像别名承载发布基线；③ `grep -q` 早退 + `pipefail` 是假阳性温床，命中判定用整量捕获。
 - [跨屏过缝通行与落点吸附（2026-10-22）](PR-REPORT-CROSS-SCREEN-CORRIDOR-2026-10-22.md)：跨屏移动语义从 band 收窄改为「通行域=并集（含空洞）、静止域=各屏、四处收口吸附」，含侧墙低速截止、两轮 k3 盲审记录与先红后绿证据；改跨屏拖拽/抛掷物理、写 `_clamp_rects` 多矩形域、动 `snap_to_nearest_screen` 或排查「宠物停在看不见的地方」时必读。**先例**：① 语义改动要逐个收口点查吸附（落地/原地放下/落岛/弹弓取消，漏一个就是把宠钉死在空洞）；② `__init__` 里 set_pos 先于字段初始化，钳制条件必须 getattr 兜底；③ 覆盖判定用并集（QRegion）而非中心点，否则半身悬空漏判。
 - [macOS 多屏与 Dock 修复（2026-10-21）](PR-REPORT-MACOS-DESKTOP-2026-10-21.md)：Mac 双屏每屏一窗、设置进程启动即 Accessory，含用户副屏可见及单 Dock 图标确认、75 秒焦点观察、构建安装与测试证据；改 Mac 拓扑或 Dock 启动策略时查阅；多个 Spaces 的后续修复见下一项。
 - [macOS 多屏 Spaces 可见性（2026-10-21）](PR-REPORT-MACOS-SPACES-2026-10-21.md)：合成窗加入所有 Spaces，并在窗口重建后重放；包含原生策略读回、构建安装与用户跨屏/切换桌面验收；修改 Mac 合成窗 Spaces 策略或排查切换桌面后宠物消失时查阅。

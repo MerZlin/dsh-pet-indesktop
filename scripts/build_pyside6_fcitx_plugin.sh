@@ -49,33 +49,78 @@ for header in qplatformcursor.h qplatforminputcontext.h qplatforminputcontextplu
     cp "$QTBASE_SOURCE/src/gui/kernel/$header" "$HEADER_OVERLAY/$header"
 done
 
+# 兼容宏：overlay 的 6.11 头里用了 6.8+ 才有的版本化移除宏
+# QT_GUI_REMOVED_SINCE（如 qwindowsysteminterface.h 的 #if QT_GUI_REMOVED_SINCE(6, 8)），
+# 该宏只在构建好的 Qt 里定义、源码头不带；老系统 Qt dev（如 jammy 6.2）没有它，
+# 预处理器会直接报 missing binary operator。按目标 ABI（PySide6 的 Qt）语义定义为 0
+# （被移除的旧重载不再声明），并用 #ifndef 包住以免在有定义的环境里打架。
+# 不走 -D 是因为带括号的宏定义过 CMake→make→sh 链会被未加引号的括号炸掉。
+COMPAT_HEADER="$WORK_DIR/qt-overlay-compat.h"
+cat > "$COMPAT_HEADER" <<'EOF'
+/* 构建 PySide6 Fcitx 插件时的 overlay 头兼容宏（jammy Qt 6.2 dev + 6.11 overlay）。 */
+#ifndef QT_GUI_REMOVED_SINCE
+#define QT_GUI_REMOVED_SINCE(major, minor) 0
+#endif
+EOF
+
 cmake -S "$FCITX_SOURCE" -B "$BUILD_DIR" \
     -DBUILD_ONLY_PLUGIN=ON \
     -DENABLE_QT4=OFF \
     -DENABLE_QT5=OFF \
     -DENABLE_QT6=ON \
     -DENABLE_QT6_WAYLAND_WORKAROUND=OFF \
-    "-DCMAKE_CXX_FLAGS=-I$WORK_DIR/header-overlay"
+    "-DCMAKE_CXX_FLAGS=-I$WORK_DIR/header-overlay -include $COMPAT_HEADER"
 
 # CMake 用系统 Qt6 头文件完成目标配置；先编译对象，最终链接改为 PySide6 自带 Qt 运行库。
+# 注意：cmake 自己的链接步（链系统 Qt）可以红——overlay 头是按 PySide6 的 Qt 版本取的，
+# 引用的符号（如带时间戳的 handleExtendedKeyEvent）在老系统 Qt 里不存在，链接失败是常态；
+# 对象文件是否齐全才是「编译是否成功」的判据，以 link.txt 列举的对象清单为准。
+# 编译失败必须当场摊开 compile.log：部分源文件失败时对象目录仍有别的 .o，
+# 手动链接只会报「cannot find *.o」而真正的编译错误永远不可见。
 set +e
 cmake --build "$BUILD_DIR" --target fcitx5platforminputcontextplugin-qt6 -j2 >"$WORK_DIR/compile.log" 2>&1
+BUILD_RC=$?
 set -e
 LINK_FILE="$BUILD_DIR/qt6/platforminputcontext/CMakeFiles/fcitx5platforminputcontextplugin-qt6.dir/link.txt"
 if [[ ! -f "$LINK_FILE" ]]; then
     cat "$WORK_DIR/compile.log" >&2
     exit 1
 fi
+MISSING_OBJ=0
+while read -r obj; do
+    if [[ ! -f "$BUILD_DIR/qt6/platforminputcontext/$obj" ]]; then
+        MISSING_OBJ=1
+        echo "缺少对象文件：$obj" >&2
+    fi
+done < <(grep -oE '[^ ]+\.o\b' "$LINK_FILE" | sort -u)
+if [[ $MISSING_OBJ -eq 1 ]]; then
+    echo "对象编译失败（cmake --build 退出码 $BUILD_RC），compile.log 末尾：" >&2
+    tail -80 "$WORK_DIR/compile.log" >&2
+    exit 1
+fi
 perl -pi -e "s#/usr/lib/[^ ]*/libQt6Widgets\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Widgets.so.6#g; s#/usr/lib/[^ ]*/libQt6Gui\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Gui.so.6#g; s#/usr/lib/[^ ]*/libQt6DBus\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6DBus.so.6#g; s#/usr/lib/[^ ]*/libQt6Core\\.so[^ ]*#$PYSIDE_QT_LIB/libQt6Core.so.6#g" "$LINK_FILE"
-(
+MANUAL_LINK_LOG="$WORK_DIR/manual-link.log"
+if ! (
     cd "$BUILD_DIR/qt6/platforminputcontext"
-    /bin/sh "$LINK_FILE"
-)
+    /bin/sh "$LINK_FILE" 2>"$MANUAL_LINK_LOG"
+); then
+    echo "手动链接（改写为 PySide6 Qt）失败，末尾输出：" >&2
+    tail -30 "$MANUAL_LINK_LOG" >&2 2>/dev/null || true
+fi
 
 # 构建产物必须存在且引用 PySide6 Qt 版本的扩展按键接口，避免回退到系统 Qt 6.4 ABI。
 BUILT_PLUGIN="$BUILD_DIR/qt6/platforminputcontext/libfcitx5platforminputcontextplugin.so"
-if [[ ! -f "$BUILT_PLUGIN" ]] || ! nm -D --demangle "$BUILT_PLUGIN" | grep -q 'handleExtendedKeyEvent'; then
-    echo "Fcitx5 Qt6 插件构建不完整。" >&2
+NM_HIT="$(nm -D --demangle "$BUILT_PLUGIN" 2>&1 | grep 'handleExtendedKeyEvent' || true)"
+if [[ ! -f "$BUILT_PLUGIN" ]] || [[ -z "$NM_HIT" ]]; then
+    echo "Fcitx5 Qt6 插件构建不完整（cmake --build 退出码 $BUILD_RC）。诊断信息：" >&2
+    echo "---- 产物存在性：$([[ -f "$BUILT_PLUGIN" ]] && ls -la "$BUILT_PLUGIN" || echo "缺失：$BUILT_PLUGIN")" >&2
+    echo "---- nm 结果：${NM_HIT:-（无 handleExtendedKeyEvent 符号）}" >&2
+    echo "---- 手动链接输出（$MANUAL_LINK_LOG）：" >&2
+    cat "$MANUAL_LINK_LOG" >&2 2>/dev/null || echo "(无输出)" >&2
+    echo "---- link.txt 前 3 行：" >&2
+    head -3 "$LINK_FILE" >&2 2>/dev/null || true
+    echo "---- compile.log 末尾 80 行：" >&2
+    tail -80 "$WORK_DIR/compile.log" >&2 2>/dev/null || true
     exit 1
 fi
 mkdir -p "$(dirname "$OUTPUT_PLUGIN")"
