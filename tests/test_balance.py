@@ -214,8 +214,8 @@ def test_statutory_holiday_name_reports_free_days_only():
     assert statutory_holiday_name(date(2026, 2, 16)) == "春节"
     # 调休补班的周六（2026-10-10）是上班日，不属于放假日
     assert statutory_holiday_name(date(2026, 10, 10)) is None
-    # 内嵌安排表之外（2026-10-11 起）降级为 None = 「未知」，不是「确认上班」
-    assert statutory_holiday_name(date(2027, 1, 1)) is None
+    # 用数据表开始前的历史日期验证未知值，避免未来年份随依赖更新变成有数据。
+    assert statutory_holiday_name(date(1971, 1, 1)) is None
 
 
 def test_statutory_holidays_are_idle_all_day():
@@ -276,16 +276,21 @@ def test_format_switch_time_same_iso_week_uses_bare_weekday():
 
 
 def test_pricing_degrades_without_holiday_calendar_data():
-    """2027 起 HolidayUtil 无内嵌数据：不抛异常，退回星期规则。"""
-    # 2027-01-01 是周五，表外日期按工作日高峰判
-    assert balance.deepseek_pricing_tier(_bj(10, day=1, month=1, year=2027)) == "peak"
-    assert balance.deepseek_pricing_tier(_bj(13, day=1, month=1, year=2027)) == "idle"
+    """真实日历表外的日期不抛异常，退回星期规则，不桩掉日历或计价逻辑。"""
+    from pet.festival.calendar import statutory_holiday_name
+
+    # 1971-01-01 是周五，处于内嵌安排表开始前，不受今后新增年份影响。
+    friday = _bj(10, day=1, month=1, year=1971)
+    assert friday.weekday() == 4
+    assert statutory_holiday_name(friday.date()) is None
+    assert balance.deepseek_pricing_tier(friday) == "peak"
+    assert balance.deepseek_pricing_tier(friday.replace(hour=13)) == "idle"
     # 周末规则与表无关
-    assert balance.deepseek_pricing_tier(_bj(10, day=2, month=1, year=2027)) == "idle"
+    assert balance.deepseek_pricing_tier(friday + timedelta(days=1)) == "idle"
     # 切换扫描同样可用（不因表耗尽而抛错）
-    tier, when = balance._next_pricing_switch(_bj(10, day=1, month=1, year=2027))
+    tier, when = balance._next_pricing_switch(friday)
     assert tier == "idle"
-    assert when.date() == date(2027, 1, 1)
+    assert when == friday.replace(hour=12)
 
 
 def test_chat_session_title_roundtrip():
