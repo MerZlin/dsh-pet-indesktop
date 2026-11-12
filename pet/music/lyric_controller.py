@@ -10,7 +10,7 @@
 
 **进度有两级来源**（实机差异，详见 ``now_playing``）：
 - 播放器上报进度（QQ 音乐）→ 直接用真实 position，暂停/拖进度条都能跟随。
-- 播放器不上报（网易云、酷狗）→ 以"观察到切歌的时刻"为基准本地累加。
+- 网易云支持的原生构建 → 只读时钟补充；其他无进度来源按切歌时刻本地累加。
 
 **不是所有会话都是歌**：实测浏览器把网页视频也上报成音乐类型，所以
 ``now_playing`` 按会话类型与来源做否决（明确的视频、以及关掉开关后的浏览器
@@ -36,7 +36,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from . import lyric as music_lyric, now_playing, title as music_title
+from . import lyric as music_lyric, netease_position, now_playing, title as music_title
 from .. import window_alerts
 
 log = logging.getLogger(__name__)
@@ -120,8 +120,8 @@ class LyricTracker:
         self._anchor_pos: float = 0.0          # 基准处的播放位置
         self._paused: bool = False
         self._paused_pos: float | None = None   # 暂停时冻结的位置
-        # 本曲是否见过播放器上报的真实进度。见过就说明位置可信，手动对齐
-        # 必须让路（见 reanchor / MusicLyricController.align_available）。
+        # 最近一次播放采样是否提供真实进度。读源失效时恢复手动对齐，
+        # 本地显示时钟的插值调用不能改变这个来源判定。
         # 注意"估算位置不算真值"：网易云给的估算值不算见过（见 load 的 reported）。
         self._reported_position: bool = False
 
@@ -180,6 +180,12 @@ class LyricTracker:
             self._anchor_pos = position
 
     # ------------------------------------------------------------ 位置
+
+    def observe_position(self, now: float, reported: float | None) -> None:
+        """接收一次真实采样；缺失值释放手动对齐，保留最后的计时基准。"""
+        self._reported_position = reported is not None
+        if reported is not None:
+            self.position(now, reported=reported)
 
     def position(self, now: float, *, reported: float | None = None) -> float | None:
         """当前位置（秒）。``reported`` 为播放器上报值，有则以它为准。"""
@@ -716,31 +722,37 @@ class MusicLyricController(QObject):
         刻意不每拍新建线程：winrt 会按线程初始化 COM apartment，每秒新建一个
         线程等于每秒多一个 apartment，正是 pet/music_detect.py 记录过的
         「句柄累积可能导致崩溃」（那里为此只初始化一次 COM 对象）。
-        常驻线程只初始化一次，且即使 WinRT 调用卡住也只影响本线程。
+        常驻线程只初始化一次；原生补充读取也在此执行并随线程退出释放。
+        WinRT 的原生调用仍可能持有 GIL，不能把后台线程视作进程隔离。
 
         **令牌在开始采样前读走**（不是回调时再读）：慢查询期间主线程可能已经
         复位并派发下一拍，读晚了就会把这一拍的结果贴上新令牌——那正是"旧结果
         被当本代"的根因。读一次不清零：清零是读改写，会与紧随其后的新派发抢。
         """
-        while not self._sample_stop.is_set():
-            self._sample_wake.wait()
-            self._sample_wake.clear()
-            if self._sample_stop.is_set():
-                break
-            token = self._pending_token
-            try:
-                playback = now_playing.get_now_playing(
-                    self._tracked_app_id,
-                    allow_browser=self._browser_media_enabled(),
-                    allow_foobar=self._foobar_lyrics_enabled(),
-                    foobar_title_format=self._foobar_title_format(),
-                )
-            except Exception:
-                playback = None
-            try:
-                self._playback_ready.emit(playback, token)
-            except RuntimeError:
-                break  # 对象已销毁
+        native_position = netease_position.NetEasePositionSource()
+        try:
+            while not self._sample_stop.is_set():
+                self._sample_wake.wait()
+                self._sample_wake.clear()
+                if self._sample_stop.is_set():
+                    break
+                token = self._pending_token
+                try:
+                    playback = now_playing.get_now_playing(
+                        self._tracked_app_id,
+                        allow_browser=self._browser_media_enabled(),
+                        allow_foobar=self._foobar_lyrics_enabled(),
+                        foobar_title_format=self._foobar_title_format(),
+                    )
+                    playback = native_position.enrich(playback)
+                except Exception:
+                    playback = None
+                try:
+                    self._playback_ready.emit(playback, token)
+                except RuntimeError:
+                    break  # 对象已销毁
+        finally:
+            native_position.close()
 
     def _start_sample_thread(self) -> None:
         """确保有一条在跑的采样线程（幂等）。
@@ -803,6 +815,9 @@ class MusicLyricController(QObject):
         app_id = str(getattr(playback, "app_id", "") or "")
         if not now_playing.is_foobar_source(app_id):
             self._tracked_app_id = app_id
+
+        if key == self._current_key and self._tracker.has_lyrics:
+            self._tracker.observe_position(now, playback.position)
 
         if not track.playing:
             # 暂停：只冻结进度，**不要** reset——否则恢复播放时同一首歌会被

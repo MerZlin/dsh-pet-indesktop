@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -125,7 +127,8 @@ def test_load_grouped_is_four_groups_and_newest_first(tmp_path):
             NOW + timedelta(minutes=4),
         ]
     )
-    mem = ChatMemory(tmp_path / "memory.json", clock=lambda: next(ticks))
+    mem = ChatMemory(tmp_path / "memory.json",
+                     clock=lambda: next(ticks, NOW + timedelta(minutes=4)))
     mem.add("旧事实", layer="fact")
     mem.add("新事实", layer="fact")
     mem.add("偏好", layer="user")
@@ -675,6 +678,26 @@ def test_add_accepts_full_remember_command_text(tmp_path):
     assert entry["layer"] == "user"
 
 
+@pytest.mark.parametrize("start", [
+    datetime(2000, 1, 1, tzinfo=timezone.utc),
+    datetime(2099, 1, 1, tzinfo=timezone.utc),
+])
+def test_load_uses_memory_clock_for_topic_expiry_without_writing(tmp_path, start):
+    """读、写与归档采用同一实例时钟，不依赖运行测试当天的系统日期。"""
+    moment = start
+    path = tmp_path / "memory.json"
+    mem = ChatMemory(path, clock=lambda: moment)
+    entry, _ = mem.add("记住话题：阅读中的项目")
+    saved = path.read_bytes()
+
+    loaded = mem.load()[0]
+    assert loaded["id"] == entry["id"]
+    assert loaded.get("archived") is not True
+    moment += timedelta(days=15)
+    assert mem.load()[0]["archived"] is True
+    assert path.read_bytes() == saved
+
+
 def test_manual_pin_remember_topic_unarchives(tmp_path):
     """D：手动钉「记住话题：」是允许解除归档的入口（自动来源不允许）。"""
     path = tmp_path / "memory.json"
@@ -830,27 +853,44 @@ def test_build_messages_without_payload_is_byte_identical():
 
 
 # ---------------------------------------------------------------- v2b C：异步命中写盘
-def test_topic_hit_build_messages_fast_and_persists_async(tmp_path):
-    """C：GUI 线程构建 <5ms；命中 last_hit_at 最终由 daemon 线程落盘。"""
+def test_topic_hit_build_messages_fast_and_persists_async(tmp_path, monkeypatch):
+    """构建在后台 fsync 被阻塞时已返回；放行后真实命中时间落盘。"""
     path = tmp_path / "memory.json"
-    mem = ChatMemory(path)
+    moment = NOW
+    mem = ChatMemory(path, clock=lambda: moment)
     topic, _ = mem.add("那个 Bug", layer="topic")
     payload = memory_payload(mem, True)
     builder = PromptBuilder()
-    now = datetime(2026, 10, 21, 12, 0).astimezone()
+    moment += timedelta(minutes=1)
+    write_started = threading.Event()
+    release_write = threading.Event()
+    wait_expired = threading.Event()
+    caller = threading.get_ident()
+    real_fsync = os.fsync
 
-    started = time.perf_counter()
-    messages = builder.build_messages(
-        _settings(), "cat", _history(), "那个 Bug 怎么样了",
-        now=now, memory_payload=payload)
-    elapsed = time.perf_counter() - started
-    assert "那个 Bug" in messages[0]["content"]
-    assert elapsed < 0.005, f"GUI 线程构建耗时 {elapsed * 1000:.2f}ms，超过 5ms"
+    def blocked_fsync(fd):
+        assert threading.get_ident() != caller, "前台构建不得同步写盘"
+        write_started.set()
+        if not release_write.wait(10.0):
+            wait_expired.set()
+        return real_fsync(fd)
 
-    assert mem.flush_hits(5.0) is True
+    monkeypatch.setattr(os, "fsync", blocked_fsync)
+    try:
+        messages = builder.build_messages(
+            _settings(), "cat", _history(), "那个 Bug 怎么样了",
+            now=moment, memory_payload=payload)
+        assert "那个 Bug" in messages[0]["content"]
+        assert write_started.wait(10.0)
+        assert not wait_expired.is_set(), "前台构建等待了后台文件同步"
+        assert not release_write.is_set()
+    finally:
+        release_write.set()
+        assert mem.flush_hits(10.0) is True
     raw = json.loads(path.read_text(encoding="utf-8"))
     persisted = next(e for e in raw["entries"] if e["id"] == topic["id"])
-    assert datetime.fromisoformat(persisted["last_hit_at"]) >= datetime.fromisoformat(
+    assert datetime.fromisoformat(persisted["last_hit_at"]) == moment
+    assert datetime.fromisoformat(persisted["last_hit_at"]) > datetime.fromisoformat(
         persisted["created_at"])
 
 
