@@ -337,3 +337,56 @@ exit=0
 4. **QQ音乐 / 酷狗 Mac 版**：本机未安装，包名与 bundle id（`com.tencent.QQMusicMac` / `com.kugou.mac.Music`）
    仍未在真机复核。
 5. 助手进程常驻内存未采样（§四第 4 条仍是空缺）。
+
+## 十、第三轮：真 Mac 全量暴露的 6 条失败与修复（2026-11-13）
+
+首轮全量是在 Linux 容器里跑的（§六），darwin 分支在那里不会被走到。推送前第一次在 **macOS 主机**上跑
+全量（macOS 27.2 / arm64 / CPython 3.13.18，`python scripts/ci_shards.py` 四分片），本分支比基线多出
+**6 条失败**——同一台机器、同一解释器下，不含本 PR 的分支这 6 条全过。上游 CI 有 `macos-latest` 任务，
+不修的话那一格会红。
+
+### 失败与根因
+
+| # | 用例 | 现象 | 根因 |
+|---|---|---|---|
+| 1–3 | `test_now_playing_session_probe.py`：`test_os_request_happens_on_probe_thread_not_the_caller`、`test_probe_survives_sampling_errors_and_still_exits`、`test_gate_uses_probe_facts_and_takes_effect_without_resampling` | 假 WinRT 一次都没被问到，探针「没有采样」 | 这些是 Windows SMTC 采样路径的线程 / 超时契约用例，靠 `_import_winrt` 打桩。本 PR 新增的 `_read_session_facts` 在 darwin 上改读 MediaRemote，mac 主机上桩被绕过，还会真的起 `osascript` 助手 |
+| 4 | `test_menu_layout.py::test_new_player_entries_click_routes_its_own_key_through_the_shared_worker` | `played=['']`，期望 `['kugou.exe']` | 用例用 `D:/players/kugou.exe` 假路径、断言 exe 名；本 PR 新增的 `music_players.session_key` 在 darwin 上取 bundle id，对非 `.app` 路径是空串 |
+| 5 | `test_music_player_cache.py::test_launch_player_resolves_in_worker_thread_not_calling_thread` | `'' == 'cloudmusic.exe'` | 同 #4 |
+| 6 | `test_settings_copy_lint.py::test_no_jargon_outside_advanced_groups` | `music_lyric: ['QQ']` | mac 口径的「显示歌词」说明举例写了「QQ音乐」，`QQ` 被缩写判据命中；这段文案只在 darwin 渲染，Windows / Linux 上 lint 看不到 |
+
+#1–#5 的产品行为是对的（mac 路径另有 `test_now_playing_mac.py` / `test_music_launch_mac.py` 覆盖），错在既有用例
+没有声明自己守的是 Windows 口径；#6 是文案问题。
+
+### 修改文件说明（本轮）
+
+| 文件 | 增删 | 改动与原因 |
+|---|---|---|
+| `tests/test_now_playing_session_probe.py` | +8 / −1 | 假 WinRT 桩 `_install` 里把 `sys.platform` 钉成 `win32`：本文件守的是 Windows 采样路径。该路径上的平台分支只有 `_firefox_app_ids`（非 Windows 主机上 `import winreg` 失败即返回空集，与不钉时结果相同） |
+| `tests/test_menu_layout.py` | +7 | 菜单建完之后、触发点击之前钉 `win32`（建菜单仍按本机平台）；断言的会话身份是 exe 名 |
+| `tests/test_music_player_cache.py` | +3 | 同上，沿用同文件既有的 `monkeypatch.setattr(sys, "platform", "win32")` 写法 |
+| `pet/music/settings.py` | +3 / −1 | mac 口径「显示歌词」说明的播放器举例去掉「QQ音乐」（「等」已涵盖），并留注释说明原因。不走 `_ROW_WHITELIST`：`music_lyric` 行三个平台都有，而 `QQ` 只在 mac 口径里，登记后防腐烂用例会在 Windows / Linux 判它失效 |
+| `tests/test_settings_copy_lint.py` | +23 | 新增 `test_mac_music_hints_are_jargon_free_on_every_host`：强制 darwin 直接取「显示歌词」「音乐自动唱歌」两段说明过同一套判据，让三端 CI 都能拦下这类只在 mac 渲染的文案 |
+
+`docs/screenshots/mac-music-2026-11-08/page_darwin_lyrics.png` 是改文案之前截的，图里的举例比现在多「QQ音乐、」
+四个字，未重截。
+
+### 测试与验证（本轮，macOS 主机）
+
+| 门 | 命令 | 结果 |
+|---|---|---|
+| 先红 | 修复前 `python scripts/ci_shards.py` | **9001 passed, 82 skipped, 9 failed**（上表 6 条 + 基线既有 3 条） |
+| 先红（新用例） | 改文案前 `pytest tests/test_settings_copy_lint.py` | 2 failed：新用例 `mac 口径的「显示歌词」说明出现黑话：['QQ']` + 上表 #6 |
+| 后绿（受影响 9 个文件） | `pytest -q tests/test_settings_copy_lint.py tests/test_now_playing_session_probe.py tests/test_music_player_cache.py tests/test_menu_layout.py tests/test_music_player_settings.py` + 四个 mac 新文件 | **295 passed** |
+| 静态检查 | `ruff check pet/ tests/ scripts/probe_mac_now_playing.py`；`git diff --check` | All checks passed |
+| 全量 | `python scripts/ci_shards.py`（四片合计 644 s） | **9008 passed, 82 skipped, 3 failed** |
+| 满载 3 遍 | 12 个忙循环占满 12 核，同时跑四个 mac 新文件 + `test_now_playing_session_probe.py` + `test_music_player_cache.py` + `test_settings_copy_lint.py` ×3 | 3 次均 **171 passed**（各约 6.3 s） |
+
+**剩下的 3 条失败是基线既有的**：`test_balance.py` ×2、`test_memory_recall.py::test_manual_pin_remember_topic_unarchives`，
+在未改动的上游 `main`（`34d810b`）独立 worktree 里单独复跑同样失败（即 §六登记的 6 条里与字体度量无关的那 3 条；
+另外 3 条字体度量相关的在本机不失败）。
+
+**如实登记的一次挂起**：修复后那轮全量里，第 3 片的 pytest 进程在 2370 条全部通过、打印完汇总之后**没有退出**，
+以约 95% CPU 自旋了两个多小时。`sample` 取样显示主线程在 `exit()` 的析构阶段：
+`onnxruntime::OneDsTelemetry::Shutdown → LogManagerImpl::FlushAndTeardown → TransmissionPolicyManager::handleStop`
+循环 `cthread_yield`。手动结束该进程后第 4 片照常跑完。修复前那轮的第 3 片正常退出，这次挂起只出现一次、
+未复现；本 PR 不引用 onnxruntime，成因没有进一步排查。

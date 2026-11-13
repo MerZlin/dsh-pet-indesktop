@@ -172,6 +172,29 @@ def test_abbrev_criteria_lets_product_names_through_but_keeps_chinese_adjacency(
     assert _ABBREV.findall("(IP)") == ["IP"]
 
 
+def test_mac_music_hints_are_jargon_free_on_every_host(monkeypatch):
+    """mac 口径的「显示歌词」「音乐自动唱歌」说明，在任何主机上都要过同一套判据。
+
+    回归背景：这两行的说明按 ``sys.platform`` 分口径（``pet/music/settings.py``），上面那条
+    整窗 lint 只看**本机平台**渲染出来的文案——mac 口径写了「QQ音乐」，``QQ`` 被缩写判据
+    命中，可 Windows / Linux 上根本渲染不到这段，本地与那两个平台全绿，只有 mac 红
+    （与上面 ``macOS`` 那次是同一类）。这里强制 darwin 直接取文案，让三端都能拦下。
+
+    为什么不走 ``_ROW_WHITELIST``：``music_lyric`` 行在三个平台上都存在，而 ``QQ`` 只出现在
+    mac 口径里；登记进白名单的话，防腐烂用例会在 Windows / Linux 上判它失效。
+    """
+    import sys
+
+    from pet.music import settings as settings_music
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    for name, text in (
+        ("显示歌词", settings_music.lyric_row_hint()),
+        ("音乐自动唱歌", settings_music.sing_row_hint()),
+    ):
+        assert _tokens(text) == frozenset(), f"mac 口径的「{name}」说明出现黑话：{sorted(_tokens(text))}"
+
+
 def test_whitelist_has_no_stale_entries(tmp_path, monkeypatch):
     """白名单不许腐烂：登记的行仍存在、登记的 token 仍真的命中。"""
     dialog = _dialog(tmp_path, monkeypatch)

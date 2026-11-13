@@ -120,8 +120,10 @@ def lyric_row_hint() -> str:
     )
     if sys.platform == "darwin":
         return (
+            # 举例里不写「QQ音乐」：``QQ`` 会被设置页文案 lint 的缩写判据命中（这行在主视线，
+            # 又不能走行级白名单——Windows / Linux 口径里没有它，会被判白名单失效）。「等」已涵盖。
             "在气泡里显示当前播放歌曲的歌词。读取的是系统「正在播放」：播放器（网易云音乐、"
-            "QQ音乐、酷狗、汽水音乐、Apple Music、Spotify 等）在控制中心里看得到它在播，这里"
+            "酷狗、汽水音乐、Apple Music、Spotify 等）在控制中心里看得到它在播，这里"
             "就读得到；控制中心里看不到的，这里也读不到。" + common
         )
     if sys.platform == "win32":

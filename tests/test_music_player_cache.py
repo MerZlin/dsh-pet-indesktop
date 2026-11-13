@@ -748,6 +748,9 @@ def test_launch_player_resolves_in_worker_thread_not_calling_thread(monkeypatch)
 
     monkeypatch.setattr(music_players, "find_player", fake_find)
     monkeypatch.setattr(now_playing, "play_session_for", fake_play)
+    # 断言的会话身份是 exe 名（Windows 口径）；mac 主机上 ``session_key`` 给的是 bundle id，
+    # 对 ``.exe`` 假路径是空串。mac 的启动路径见 tests/test_music_launch_mac.py。
+    monkeypatch.setattr(sys, "platform", "win32")
     pet = _QtPet()
     try:
         shared._launch_player_and_play("netease", pet)
