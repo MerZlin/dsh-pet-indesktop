@@ -266,7 +266,9 @@ def test_uninstall_cleanup_removes_hooks_despite_own_slot_residue(tmp_path, monk
 
     results = uninstall_cleanup.run_uninstall_cleanup(config)
 
-    assert results == {"autostart": True, "claude_hooks": True, "dsh_bridge": True}
+    # astrbot_bridge：本配置没记过 AstrBot 目录 = 从未安装，无事可做也算完成
+    assert results == {"autostart": True, "claude_hooks": True, "dsh_bridge": True,
+                       "astrbot_bridge": True}
     assert removed == ["autostart", "claude", "dsh"]
 
 

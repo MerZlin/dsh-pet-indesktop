@@ -663,6 +663,8 @@ class TestAgentLinkManager:
             "claude": False,
             "cursor": False,
             "opencode": False,
+            "astrbot": False,
+            "astrbot_root": "",
             "custom_agents": [],
             "sound_enabled": False,
             "sound_start_path": "builtin:agent-start",

@@ -718,7 +718,10 @@ class SpriteMenuFacade:
             self.cfg.set("agent_link", ag_data)
             self._save()
         if on:
-            self._bubble(f"已开启 {agent_key.upper()} 状态联动监听～", 4000)
+            notice = f"已开启 {agent_key.upper()} 状态联动监听～"
+            if manager is not None and hasattr(manager, "enable_notice"):
+                notice = manager.enable_notice(agent_key)
+            self._bubble(notice, 4000)
 
 
     # ---------------------------------------------------------------- 音乐（歌词）宿主

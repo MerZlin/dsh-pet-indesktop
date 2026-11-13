@@ -13,7 +13,8 @@ Agent 侧（写方）                          桌宠侧（读方）
 │ 插件 / hooks / 直读适配    │   追加写    │ ByteOffsetTailer 字节偏移增量 tail   │
 │ DSH 桥接插件 (Node)       │  ────────▶ │ （1.5s 轮询线程，不回放历史）        │
 │ Claude Code hooks 脚本    │  JSONL 文件 │   ↓ normalize_event_state 归一      │
-│ Cursor/OpenCode 直读适配  │            │   ↓ 六态词汇                        │
+│ AstrBot 桥接插件 (Python) │            │   ↓ 六态词汇                        │
+│ Cursor/OpenCode 直读适配  │            │                                    │
 └──────────────────────────┘            │ AgentLinkManager 状态机             │
                                         │   → 动画切换 / 气泡 / 音效           │
                                         └────────────────────────────────────┘
@@ -102,7 +103,7 @@ DSH 通道只有**一个读方**：`DshMonitor`（一个 `DirGlobTailer` + 一�
 4. **绝不阻塞宿主**：写事件失败时静默放弃——联动是锦上添花，不能影响 Agent 本体（参考 `integrations/dsh-pet-bridge/index.js` 的做法）。
 5. **隐私红线**：只写状态/事件元数据（状态、事件名、工具名），**不要**把代码内容、命令全文、文件内容、屏幕信息写进事件文件。
 
-## 3. 内置四种接入模式（现状分析）
+## 3. 内置五种接入模式（现状分析）
 
 | Agent | 模式 | 事件来源 | 是否写外部配置 |
 |---|---|---|---|
@@ -110,6 +111,14 @@ DSH 通道只有**一个读方**：`DshMonitor`（一个 `DirGlobTailer` + 一�
 | Claude Code | hooks 注入 | 向 `~/.claude/settings.json` 注入官方 hooks，落地脚本把事件写 `agent-events/claude.jsonl` | 注入/卸载 hooks（弹窗同意） |
 | Cursor | transcript 直读 | 直接 tail `~/.cursor/projects/**/agent-transcripts/*.jsonl`（官方转写文件，按 role/content 解析） | 否 |
 | OpenCode | 数据库直读 | 只读 `~/.local/share/opencode/opencode.db` 的 `event` 表（rowid 增量） | 否 |
+| AstrBot | 插件订阅 | 内置插件 `integrations/astrbot-pet-bridge/` 复制到 `<AstrBot data>/plugins/astrbot_plugin_dsh_pet_bridge/`，订阅 `on_llm_request` / `on_using_llm_tool` / `on_llm_tool_respond` / `on_llm_response` / `after_message_sent`，按在途回合折叠成六态，写 `<AstrBot data>/plugin_data/astrbot_plugin_dsh_pet_bridge/astrbot.jsonl`（见 §3.1） | 安装/卸载插件目录（弹窗同意；只动带 `.dsh-pet-bridge` 标记的目录） |
+
+### 3.1 AstrBot 通道要点
+
+- **事件文件放在 AstrBot 的 data 目录里**，不在桌宠配置目录：AstrBot 常以 Docker 部署，容器内看不到宿主机的桌宠目录，但 data 目录一定挂载在宿主机上——两种部署共用一条路径。插件按自身安装位置 `data/plugins/<插件>/main.py` 的上两级推出 data 目录；桌宠按用户选择的 data 目录推出同一路径（`AstrBotMonitor.events_file_for`）。
+- **开启流程**：右键菜单「Agent 联动 → AstrBot」→ 选择 AstrBot 目录（AstrBot 根目录或 data 目录，预填 `$ASTRBOT_ROOT` / `~/.astrbot` / `~/.local/share/astrbot` / `~/AstrBot` 的探测结果）→ 同意框列出插件目录与事件文件 → 复制安装 → **重启 AstrBot 或在 WebUI 插件页重载插件后生效**。选过的目录记在 `agent_link.astrbot_root`，关闭联动后保留，再开启免选。
+- **回合收尾**：以 `on_llm_response`（AstrBot 的 `on_agent_done`）为准——流式回复下 RespondStage 提前 return，`after_message_sent` 不触发，只作兜底（第三方 Agent 执行器、非流式报错）。流式回复 + LLM 报错这一条路径 AstrBot 4.29.4 没有任何收尾钩子，由插件的 180s 静默回收兜住。
+- **群聊频繁回复**：每次 LLM 回复都是一个回合，完成气泡受 `_DONE_COOLDOWN_S`（5s）节流。
 
 给新 Agent 选择接入模式的判断依据：
 
@@ -138,7 +147,7 @@ DSH 通道只有**一个读方**：`DshMonitor`（一个 `DirGlobTailer` + 一�
 
 | 字段 | 约束 |
 |---|---|
-| `key` | `^[a-z0-9][a-z0-9_-]{0,31}$`，不得与内置键（`dsh`/`claude`/`cursor`/`opencode`）重复，全局唯一 |
+| `key` | `^[a-z0-9][a-z0-9_-]{0,31}$`，不得与内置键（`dsh`/`claude`/`cursor`/`opencode`/`astrbot`）重复，全局唯一 |
 | `name` | 联动气泡/菜单显示名；留空时用 key |
 | `path` | 事件文件路径，支持 `~` 展开；文件不必预先存在（不存在时静默等待） |
 
@@ -160,9 +169,12 @@ printf '{"ts": %s, "state": "idle"}\n' "$(date +%s)" >> ~/.gemini/pet-events.jso
 |---|---|---|
 | 1 | `pet/config.py` `_default_agent_link_data()` | 新增默认开关键 |
 | 2 | `pet/config.py` `_clean_agent_link_data()` | 键列表加入新键 |
-| 3 | `pet/agent_link.py` `AgentLinkManager.__init__` | `monitors` 字典注册监视器实例 |
-| 4 | `pet/agent_link.py` `AgentLinkManager.AGENT_NAMES` | 显示名 |
+| 3 | `pet/agent_link/__init__.py` `AgentLinkManager.__init__` | `monitors` 字典注册监视器实例 |
+| 4 | `pet/agent_link/__init__.py` `AgentLinkManager.AGENT_NAMES` | 显示名 |
 | 5 | `pet/context_menus/shared.py` `add_agent_link_menu()` | 菜单条目 |
+| 6 | `pet/window_optional_services.py` `_agent_link_wanted()` | 懒创建判据的键列表 |
+| 7 | `pet/features.py` `agent_link.config_keys` | 模块配置键归属 |
+| 8 | `pet/uninstall_cleanup.py` | 若写了外部配置/插件：卸载清理步骤 |
 
 监视器实现上，走统一协议的只需继承 `BaseAgentMonitor`（参考 `CustomAgentMonitor`）；已有本地事件源的覆写 `_poll()`（参考 `CursorMonitor`/`OpenCodeMonitor`），把解析结果经 `state_changed`/`activity` 信号发出即可。
 
@@ -173,5 +185,5 @@ printf '{"ts": %s, "state": "idle"}\n' "$(date +%s)" >> ~/.gemini/pet-events.jso
 1. **默认全关**：所有 Agent 联动开关默认关闭，用户显式勾选才启动。
 2. **不访问外网**：联动链路只碰本地文件/本地数据库，以及本机回环（`127.0.0.1`）端口探活；任何一方不得向外网发起网络请求。
 3. **只存元数据**：事件文件只有状态/事件名/工具名/错误码/身份标识，绝不写截图、代码内容、命令全文、消息正文（DSH 桥接自 2026-10 起连截断后的正文/命令/参数指纹/结果摘要也不再落盘）。有意的例外：错误摘要（`errorMessage`，截断 300 字）与问题正文（`question/requested` 的 `questions`，agent 生成的待选问题）——前者是排障所必需，后者是气泡提示的内容本体。
-4. **写外部配置必须先弹窗**：任何向 Agent 配置（如 `~/.claude/settings.json`、dsh profiles）注入内容的操作，必须先经用户确认，且卸载时只清理带本桌宠标记的条目。
+4. **写外部配置必须先弹窗**：任何向 Agent 配置（如 `~/.claude/settings.json`、dsh profiles、AstrBot `data/plugins/`）注入内容的操作，必须先经用户确认，且卸载时只清理带本桌宠标记的条目。
 5. **自定义通道只读**：`custom_agents` 仅监听用户指定的文件，不创建目录、不写任何外部位置。

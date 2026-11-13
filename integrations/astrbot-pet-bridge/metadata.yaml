@@ -1,0 +1,6 @@
+name: astrbot_plugin_dsh_pet_bridge
+display_name: 桌宠联动桥接 (dsh-pet)
+desc: 把 AstrBot 的思考/工具调用/回复状态写到本地 JSONL 文件，供 dsh-pet 桌宠的「Agent 联动」读取。只写状态元数据，不写消息正文，不联网。
+version: v1.0.0
+author: dsh-pet-indesktop
+repo: https://github.com/imal1/dsh-pet-indesktop

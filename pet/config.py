@@ -262,6 +262,10 @@ def _default_agent_link_data() -> dict:
         "claude": False,
         "cursor": False,
         "opencode": False,
+        # AstrBot：开启时安装桥接插件；astrbot_root 记住用户选的 AstrBot data 目录
+        # （开启联动时经目录选择框写入，关闭联动保留，便于再次开启免选）
+        "astrbot": False,
+        "astrbot_root": "",
         # 自定义联动 Agent（协议见 docs/AGENT_LINK_PROTOCOL.md §4）：只读监听
         # 用户指定的事件文件，不写外部配置、无需授权弹窗，默认空
         "custom_agents": [],
@@ -301,7 +305,7 @@ def _clean_click_sound_pack(value: Any) -> dict:
 
 
 # 内置联动 Agent 键：custom_agents 的 key 不得与之重复
-_AGENT_LINK_BUILTIN_KEYS = ("dsh", "claude", "cursor", "opencode")
+_AGENT_LINK_BUILTIN_KEYS = ("dsh", "claude", "cursor", "opencode", "astrbot")
 # 自定义联动 Agent 条目上限（防配置文件被塞爆）
 _CUSTOM_AGENT_MAX = 8
 
@@ -367,6 +371,7 @@ def _clean_agent_link_data(raw: Any) -> dict:
         "claude",
         "cursor",
         "opencode",
+        "astrbot",
         "sound_enabled",
         "sound_start_enabled",
         "sound_done_enabled",
@@ -374,6 +379,8 @@ def _clean_agent_link_data(raw: Any) -> dict:
     ):
         if key in raw:
             result[key] = bool(raw[key])
+    if "astrbot_root" in raw:
+        result["astrbot_root"] = str(raw.get("astrbot_root") or "").strip()[:500]
     for key in ("sound_start_path", "sound_done_path", "sound_error_path"):
         if key in raw:
             val = str(raw[key] or "").strip()[:500]
