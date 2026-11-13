@@ -390,3 +390,23 @@ exit=0
 `onnxruntime::OneDsTelemetry::Shutdown → LogManagerImpl::FlushAndTeardown → TransmissionPolicyManager::handleStop`
 循环 `cthread_yield`。手动结束该进程后第 4 片照常跑完。修复前那轮的第 3 片正常退出，这次挂起只出现一次、
 未复现；本 PR 不引用 onnxruntime，成因没有进一步排查。
+
+## 十一、第四轮：Windows 主机上的 8 条失败（2026-11-14）
+
+在 fork 的 GitHub Actions（`windows-latest`，构建工作流的主套件门禁，run `43468659607`）上第一次把本分支放到
+**Windows 主机**跑全量：`8 failed, 9125 passed, 17 skipped`。8 条全在本 PR 新增的 mac 测试里，Linux 容器与 macOS
+主机上都看不到。
+
+| 用例 | 根因 |
+|---|---|
+| `test_mac_media.py` 中用到替身助手进程的 7 条（`test_reads_now_playing_through_a_persistent_helper` 等） | `mac_media` 的读循环用 `select.select` 等管道可读；Windows 的 `select` 只认套接字，替身助手的应答永远读不到 |
+| `test_music_launch_mac.py::test_open_mac_app_runs_launchservices_with_a_timeout` | 把包内二进制路径收回到 `.app` 用的是本机路径规则，Windows 主机上 POSIX 路径被按反斜杠处理 |
+
+这两处产品代码只在 `sys.platform == "darwin"` 时运行，所以修法是让这些用例在 Windows 主机上跳过，产品代码不动：
+
+| 文件 | 增删 | 改动 |
+|---|---|---|
+| `tests/test_mac_media.py` | +5 | `fake_helper` 夹具在 `win32` 上 `pytest.skip`（覆盖所有起替身助手的用例） |
+| `tests/test_music_launch_mac.py` | +5 | 该用例加 `skipif(sys.platform == "win32")`，补 `import sys` |
+
+验证：macOS 主机上这两个文件照常全过（连同报告纪律用例共 268 passed），ruff 通过；Windows 上的效果要等下一轮 CI 才能确认，本机无法验证。

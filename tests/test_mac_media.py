@@ -60,6 +60,11 @@ for raw in sys.stdin.buffer:
 @pytest.fixture
 def fake_helper(tmp_path, monkeypatch):
     """返回 ``use(mode, *args)``：把助手进程换成替身脚本；用例结束时关掉助手。"""
+    if sys.platform == "win32":
+        # 助手读取用 ``select`` 等管道可读（``mac_media`` 的读循环），Windows 的 select 只认
+        # 套接字——替身助手在 Windows 主机上永远读不到应答。这条读路径只在 macOS 上运行，
+        # 进程边界的契约由 Linux / macOS 两端 CI 覆盖。
+        pytest.skip("mac 助手的管道读取依赖 POSIX select，Windows 主机上跑不了")
     script = tmp_path / "fake_helper.py"
     script.write_text(_FAKE_HELPER, encoding="utf-8")
 

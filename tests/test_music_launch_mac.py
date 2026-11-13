@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import plistlib
+import sys
 import threading
 import time
 from pathlib import Path
@@ -151,6 +152,10 @@ def test_mac_launch_reports_when_open_fails(mac_launch):
     assert mac_launch["played"] == ["com.netease.163music"], "启动失败后不该再轮询"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="把包内路径收回到 .app 用的是本机路径规则；Windows 主机上 POSIX 路径会被按反斜杠处理",
+)
 def test_open_mac_app_runs_launchservices_with_a_timeout(monkeypatch):
     seen: list = []
 
