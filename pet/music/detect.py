@@ -13,6 +13,12 @@ artist/album/subtitle 全空，SMTC 里没有任何字段能把它与网页音�
 没有 SMTC 会话时维持旧行为（只看峰值）：游戏这类不上报会话的声音照常触发。
 判定结果由 ``now_playing`` 的常驻探针在非主线程产出，本模块只读缓存——主线程
 同步查 SMTC 实测会永久阻塞窗口（见 ``music_lyric_controller`` 采样线程说明）。
+
+**macOS**（2026-11）：没有 pycaw 这样的峰值表（读系统输出电平要「屏幕录制」授权
+或 Core Audio tap 授权，为了唱歌动画向用户要录屏权限不值），所以改以系统「正在播放」
+为准：有被接受的会话**正在播**才唱（``now_playing.song_session_playing``，同一个
+后台探针、同一套否决规则）。代价如实：不上报「正在播放」的声音（游戏、部分网页
+播放器）在 mac 上不会触发唱歌。
 """
 
 from __future__ import annotations
@@ -88,12 +94,16 @@ def _get_meter():
 
 
 def is_music_playing() -> bool:
-    """系统是否正在播放**音乐**（Windows；其他平台恒 False）。
+    """系统是否正在播放**音乐**（Windows / macOS；其他平台恒 False）。
 
-    两个条件同时成立才算：默认输出设备有声音，且当前 SMTC 会话没有被否决
+    Windows：两个条件同时成立才算——默认输出设备有声音，且当前 SMTC 会话没有被否决
     （见 :func:`session_vetoed`）。没有会话、或会话类型是音乐/未上报时，退化成
     只看峰值——即旧行为。
+
+    macOS：系统「正在播放」里有被接受的会话在播（见 :func:`_mac_music_playing`）。
     """
+    if sys.platform == 'darwin':
+        return _mac_music_playing()
     if sys.platform != 'win32':
         return False
     try:
@@ -106,3 +116,18 @@ def is_music_playing() -> bool:
         # 无 pycaw / 音频设备不可用 / COM 初始化失败时按“未播放”处理，不打扰用户
         return False
     return not session_vetoed()
+
+
+def _mac_music_playing() -> bool:
+    """macOS 的"在放歌"：探针缓存里有被接受、且正在播的会话。
+
+    与 Windows 端相同的主线程纪律——只读 ``now_playing`` 后台探针的缓存，**绝不在
+    这里读 MediaRemote**（那要起/等 osascript 助手）。还没有探针数据时按"没在放"
+    处理：mac 上没有峰值表兜底，放行就等于每次启动先唱一拍。
+    """
+    try:
+        from . import now_playing
+
+        return now_playing.song_session_playing(_browser_media_enabled) is True
+    except Exception:
+        return False

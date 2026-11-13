@@ -104,7 +104,14 @@ class _Manager:
 
 
 def _install(monkeypatch, *, sessions=None, mode="ok", records=None):
-    """装一个假 WinRT：记录「哪个线程发出了 OS 请求」/ 按 mode 制造异常或挂起。"""
+    """装一个假 WinRT：记录「哪个线程发出了 OS 请求」/ 按 mode 制造异常或挂起。
+
+    同时把平台钉成 ``win32``：本文件守的是 Windows SMTC 采样这条路径的线程 / 超时 / 退出
+    契约。macOS 主机上探针改读 MediaRemote（``_read_session_facts`` 的 darwin 分支），不钉
+    平台的话这里装的假 WinRT 根本不会被问到，还会真的去起 ``osascript`` 助手。mac 那条
+    路径的事实表由 ``tests/test_now_playing_mac.py`` 覆盖。
+    """
+    monkeypatch.setattr(now_playing.sys, "platform", "win32")
     sessions = [_Session()] if sessions is None else sessions
     records = [] if records is None else records
 

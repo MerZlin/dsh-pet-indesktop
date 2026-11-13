@@ -45,6 +45,7 @@ import time
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox, QPushButton
 
+from . import now_playing
 from . import players as music_players
 from ..settings_widgets import ResourcePathPicker, SettingRow
 
@@ -56,6 +57,8 @@ log = logging.getLogger("dsh-pet-standalone")
 #: 「只有网易云 / QQ音乐，没有酷狗 / 汽水」就是这个漂移。
 PLAYER_KEYS = music_players.player_keys()
 EXE_NAME_FILTER = "可执行文件 (*.exe);;所有文件 (*)"
+#: macOS 上播放器是 ``.app`` 应用包（一个目录）；原生选择框把应用包当文件选。
+APP_NAME_FILTER = "应用程序 (*.app);;所有文件 (*)"
 DETECT_POLL_MS = 300
 #: 单个播放器一次目录浅扫的预算（秒）。**总预算要按播放器数放大**：四个 key 的预热扫描
 #: 被 ``music_players._search_lock`` 串行化，多播放器串行可能超过单项预算——原先写死的
@@ -74,22 +77,71 @@ _ROW_KEY = {key: f"music_player_{key}" for key in PLAYER_KEYS}
 _DETECT_BUTTON_LABEL = "自动检测"
 
 
+def player_name_filter() -> str:
+    """选择器的文件过滤器：mac 上选 ``.app`` 应用包，其它平台选 ``.exe``。"""
+    return APP_NAME_FILTER if sys.platform == "darwin" else EXE_NAME_FILTER
+
+
 def _player_row_hint(label: str) -> str:
     """单个播放器路径行的说明（每个播放器同口径，只有名字不同）。"""
+    target = "指向 .app 应用" if sys.platform == "darwin" else "指向可执行文件"
     return (
-        f"{label}的安装位置（指向可执行文件）。留空 = 自动搜索常见安装目录；"
+        f"{label}的安装位置（{target}）。留空 = 自动搜索常见安装目录；"
         f"填了就以它为准（文件不存在时右键菜单会提示找不到，而不是偷偷回退）。"
         f"只影响右键菜单里的「打开{label}给主人放歌」；歌词显示走系统媒体会话，"
         f"与本路径无关。"
     )
 
 
-_DETECT_ROW_HINT = (
-    "在后台按常见目录名搜一遍（几个盘符 + 用户目录，最多三层），每次点击都会重新搜"
-    "一遍（上次没找到的也会再找），找到就填进上面四行、覆盖那里原有的内容；检测期间"
-    "你自己改过的行会保留、不会被覆盖（结果里会说明）。搜索在后台做，不会卡住设置页。"
-    "这些路径只影响右键菜单的启动入口，歌词显示走系统媒体会话，与本路径无关。"
-)
+def detect_row_hint() -> str:
+    """「自动检测播放器」行的说明：搜哪里按平台写实（mac 不是"几个盘符"）。"""
+    where = (
+        "「应用程序」文件夹，按包名和应用自己声明的标识认" if sys.platform == "darwin"
+        else "几个盘符 + 用户目录，最多三层"
+    )
+    return (
+        f"在后台按常见安装位置搜一遍（{where}），每次点击都会重新搜"
+        "一遍（上次没找到的也会再找），找到就填进上面四行、覆盖那里原有的内容；检测期间"
+        "你自己改过的行会保留、不会被覆盖（结果里会说明）。搜索在后台做，不会卡住设置页。"
+        "这些路径只影响右键菜单的启动入口，歌词显示走系统媒体会话，与本路径无关。"
+    )
+
+
+def lyric_row_hint() -> str:
+    """「显示歌词」行的说明：平台能力与播放器前提按平台写实。
+
+    Windows 读系统媒体控制（酷狗要在它自己的设置里打开「支持系统播放控件」）；macOS 读系统
+    「正在播放」（控制中心里能看到的那首）；Linux 没有对应实现，如实说不支持。
+    """
+    common = (
+        "歌词识别不依赖「音乐关联」里的路径——那里只影响右键「打开播放器」菜单。"
+        "播放器不上报播放进度时（如 Windows 版网易云音乐），歌词按开始时间估算——快进或"
+        "从中途开始播放后，用右键菜单「音乐 → 歌词对齐」校正。"
+    )
+    if sys.platform == "darwin":
+        return (
+            # 举例里不写「QQ音乐」：``QQ`` 会被设置页文案 lint 的缩写判据命中（这行在主视线，
+            # 又不能走行级白名单——Windows / Linux 口径里没有它，会被判白名单失效）。「等」已涵盖。
+            "在气泡里显示当前播放歌曲的歌词。读取的是系统「正在播放」：播放器（网易云音乐、"
+            "酷狗、汽水音乐、Apple Music、Spotify 等）在控制中心里看得到它在播，这里"
+            "就读得到；控制中心里看不到的，这里也读不到。" + common
+        )
+    if sys.platform == "win32":
+        return (
+            "在气泡里显示当前播放歌曲的歌词。需要播放器支持系统媒体控制（酷狗音乐需在其 "
+            "设置 → 常规设置 → 播放 里开启「支持系统播放控件」）。" + common
+        )
+    return "在气泡里显示当前播放歌曲的歌词。仅 Windows 与 macOS 可用（本平台暂不支持）。" + common
+
+
+def sing_row_hint() -> str:
+    """「音乐自动唱歌」行的说明：mac 上判据不是"有声音"而是"正在播放"，如实写明。"""
+    if sys.platform == "darwin":
+        return (
+            "系统「正在播放」里有歌在播时，自动播放唱歌动画。不上报「正在播放」的声音"
+            "（例如游戏）不会触发。"
+        )
+    return "检测到后台播放音乐时，自动播放唱歌动画。"
 
 
 def create_music_player_controls(dialog) -> None:
@@ -102,7 +154,7 @@ def create_music_player_controls(dialog) -> None:
         label = music_players.player_label(key)
         picker = ResourcePathPicker(
             str(configured.get(key, "") or ""),
-            name_filter=EXE_NAME_FILTER,
+            name_filter=player_name_filter(),
             dialog_title=f"选择{label}的程序",
             parent=dialog,
         )
@@ -135,7 +187,7 @@ def build_music_player_rows(dialog) -> list[SettingRow]:
         SettingRow(
             "music_player_detect",
             "自动检测播放器",
-            _DETECT_ROW_HINT,
+            detect_row_hint(),
             dialog.music_player_detect_btn,
         )
     )
@@ -143,16 +195,20 @@ def build_music_player_rows(dialog) -> list[SettingRow]:
 
 
 def browser_media_supported() -> bool:
-    """「浏览器媒体会话参与歌词」是否在本平台可用——系统媒体控制是 Windows 专属。"""
-    return sys.platform == "win32"
+    """「浏览器媒体会话参与歌词」是否在本平台可用——要有系统级媒体会话可读。
+
+    Windows（系统媒体控制）与 macOS（系统「正在播放」，2026-11 起）都有；判据只在
+    ``now_playing.media_session_supported`` 一处。
+    """
+    return now_playing.media_session_supported()
 
 
 def browser_media_rows(dialog) -> list[SettingRow]:
-    """「浏览器媒体会话参与歌词」设置行（**仅 Windows**）。
+    """「浏览器媒体会话参与歌词」设置行（**仅 Windows / macOS**）。
 
-    系统媒体控制是 Windows 专属能力：非 Windows 上这个开关既无效也不该出现
+    没有系统媒体会话的平台（Linux）上这个开关既无效也不该出现
     （SETTINGS-CHANGE-GATES §4「永久不支持的能力不创建控件」）。控件本体也只在
-    Windows 创建（``settings_pet_controls``），所以这里以「控件在不在」为准——
+    支持的平台创建（``settings_pet_controls``），所以这里以「控件在不在」为准——
     与 ``cursor_hidden_passthrough`` 的处置一致，不会出现"控件在、行不在"的
     游离开关（那会被孤儿开关测试拦下）。
 

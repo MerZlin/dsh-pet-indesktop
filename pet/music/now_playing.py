@@ -20,6 +20,15 @@
 ``app_id`` 是 :data:`foobar_playing.FOOBAR_APP_ID`，调用方据此不拿它覆盖 SMTC 的
 跟踪位。
 
+**macOS**（2026-11）：对应的系统设施是 MediaRemote（控制中心「正在播放」），读取与
+命令的实现在 ``pet/music/mac_media.py``；本模块的公开入口（``get_now_playing`` /
+``skip_track`` / ``toggle_play_pause`` / ``play_session_for`` / 会话探针）在 darwin
+上改走那一侧，产出**同一种** ``Playback`` 与会话事实表，否决规则（视频 / 浏览器开关）
+也是同一份实现——调用方（歌词控制器、唱歌门、右键菜单）不分平台。macOS 上
+``app_id`` 是应用的 bundle id（如 ``com.netease.163music``）。系统只暴露**一个**
+「正在播放」应用（没有 SMTC 那样的多会话列表），所以"粘住跟踪的会话"在 mac 上
+无事可做；foobar 窗口标题源是 Win32 专属，mac 上不问它。
+
 本模块只读系统信息，不发起任何网络请求，也不触碰音频流。
 """
 
@@ -33,6 +42,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from . import foobar as foobar_playing
+from . import mac_media
 
 # 判定"不上报进度"的阈值：末位时长小于该值视为无效时间轴。
 _MIN_VALID_DURATION = 0.01
@@ -77,6 +87,39 @@ _BROWSER_APP_IDS = frozenset(
         "arc",
     }
 )
+
+# macOS 上的浏览器 bundle id（小写比较）。口径与上表相同：**否决表不是白名单**，
+# 表外应用一律放行。Safari 的网页媒体由 WebKit 子进程上报，``MacNowPlaying.app_id``
+# 已经换成父应用（``com.apple.Safari``）；拿不到父应用的 WebKit 子进程按网页媒体
+# 处理（见 :data:`_MAC_WEB_CONTENT_PREFIX`）。
+_MAC_BROWSER_BUNDLE_IDS = frozenset(
+    {
+        "com.apple.safari",
+        "com.apple.safaritechnologypreview",
+        "com.google.chrome",
+        "com.google.chrome.beta",
+        "com.google.chrome.dev",
+        "com.google.chrome.canary",
+        "org.chromium.chromium",
+        "org.mozilla.firefox",
+        "org.mozilla.firefoxdeveloperedition",
+        "org.mozilla.nightly",
+        "com.microsoft.edgemac",
+        "com.microsoft.edgemac.beta",
+        "com.microsoft.edgemac.dev",
+        "com.microsoft.edgemac.canary",
+        "com.brave.browser",
+        "com.brave.browser.beta",
+        "com.brave.browser.nightly",
+        "com.operasoftware.opera",
+        "com.operasoftware.operagx",
+        "com.vivaldi.vivaldi",
+        "company.thebrowser.browser",  # Arc
+        "app.zen-browser.zen",
+        "com.kagi.kagimacos",  # Orion
+    }
+)
+_MAC_WEB_CONTENT_PREFIX = "com.apple.webkit."
 
 
 @dataclass(frozen=True)
@@ -227,7 +270,18 @@ def is_browser_session(app_id: str | None) -> bool:
     表外应用一律返回 False——只否决明确认识的浏览器，不做白名单式拦截。
     """
     identity = normalized_app_id(app_id)
+    if identity in _MAC_BROWSER_BUNDLE_IDS or identity.startswith(_MAC_WEB_CONTENT_PREFIX):
+        return True
     return identity in _BROWSER_APP_IDS or bool(identity and identity in _firefox_app_ids())
+
+
+def media_session_supported() -> bool:
+    """本平台有没有系统级「正在播放」会话可读（Windows SMTC / macOS MediaRemote）。
+
+    设置页据此决定「浏览器媒体会话参与歌词」这类开关要不要建控件——只在这里判一次
+    平台，别处不另抄 ``sys.platform`` 表。
+    """
+    return sys.platform in ("win32", "darwin")
 
 
 def is_foobar_source(app_id: str | None) -> bool:
@@ -604,12 +658,106 @@ def _run_sync(coro):
     return loop.run_until_complete(coro)
 
 
+# ------------------------------------------------------------------ macOS 分支
+#
+# 实现细节（osascript 常驻助手、MRMediaRemoteSendCommand）在 mac_media；这里只做
+# 与 Windows 同口径的"翻译"：MacNowPlaying → Playback / 会话事实表，否决规则复用
+# _source_allows_singing（唯一一份实现）。
+
+
+def _mac_media_type(raw: str) -> int:
+    """MediaRemote 的 mediaType 字符串 → MEDIA_TYPE_*（认不出的一律 Unknown = 放行）。
+
+    只把**明确**写着 video 的判成视频：与 Windows 端"只否决明确 VIDEO(2)"同一条
+    不误伤纪律——多数播放器根本不填这个键。
+    """
+    text = str(raw or "").lower()
+    if "video" in text:
+        return MEDIA_TYPE_VIDEO
+    if "music" in text or "audio" in text:
+        return MEDIA_TYPE_MUSIC
+    return MEDIA_TYPE_UNKNOWN
+
+
+def _mac_playback(allow_browser: bool) -> Playback | None:
+    """读一次 macOS「正在播放」，包成与 SMTC 同形状的 :class:`Playback`。"""
+    state = mac_media.read_now_playing()
+    if state is None:
+        return None
+    if not _source_allows_singing(
+        _mac_media_type(state.media_type), is_browser_session(state.app_id), allow_browser
+    ):
+        return None
+    if not state.title and not state.artist:
+        return None
+    has_timeline = state.duration is not None and state.duration > _MIN_VALID_DURATION
+    track = Track(
+        title=state.title,
+        artist=state.artist,
+        album=state.album,
+        duration=state.duration if has_timeline else 0.0,
+        playing=state.playing,
+    )
+    return Playback(
+        track=track,
+        position=mac_media.position_at(state, time.time()),
+        updated_at=time.monotonic(),
+        app_id=state.app_id,
+    )
+
+
+def _mac_command(command: int) -> bool:
+    """给「正在播放」应用发命令；没有任何应用在「正在播放」时不发（返回 False）。"""
+    try:
+        if mac_media.read_now_playing() is None:
+            return False
+        return mac_media.send_command(command)
+    except Exception:
+        return False
+
+
+def _mac_play_session_for(bundle_id: str) -> bool:
+    """只在 ``bundle_id`` 就是当前「正在播放」应用时让它播放（不去恢复别的应用）。
+
+    macOS 只有一个「正在播放」目标，媒体命令发给它；所以先读**此刻**的归属
+    （``max_age=0``，不用复用窗口里的旧值）再决定发不发。已经在播就不再发。
+    """
+    wanted = normalized_app_id(bundle_id)
+    if not wanted:
+        return False
+    try:
+        state = mac_media.read_now_playing(max_age=0)
+        if state is None:
+            return False
+        owners = {normalized_app_id(state.bundle_id), normalized_app_id(state.parent_bundle_id)}
+        if wanted not in owners:
+            return False
+        if state.playing:
+            return True
+        return mac_media.send_command(mac_media.COMMAND_PLAY)
+    except Exception:
+        return False
+
+
+def _mac_session_facts() -> tuple:
+    """macOS 的会话事实表：至多一项（系统只暴露一个「正在播放」应用）。"""
+    state = mac_media.read_now_playing()
+    if state is None:
+        return _NO_SESSION_FACTS
+    return ((_mac_media_type(state.media_type), is_browser_session(state.app_id), state.playing),)
+
+
 def skip_track(direction: str = "next") -> bool:
     """切换到下一首/上一首（``direction`` 为 ``"next"`` 或 ``"previous"``）。
 
     返回是否成功；不支持切歌的播放器、或没有会话时返回 ``False``。
     与 :func:`get_now_playing` 一样绝不抛异常。
     """
+    if sys.platform == "darwin":
+        return _mac_command(
+            mac_media.COMMAND_PREVIOUS_TRACK if direction == "previous"
+            else mac_media.COMMAND_NEXT_TRACK
+        )
     if sys.platform != "win32":
         return False
     try:
@@ -627,6 +775,8 @@ async def _play_pause_async() -> bool:
 
 def toggle_play_pause() -> bool:
     """暂停/恢复当前播放器。返回是否成功（无会话或不支持时为 False）。"""
+    if sys.platform == "darwin":
+        return _mac_command(mac_media.COMMAND_TOGGLE_PLAY_PAUSE)
     if sys.platform != "win32":
         return False
     try:
@@ -652,7 +802,14 @@ async def _play_session_async(exe_name: str) -> bool:
 
 
 def play_session_for(exe_name: str) -> bool:
-    """让指定播放器开始播放；找不到它的会话时返回 False。"""
+    """让指定播放器开始播放；找不到它的会话时返回 False。
+
+    ``exe_name`` 是播放器的会话身份（``music.players.session_key`` 给出）：Windows
+    上是可执行文件名（``cloudmusic.exe``），macOS 上是应用的 bundle id
+    （``com.netease.163music``）。
+    """
+    if sys.platform == "darwin":
+        return _mac_play_session_for(exe_name)
     if sys.platform != "win32":
         return False
     try:
@@ -683,8 +840,17 @@ def get_now_playing(
     ``pet/foobar_playing.py``）。``foobar_title_format`` 是用户在 foobar 里配置的
     窗口标题格式串，空串 = 自动（不猜歌名/歌手顺序）。
 
+    macOS 上读系统「正在播放」（MediaRemote，见 ``pet/music/mac_media.py``）：
+    ``tracked_app_id`` 与 foobar 两参在那里无事可做（系统只有一个「正在播放」应用，
+    foobar 窗口标题源是 Win32 专属），``allow_browser`` 同样生效。
+
     本函数绝不抛异常——歌词只是锦上添花，不能因为第三方接口异常影响桌宠本体。
     """
+    if sys.platform == "darwin":
+        try:
+            return _mac_playback(bool(allow_browser))
+        except Exception:
+            return None
     if sys.platform != "win32":
         return None
     try:
@@ -776,6 +942,13 @@ async def _facts_async_bounded() -> tuple:
     return await asyncio.wait_for(_facts_async(), SESSION_PROBE_TIMEOUT_SECONDS)
 
 
+def _read_session_facts() -> tuple:
+    """按平台采一次会话事实表。macOS 的读取自带超时（``mac_media.REQUEST_TIMEOUT_SECONDS``）。"""
+    if sys.platform == "darwin":
+        return _mac_session_facts()
+    return _run_sync(_facts_async_bounded())
+
+
 def refresh_session_probe_once() -> tuple:
     """立即采一次并刷新缓存；返回逐会话事实表。
 
@@ -785,7 +958,7 @@ def refresh_session_probe_once() -> tuple:
     """
     global _session_facts, _session_facts_at
     try:
-        facts = tuple(_run_sync(_facts_async_bounded()))
+        facts = tuple(_read_session_facts())
     except Exception:
         facts = _NO_SESSION_FACTS
     with _probe_lock:
@@ -851,8 +1024,32 @@ def song_session_accepted(allow_browser: bool = True) -> bool | None:
 
     首次调用会拉起后台探针线程，因此第一拍拿到的通常是 ``None``。
     """
-    global _last_asked
+    facts = _fresh_session_facts()
+    if facts is None:
+        return None
+    return _allows_singing_from_facts(facts, bool(allow_browser))
+
+
+def song_session_playing(allow_browser: bool = True) -> bool | None:
+    """有没有被唱歌链路接受、且**正在播**的会话（**主线程安全**，只读缓存）。
+
+    给没有音频峰值表可用的平台（macOS）当"在放歌"的判据：:func:`song_session_accepted`
+    在"没有在播会话"时放行（那是给峰值表兜底的口径——出声的可能是游戏），这里则
+    如实回答 False。``None`` 同样表示还没有会话事实可用（首拍会拉起探针）。
+    """
+    facts = _fresh_session_facts()
+    if facts is None:
+        return None
     allow_browser = bool(allow_browser)
+    return any(
+        is_playing and _source_allows_singing(media_type, browser, allow_browser)
+        for media_type, browser, is_playing in facts
+    )
+
+
+def _fresh_session_facts() -> tuple | None:
+    """读探针缓存（记一次"有人在问"）；缓存过期或尚未产出时拉起探针并返回 None。"""
+    global _last_asked
     now = time.monotonic()
     with _probe_lock:
         _last_asked = now
@@ -862,8 +1059,8 @@ def song_session_accepted(allow_browser: bool = True) -> bool | None:
             and (now - _session_facts_at) <= SESSION_VERDICT_STALE_SECONDS
         )
     if fresh:
-        return _allows_singing_from_facts(facts, allow_browser)
-    # 缓存过期/尚未产出：先拉起或复用探针，本拍按"无数据"放行。
+        return facts
+    # 缓存过期/尚未产出：先拉起或复用探针，本拍按"无数据"处理。
     _ensure_session_probe()
     return None
 

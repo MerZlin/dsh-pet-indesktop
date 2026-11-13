@@ -3046,6 +3046,13 @@ def test_new_player_entries_click_routes_its_own_key_through_the_shared_worker(m
     app = QApplication.instance() or QApplication([])
     entries = _music_entries(_build_full_menu(monkeypatch, _full_menu_pet()))
     labels = _player_entry_labels()
+    # 会话身份按平台取（``music_players.session_key``）：Windows 是 exe 名，macOS 是应用包的
+    # bundle id。这里的假路径是 ``.exe``、断言的也是 exe 名，所以把平台钉成 win32——否则在
+    # mac 主机上 worker 拿到的是空串。菜单已建完才钉，建菜单仍按本机平台走；mac 的启动
+    # 路径由 ``tests/test_music_launch_mac.py`` 覆盖。
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "win32")
     try:
         for key in ("kugou", "soda"):
             action = entries[labels[key]]
