@@ -1,7 +1,7 @@
 # PR 报告：Agent 联动接入 AstrBot（2026-11-06）
 
 > **基线**：`34d810b`（chore(update): update.json 指向 v4.4.0）
-> **分支**：`claude/kind-thompson-lvicmz`　**日期**：`2026-11-06`
+> **分支**：`feat/astrbot-agent-link`（开发时为 `claude/kind-thompson-lvicmz`）　**日期**：`2026-11-06`
 > **范围**：20 个文件（实现 12：pet/ 9 + 新插件 3；测试 4；文档 3 + 工具 1）
 > **关联**：[多 Agent 联动统一事件协议](AGENT_LINK_PROTOCOL.md) §3.1；先例
 > [Hermes Agent Link 桥接](PR-REPORT-HERMES-PET-BRIDGE-2026-10-17.md)
@@ -179,6 +179,9 @@ PET UI +2.03s ('bubble', 'AstrBot 已完成本轮任务。')
 - AstrBot 用户手动设了 `DSH_PET_ASTRBOT_EVENTS` 时，内置通道读不到（需改用 `custom_agents` 指向同一文件），README 已写明。
 - 不做审批/提问气泡：AstrBot 没有「等待人类批准」的插件钩子。
 - 换 AstrBot 目录暂无 UI 入口：已记的 `astrbot_root` 仍是有效 AstrBot 目录时开启联动直接沿用；要换到另一个安装，先在菜单关闭联动，再清空 `config.json` 的 `agent_link.astrbot_root`，重新开启即弹目录选择。记的目录失效（被删/未挂载）时会自动重新弹选择。
+  （2026-11-11 修正后：清空 `astrbot_root` 再开启时，若 `detect_data_dir` 能找到目录就直接采用、不再弹选择，见
+  [自动检测修正](PR-REPORT-ASTRBOT-AUTO-DETECT-2026-11-11.md)；要指向另一处安装，设 `ASTRBOT_ROOT`（探测顺序第一位）
+  或把 `astrbot_root` 直接改成目标目录。）
 
 ## 八、风险与回滚
 

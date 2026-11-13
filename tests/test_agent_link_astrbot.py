@@ -243,6 +243,36 @@ class TestManagerEnable:
         finally:
             mgr.shutdown()
 
+    @pytest.mark.parametrize("consent", [True, False])
+    def test_detected_root_skips_picker_and_respects_consent(self, tmp_path, monkeypatch, consent):
+        data = _astrbot_root(tmp_path) / "data"
+        monkeypatch.setattr(AstrBotMonitor, "detect_data_dir", classmethod(lambda cls: data))
+        monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                            lambda *a, **k: pytest.fail("自动检测成功后不应弹目录选择"))
+        asked = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **k: asked.append(a) or (
+                QMessageBox.StandardButton.Yes if consent else QMessageBox.StandardButton.No),
+        )
+        cfg = Config(base=tmp_path / "cfg")
+        cfg.save()
+        before = cfg.path.read_bytes()
+        mgr = AgentLinkManager(None, cfg)
+        try:
+            assert mgr.set_enabled("astrbot", True) is consent
+            assert len(asked) == 1
+            assert str(AstrBotMonitor.plugin_dir_for(data)) in asked[0][2]
+            assert cfg.data["agent_link"]["astrbot"] is consent
+            assert mgr.monitors["astrbot"]._running is consent
+            assert AstrBotMonitor.plugin_dir_for(data).exists() is consent
+            saved = json.loads(cfg.path.read_text(encoding="utf-8"))
+            assert saved["agent_link"]["astrbot_root"] == (str(data) if consent else "")
+            if not consent:
+                assert cfg.path.read_bytes() == before
+        finally:
+            mgr.shutdown()
+
     def test_configured_root_skips_picker(self, tmp_path, monkeypatch):
         root = _astrbot_root(tmp_path)
         monkeypatch.setattr(QFileDialog, "getExistingDirectory",

@@ -3868,18 +3868,20 @@ class AgentLinkManager(QObject):
         return True
 
     def _resolve_astrbot_data_dir(self) -> Path | None:
-        """AstrBot data 目录：已记住的优先；否则弹目录选择（预填自动探测结果）。"""
+        """AstrBot data 目录：已记住的优先，其次自动探测，未找到才弹目录选择。"""
         configured = AstrBotMonitor.normalize_data_dir(
             (self.cfg.get("agent_link", {}) or {}).get("astrbot_root"))
         if configured is not None:
             return configured
+        detected = AstrBotMonitor.detect_data_dir()
+        if detected is not None:
+            return detected
         from PySide6.QtWidgets import QFileDialog
 
         parent = self.win if hasattr(self.win, "winId") else None
-        start = AstrBotMonitor.detect_data_dir()
         picked = QFileDialog.getExistingDirectory(
             parent, "选择 AstrBot 目录（AstrBot 根目录，或 Docker 挂载出来的 data 目录）",
-            str(start or Path.home()),
+            str(Path.home()),
         )
         if not picked:
             return None
