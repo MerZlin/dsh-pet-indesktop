@@ -21,7 +21,7 @@
 
 ## 性能分析
 
-环境：macOS 27.2 / arm64 / Python 3.13.18，使用仓库 `.venv`；原生 QApplication，无平台模拟。以下探针只解析真实目录，Config 使用 scratch 中的临时目录，不写 AstrBot。
+环境：macOS 27.2 / arm64 / Python 3.13.18，使用仓库 `.venv`；原生 QApplication，无平台模拟。以下探针只解析真实目录，Config 使用临时目录（实测时指定了本机的一个 scratch 目录作为父目录，此处省略该路径），不写 AstrBot。
 
 复现命令：在仓库运行 `.venv/bin/python`，执行：
 
@@ -32,7 +32,7 @@ from PySide6.QtWidgets import QApplication
 from pet.config import Config
 from pet.agent_link import AgentLinkManager
 app = QApplication([])
-with tempfile.TemporaryDirectory(dir="/Users/imali/.hermes/profiles/nothing/cache/scratch") as tmp:
+with tempfile.TemporaryDirectory() as tmp:
     mgr = AgentLinkManager(None, Config(base=Path(tmp)))
     t = time.perf_counter()
     result = mgr._resolve_astrbot_data_dir()
@@ -46,15 +46,15 @@ with tempfile.TemporaryDirectory(dir="/Users/imali/.hermes/profiles/nothing/cach
     mgr.shutdown()
 ```
 
-实测：解析到 `/Users/imali/.astrbot/data`；首次调用 0.028 ms；1000 次样本中位数 11.708 μs，P95 12.375 μs。此数字是本机目录解析耗时，非完整联动延迟或前后速度对比。
+实测：解析到 `~/.astrbot/data`；首次调用 0.028 ms；1000 次样本中位数 11.708 μs，P95 12.375 μs。此数字是本机目录解析耗时，非完整联动延迟或前后速度对比。
 
 稳态监视路径未改，新增定时任务 0；此入口仅在用户开启未配置目录的联动时调用。原本已执行同一检测，未增加文件系统查询规则、网络、磁盘写入或线程；检测命中后省去文件选择窗口。无新增持久对象或缓存；未采样 RSS，不宣称内存实测下降。
 
 ## 实机运行记录
 
 - 现场前提：`/Applications/AstrBot.app/Contents/Info.plist` 存在，bundle ID 为 `com.astrbot.desktop.tauri`；`~/.astrbot/data/cmd_config.json` 与 `plugins/` 均存在。
-- 原生 Qt 进程调用修复后的生产目录解析方法，直接得到 `/Users/imali/.astrbot/data`，无目录选择弹窗。探针结果 `bridge_exists False`，未向实际 AstrBot 安装插件。
-- 源码桌宠以 `.venv/bin/python -m pet` 重启，PID `46673`；启动确认见本次会话与 `~/Library/Application Support/dsh-pet-standalone/pet-46673.log`。
+- 原生 Qt 进程调用修复后的生产目录解析方法，直接得到 `~/.astrbot/data`，无目录选择弹窗。探针结果 `bridge_exists False`，未向实际 AstrBot 安装插件。
+- 源码桌宠以 `.venv/bin/python -m pet` 重启；启动确认见本次会话与 `~/Library/Application Support/dsh-pet-standalone/` 下该进程的日志。
 - 拒绝授权和检测失败的手选回退在回归测试中验证；未在真实 AstrBot 上安装或重载插件，完整消息联动仍待用户继续验收。
 
 ## 测试与验证
