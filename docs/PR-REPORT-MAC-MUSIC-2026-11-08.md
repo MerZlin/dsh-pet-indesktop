@@ -1,7 +1,7 @@
 # macOS 音乐联动（2026-11-08）
 
 > **基线**：`34d810b`（chore(update): update.json 指向 v4.4.0）
-> **分支**：`claude/magical-galileo-9mftoe`　**日期**：`2026-11-08`
+> **分支**：`feat/mac-music`（开发时为 `claude/magical-galileo-9mftoe`）　**日期**：`2026-11-08`
 > **范围**：18 个文件 + 3 张截图（实现 8〔新增 1〕、测试 6〔新增 4〕、脚本 1、文档 3），`+2588 / −40`（含本报告 281 行）
 > **关联**：[SMTC 媒体类型过滤](PR-REPORT-SMTC-MEDIA-TYPE-2026-10-06.md)（否决规则与唱歌探针的来源）、
 > [Firefox 媒体标识](PR-REPORT-FIREFOX-MEDIA-SESSION-2026-10-20.md)（浏览器识别口径）、
@@ -10,6 +10,7 @@
 **验收边界（先说清）**：本 PR 在 Linux 开发容器里完成，**没有在真 Mac 上运行过**。
 §五写明了哪些是真实执行过的、哪些只被替身覆盖、以及 Mac 上验收要跑的探针命令。
 不把「测试绿」写成「Mac 上可用」。
+（2026-11-13 补：真 Mac 上跑过一次只读探针，已确认项与仍未验证项见 §九；验收仍未完成。）
 
 ## 一、核心特性
 
@@ -279,3 +280,60 @@ Core Audio tap 授权——为一个唱歌动画向用户要录屏权限不值�
 - 影响面：只有 darwin 分支与 `is_browser_session` 的一张新表；Windows / Linux 路径不变。
 - 无新配置键、无迁移、不写盘；助手进程随本进程退出（管道 EOF）或空闲 30 s 退出，不留残留。
 - 回滚：`git revert` 本 PR 即可，无落盘状态。
+
+## 九、第二轮：真 Mac 探针记录（2026-11-13）
+
+§五第 6 条写明「报告追加真机输出后才算验收」。本节是第一次在真 Mac 上跑探针的原始记录——
+**只完成了一部分**，没完成的部分逐条写在下面，不把「探针能跑」写成「Mac 上已验收」。
+
+**环境**：macOS 27.2（26B123）/ arm64 / CPython 3.13.18（仓库 `.venv`），分支 `feat/mac-music` @ `3764740`。
+探针开始时没有任何应用在播放；没有替用户启动播放器，也没有用 `--toggle` 改动用户的播放状态。
+
+```text
+$ python scripts/probe_mac_now_playing.py --watch 10
+macOS 27.2  machine=arm64  python=3.13.18  frozen=False
+== 1. 助手脚本原始往返（osascript -l JavaScript）
+   exit=0
+   stdout={"ok":true,"item":null,"id":"probe"}
+== 2. 常驻助手读取（产品路径，首个请求含助手启动）
+   首读: 没有读到「正在播放」（没有应用在播，或读取不可用——看第 1 项）
+   首读耗时 32.7 ms
+   稳态 20 次：中位 0.13 ms，最大 0.67 ms，助手 pid=98231
+   第 1 秒: 没有读到「正在播放」（没有应用在播，或读取不可用——看第 1 项）
+   ……（第 2–10 秒同上，共 10 行）
+== 3. 产品层（now_playing）看到的结果
+   allow_browser=False: None（不显示、不取词、不唱歌）
+   allow_browser=True: None（不显示、不取词、不唱歌）
+   唱歌探针事实表=()  song_session_playing(浏览器关)=False
+== 4. 播放器定位（右键「打开…给主人放歌」）
+   网易云音乐: /Applications/NeteaseMusic.app  bundle id=com.netease.163music  (0.5 ms)
+   QQ音乐: 未找到  (32.4 ms)
+   酷狗音乐: 未找到  (13.7 ms)
+   汽水音乐: /Applications/汽水音乐.app  bundle id=com.soda.music  (0.0 ms)
+{"helper_pid": 98231}
+exit=0
+```
+
+**这次真机确认了什么**
+
+| # | 结论 | 依据 | 对照（§四 / §七 的替身数字或悬念） |
+|---|---|---|---|
+| 1 | 真 `/usr/bin/osascript -l JavaScript` 能跑起助手脚本并按行协议应答，没有落进「不可用」分支 | 第 1 项 `exit=0`、`"ok":true`、id 回带 | §五第 2 条此前只在 Node 替身上成立 |
+| 2 | 助手启动 + 首次应答 **32.7 ms**（1 次） | 第 2 项 | Node 替身 23.3 ms |
+| 3 | 稳态往返中位 **0.13 ms**、最大 0.67 ms（20 次，同一助手 pid） | 第 2 项 | Node 替身中位 0.065 ms |
+| 4 | 「没有正在播放」这条边界在真机上的产品层结果：不显示、不取词、不唱歌 | 第 3 项 | 此前只有替身用例 |
+| 5 | 网易云 Mac 版包名与 bundle id 与代码一致（`NeteaseMusic.app` / `com.netease.163music`），包名命中 0.5 ms | 第 4 项 | §四替身 0.02 ms |
+| 6 | 汽水音乐 Mac 版 bundle id 实为 `com.soda.music`，与 `_MAC_APPS` 里的值一致 | 第 4 项 | 解掉 §七第 5 条里汽水的那一半 |
+| 7 | 未安装的播放器（QQ音乐 / 酷狗）走到浅扫未命中：32.4 ms / 13.7 ms（本机 `/Applications` 40 个条目） | 第 4 项 | §四替身（160 个应用）中位 16.5 ms |
+
+**仍未验证（§七第 1 条继续有效）**
+
+1. **读到曲目时的字段形状**：`item` 为 `null` 时走不到 `NSNumber` / `NSDate` 的 unwrap，标题 / 时长 / 进度
+   外推都没有被真系统的值检验过。另外，`"item":null` 本身分不出「确实没有应用在播」和「系统对这次
+   查询给了空结果」——要在放歌时复跑 `--watch 10` 才能排除后者。
+2. **`MRMediaRemoteSendCommand`**：没有跑 `--toggle`（会暂停 / 恢复用户正在听的东西），切歌 / 暂停
+   在 macOS 27.2 上对普通进程是否仍有效，未知。
+3. **桌宠内的用户可见行为**：气泡歌词、唱歌动画、右键「打开网易云音乐给主人放歌」都没有在真机上看过。
+4. **QQ音乐 / 酷狗 Mac 版**：本机未安装，包名与 bundle id（`com.tencent.QQMusicMac` / `com.kugou.mac.Music`）
+   仍未在真机复核。
+5. 助手进程常驻内存未采样（§四第 4 条仍是空缺）。
