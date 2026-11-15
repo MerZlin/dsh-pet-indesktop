@@ -58,11 +58,11 @@ QToolButton#session-more-button {
     background: transparent; color: #626a76;
 }
 QToolButton#session-more-button:hover { background: #e8ecf2; }
-QToolButton#archive-toggle-button {
+QToolButton#archive-toggle-button, QToolButton#trash-toggle-button {
     min-height: 30px; padding: 0 8px; border: none; border-radius: 8px;
     background: transparent; color: #626a76; font-size: @F_10@;
 }
-QToolButton#archive-toggle-button:hover { background: #e8ecf2; }
+QToolButton#archive-toggle-button:hover, QToolButton#trash-toggle-button:hover { background: #e8ecf2; }
 QToolButton#archive-toggle-button:checked { color: #ffffff; background: @ACCENT@; }
 QFrame#sidebar-footer { background: transparent; border: none; }
 QFrame#header-status { background: transparent; border: none; }
@@ -71,23 +71,24 @@ QLabel#status-dot[state="busy"] { color: #dc8a24; }
 QLabel#status-label { color: #53606d; font-size: @F_10@; font-weight: 600; }
 QLabel#status-label[state="error"] { color: #cf3f38; }
 QLabel#provider-label { color: #9299a5; font-size: @F_10@; }
-QToolButton#follow-pet-button, QToolButton#delete-session-button, QToolButton#clear-session-button {
+QToolButton#follow-pet-button, QToolButton#delete-session-button {
     min-height: 30px; padding: 0 9px; border: none; border-radius: 8px;
     background: transparent; color: #626a76; font-size: @F_11@; font-weight: 500;
 }
 QToolButton#follow-pet-button:hover, QToolButton#delete-session-button:hover,
-QToolButton#clear-session-button:hover { background: #e8ecf2; }
 QToolButton#follow-pet-button:checked { color: #ffffff; background: @ACCENT@; }
 QFrame#chat-main { background: #ffffff; border: none; border-top-right-radius: 13px; border-bottom-right-radius: 13px; }
 QFrame#chat-main-header { min-height: 55px; background: #ffffff; border: none; border-bottom: 1px solid #f0f1f4; border-top-right-radius: 13px; }
 QLabel#title-label { color: #252a32; font-size: @F_14@; font-weight: 600; }
 QLabel#subtitle-label { color: #7189c7; font-size: @F_10@; }
 QToolButton#sidebar-toggle-button, QToolButton#window-minimize-button, QToolButton#window-close-button,
-QToolButton#window-maximize-button, QToolButton#window-pin-button, QToolButton#window-dark-button {
+QToolButton#window-maximize-button, QToolButton#window-pin-button, QToolButton#window-dark-button,
+QToolButton#window-settings-button, QToolButton#window-layout-button {
     width: 29px; height: 29px; border: none; border-radius: 8px; background: transparent;
     color: #252a32; /* 深色系统下无 QSS color 会落到 palette 白字，白底上看不清 */
 }
-QToolButton#sidebar-toggle-button:hover { background: #f0f2f5; }
+QToolButton#sidebar-toggle-button:hover, QToolButton#window-settings-button:hover,
+QToolButton#window-layout-button:hover { background: #f0f2f5; }
 QToolButton#window-dark-button:hover { background: #f0f2f5; }
 QToolButton#window-dark-button:checked { color: #ffffff; background: @ACCENT@; }
 QToolButton#view-toggle-button {
@@ -169,16 +170,20 @@ QLabel#empty-state { color: #969da8; font-size: @F_14@; }
 QFrame#message-bubble { padding: 0; border: none; background: transparent; }
 QFrame#message-surface { padding: 0; border: none; background: transparent; }
 QFrame#message-surface[role="user"] { padding: 8px 12px; border-radius: 12px; background: #f0f3f8; }
+/* 助手气泡左边不留白（用户要求文字靠左），右侧让出 12px 防止贴边。 */
+QFrame#message-surface[role="assistant"] { padding: 8px 12px 8px 0; }
 QFrame#message-bubble[state="streaming"] { background: transparent; }
 QFrame#message-bubble[state="error"] { background: transparent; }
 QFrame#message-bubble[state="stopped"] { background: #f6f7f9; }
 QFrame#message-surface[state="error"] {
     padding: 0; border: 1px solid #f0c8c3; border-radius: 12px; background: #fff3f1;
 }
+QFrame#message-surface[role="assistant"][state="error"] { padding: 8px 12px 8px 0; }
 QFrame#message-surface[state="error"] QLabel#bubble-body { color: #7f2e29; font-weight: 600; }
 QLabel#bubble-avatar, QLabel#bubble-meta { background: transparent; border: none; }
 QLabel#bubble-body { color: #252a32; font-size: @FONT_SIZE@px; line-height: 1.55; }
 QLabel#bubble-status { color: #a56c1c; font-size: @F_10@; }
+QLabel#bubble-speech-status { color: #6b7280; font-size: @F_10@; }
 QFrame#error-actions { background: transparent; border: none; }
 QFrame#message-tools { background: transparent; border: none; }
 QFrame#message-tools QToolButton { width: 25px; height: 25px; border: none; border-radius: 6px; background: transparent; color: #252a32; }
@@ -275,6 +280,27 @@ QPlainTextEdit#memory-preview {
     color: #444b57; padding: 8px;
 }
 QLabel#memory-source { color: #777b80; font-size: @F_12@; }
+QToolButton#phone-back-button, QToolButton#phone-more-button,
+QToolButton#phone-close-button {
+    width: 34px; height: 34px; border: none; border-radius: 10px;
+    background: transparent; color: #252a32;
+}
+QToolButton#phone-back-button:hover, QToolButton#phone-more-button:hover { background: #f0f2f5; }
+QToolButton#phone-close-button:hover { background: #fbe8e8; }
+QToolButton#phone-new-button {
+    width: 36px; height: 36px; border: none; border-radius: 18px;
+    background: #eef1f5; color: #252a32;
+}
+QToolButton#phone-new-button:hover { background: #e2e7ee; }
+QToolButton#phone-more-button::menu-indicator { image: none; width: 0px; height: 0px; }
+QWidget#phone-view-bar { background: transparent; }
+QToolButton#phone-view-chip {
+    min-height: 30px; padding: 0 12px; border: none; border-radius: 15px;
+    background: #eef1f5; color: #2a3442;
+    font-size: @F_11@; font-weight: 600;
+}
+QToolButton#phone-view-chip:hover { background: #e2e7ee; }
+QToolButton#phone-view-chip:checked { background: @ACCENT@; color: #ffffff; }
 """
 
 #: 深色覆盖表：**追加**在 `MODERN_QSS` 之后（同选择器后者胜），所以浅色那条
@@ -298,11 +324,10 @@ QLabel#session-row-title { color: #c9d0da; }
 QLabel#session-row-title[archived="true"] { color: #6b7382; }
 QToolButton#session-more-button { color: #9aa3b0; }
 QToolButton#session-more-button:hover { background: #262b36; }
-QToolButton#archive-toggle-button { color: #9aa3b0; }
-QToolButton#archive-toggle-button:hover { background: #262b36; }
-QToolButton#follow-pet-button, QToolButton#delete-session-button, QToolButton#clear-session-button { color: #9aa3b0; }
+QToolButton#archive-toggle-button, QToolButton#trash-toggle-button { color: #9aa3b0; }
+QToolButton#archive-toggle-button:hover, QToolButton#trash-toggle-button:hover { background: #262b36; }
+QToolButton#follow-pet-button, QToolButton#delete-session-button { color: #9aa3b0; }
 QToolButton#follow-pet-button:hover, QToolButton#delete-session-button:hover,
-QToolButton#clear-session-button:hover { background: #262b36; }
 QLabel#status-label { color: #aab2c0; }
 QLabel#status-label[state="error"] { color: #ff7a72; }
 QLabel#status-dot { color: #4cc98a; }
@@ -314,10 +339,12 @@ QFrame#chat-main-header { background: #16181d; border-bottom: 1px solid #262b36;
 QLabel#title-label { color: #e6e8ec; }
 QToolButton#sidebar-toggle-button, QToolButton#window-minimize-button,
 QToolButton#window-close-button, QToolButton#window-maximize-button,
-QToolButton#window-pin-button, QToolButton#window-dark-button { color: #d7dce6; }
+QToolButton#window-pin-button, QToolButton#window-dark-button,
+QToolButton#window-settings-button, QToolButton#window-layout-button { color: #d7dce6; }
 QToolButton#sidebar-toggle-button:hover, QToolButton#window-minimize-button:hover,
 QToolButton#window-maximize-button:hover, QToolButton#window-pin-button:hover,
-QToolButton#window-dark-button:hover { background: #262b36; }
+QToolButton#window-dark-button:hover, QToolButton#window-settings-button:hover,
+QToolButton#window-layout-button:hover { background: #262b36; }
 QToolButton#window-close-button:hover { background: #5a2727; }
 QToolButton#view-toggle-button, QToolButton#chat-view-button, QToolButton#chat-view-more-button { color: #aab2c0; }
 QToolButton#view-toggle-button:hover, QToolButton#chat-view-button:hover,
@@ -355,6 +382,7 @@ QFrame#message-surface[state="error"] {
 QFrame#message-surface[state="error"] QLabel#bubble-body { color: #ff9b93; }
 QLabel#bubble-body { color: #e6e8ec; }
 QLabel#bubble-status { color: #e0a14a; }
+QLabel#bubble-speech-status { color: #9aa3b2; }
 QFrame#message-tools QToolButton { color: #c9d0da; }
 QFrame#message-tools QToolButton:hover { background: #262b36; }
 QFrame#floating-composer { background: #16181d; }
@@ -401,6 +429,17 @@ QPlainTextEdit#memory-preview {
     background: #1b1f27; color: #d7dce6; border-color: #333947;
 }
 QLabel#memory-empty { color: #8b93a1; }
+QToolButton#phone-back-button, QToolButton#phone-more-button,
+QToolButton#phone-close-button { color: #d7dce6; }
+QToolButton#phone-back-button:hover, QToolButton#phone-more-button:hover { background: #262b36; }
+QToolButton#phone-close-button:hover { background: #5a2727; }
+QToolButton#phone-new-button { background: #262b36; color: #d7dce6; }
+QToolButton#phone-new-button:hover { background: #303645; }
+QToolButton#phone-more-button::menu-indicator { image: none; width: 0px; height: 0px; }
+QToolButton#phone-view-chip {
+    background: #262b36; color: #d7dce6;
+}
+QToolButton#phone-view-chip:hover { background: #303645; }
 """
 
 

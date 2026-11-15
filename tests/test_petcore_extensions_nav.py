@@ -503,3 +503,16 @@ def test_settings_search_switches_to_and_expands_a_mod_tab(app, tmp_path: Path) 
         )
     finally:
         dialog.deleteLater()
+
+
+def test_mods_page_exposes_url_install_entry(app, tmp_path, monkeypatch):
+    page = ModsPage(_host_with_mods(tmp_path, monkeypatch))
+    try:
+        assert page.url_input.placeholderText().startswith("https://")
+        assert page.url_install_button.text() == "下载并安装"
+        page.url_input.setText("file:///tmp/pack.zip")
+        page._install_from_url()
+        assert "http" in page.url_status.text()
+    finally:
+        page.dispose()
+        page.deleteLater()

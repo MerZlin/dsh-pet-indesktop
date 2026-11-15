@@ -608,3 +608,15 @@ def test_general_page_has_fullscreen_row_and_writes_config(app, tmp_path: Path) 
         assert host.config.get("auto_hide_fullscreen") is False
     finally:
         page.deleteLater()
+
+
+# ------------------------------------------------------------------ 灵动岛
+
+
+def test_island_fullscreen_keys_are_global_and_default_safe() -> None:
+    from petcore.config import DEFAULTS, GLOBAL_CONFIG_KEYS
+
+    assert DEFAULTS["island_show_toggle_button"] is True
+    assert "island_show_toggle_button" in GLOBAL_CONFIG_KEYS
+    assert DEFAULTS["island_hide_fullscreen"] is False, "默认不勾，保持升级前行为"
+    assert "island_hide_fullscreen" in GLOBAL_CONFIG_KEYS

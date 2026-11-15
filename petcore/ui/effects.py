@@ -105,8 +105,15 @@ class EffectController(QObject):
         return self._squash_active or self._spin_active or self._throw_egg_active
 
     # ---------------------------------------------------------------- Q 弹
-    def start_squash(self, duration_ms: int | None = None) -> None:
-        if not bool(self.window.config.get("click_squash_enabled", True)):
+    def start_squash(
+        self,
+        duration_ms: int | None = None,
+        *,
+        force: bool = False,
+        bounces: int | None = None,
+        strength: float | None = None,
+    ) -> None:
+        if not force and not bool(self.window.config.get("click_squash_enabled", True)):
             return
         config = self.window.config
         self._squash_active = True
@@ -116,15 +123,21 @@ class EffectController(QObject):
             duration_ms or config.get("click_squash_ms", 220) or 220
         )
         try:
-            self._squash_strength = max(
-                0.3, min(2.0, float(config.get("click_squash_strength", 100) or 100) / 100.0)
+            raw_strength = (
+                float(strength)
+                if strength is not None
+                else float(config.get("click_squash_strength", 100) or 100) / 100.0
             )
+            self._squash_strength = max(0.3, min(2.0, raw_strength))
         except (TypeError, ValueError):
             self._squash_strength = 1.0
         try:
-            self._squash_bounces = max(
-                1, min(5, int(config.get("click_squash_bounces", 1) or 1))
+            raw_bounces = (
+                int(bounces)
+                if bounces is not None
+                else int(config.get("click_squash_bounces", 1) or 1)
             )
+            self._squash_bounces = max(1, min(5, raw_bounces))
         except (TypeError, ValueError):
             self._squash_bounces = 1
         self._ensure_timer()

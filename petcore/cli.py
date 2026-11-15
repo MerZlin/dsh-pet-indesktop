@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import BOOT_T0, __version__, paths
 from .config import Config
+from .engine.enums import GraphType
 from .log import get_logger, setup_logging
 from .performance import runtime_metrics
 
@@ -210,6 +211,8 @@ def _check(
         for animation in character.animations:
             if animation.frameseq_dir is not None:
                 kind = "frameseq"
+            elif animation.sheet is not None:
+                kind = "sheet"
             elif animation.path is not None:
                 kind = animation.path.suffix.lower().lstrip(".") or "unknown"
             else:
@@ -221,6 +224,11 @@ def _check(
                 "name": character.name,
                 "owner": character.owner,
                 "animations": len(character.animations),
+                "work_clips": sum(
+                    1
+                    for animation in character.animations
+                    if animation.graph is GraphType.WORK
+                ),
                 "backends": backends,
                 "body_box": character.body_box,
                 "head_box": character.head_box,
@@ -286,6 +294,13 @@ def _check(
         # 能力声明是「宏大的纸面权力」时最容易腐烂的地方：至少让 `--check` 有读出口。
         "capabilities": sorted(capabilities.CAPABILITIES),
     }
+    try:
+        from .net.aboutme_packs import packs as aboutme_packs
+
+        aboutme_pack_count = len(aboutme_packs())
+    except Exception:  # noqa: BLE001 - 索引坏了是构建门的问题，不是启动问题
+        aboutme_pack_count = 0
+    report["aboutme_packs"] = aboutme_pack_count
     problems: list[str] = []
     if strict:
         if paths.is_frozen():
@@ -306,6 +321,8 @@ def _check(
             )
         if not report.get("characters"):
             problems.append("no characters packaged")
+        if aboutme_pack_count <= 0:
+            problems.append("aboutme character pack index missing")
         problems.extend(f"diagnostic:{item}" for item in (report.get("diagnostics") or []))
     report["strict"] = {"enabled": bool(strict), "problems": problems}
     payload = json.dumps(report, ensure_ascii=False, indent=2)
@@ -337,6 +354,12 @@ def _resolve_root(args: argparse.Namespace) -> Path:
 def main(argv: list[str] | None = None) -> int:
     _ensure_streams()
     raw = list(sys.argv[1:] if argv is None else argv)
+
+    settings_index = _subcommand_index(raw, ("settings",))
+    if settings_index is not None:
+        from .settings_cli import main as settings_main
+
+        return settings_main(raw[:settings_index] + raw[settings_index + 1 :])
 
     mods_index = None
     if raw[:1] not in (["pack-character"], ["pack-legacy"], ["autostart"], ["provision"]):

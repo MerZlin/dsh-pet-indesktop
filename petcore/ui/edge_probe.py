@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 
 from PySide6.QtCore import QObject, QTimer, Qt
@@ -103,12 +104,39 @@ class EdgeProbeController(QObject):
     def maybe_enter(self, delay_ms: int = int(EDGE_REST_SECONDS * 1000)) -> None:
         if not self._enabled or self._hidden or self.active:
             return
+        if self._throw_or_moving():
+            return
         self._rest_timer.start(max(0, int(delay_ms)))
+
+    def _throw_or_moving(self) -> bool:
+        """抛掷/击飞接管或仍有明显速度：都不算静息贴边。"""
+        effects = getattr(self.window, "effects", None)
+        if bool(getattr(effects, "throw_egg_active", False)):
+            return True
+        motion = getattr(self.window, "motion", None)
+        if motion is None:
+            return False
+        if bool(getattr(motion, "thrown", False)):
+            return True
+        if bool(getattr(motion, "dragging", False)):
+            return True
+        velocity = getattr(motion, "velocity", None)
+        if callable(velocity):
+            try:
+                vx, vy = velocity()
+                return math.hypot(float(vx), float(vy)) > 8.0
+            except (TypeError, ValueError):
+                return False
+        return False
 
     def _enter_if_at_edge(self) -> None:
         if not self._enabled or self._hidden or self.active:
             return
         if getattr(self.window, "dragging", False):
+            return
+        if self._throw_or_moving():
+            # 抛掷/击飞途中撞到边界不是「静息贴边」：这时摆 45° 会与飞行叠加，
+            # 窗口斜着继续反弹（用户反馈的 45° 探头 bug）。
             return
         bounds = self.window.probe_bounds()
         if bounds is None:
@@ -167,7 +195,7 @@ class EdgeProbeController(QObject):
         return was_active
 
     def on_release(self, was_dragging: bool) -> None:
-        if was_dragging:
+        if was_dragging and not self._throw_or_moving():
             self.maybe_enter()
 
     def cancel(self, reason: str = "", *, restore: bool = False) -> None:
@@ -233,6 +261,9 @@ class EdgeProbeController(QObject):
 
     def _tick(self) -> None:
         if self._hidden:
+            return
+        if self._throw_or_moving():
+            self.cancel("thrown", restore=False)
             return
         now = self._clock()
         if self._mode in _TRANSITIONS:

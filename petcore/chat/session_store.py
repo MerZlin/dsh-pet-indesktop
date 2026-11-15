@@ -58,6 +58,8 @@ class ChatSession:
     updated_at: float = 0.0
     #: 归档时间（0 = 未归档）。旧文件没有这个键，读出来就是 0。
     archived_at: float = 0.0
+    #: 删除时间（0 = 未删除）。删除先进回收站，保留 30 天可恢复。
+    trashed_at: float = 0.0
     #: 会话来源：ai / dsh / qq。旧文件没有这个键，按 ai 读。
     channel: str = "ai"
     #: 外部会话标识（DSH sessionId / QQ group:123 等）；空 = 本地会话。
@@ -120,6 +122,7 @@ class ChatSession:
             "messages": list(self.messages[-MAX_MESSAGES:]),
             "updated_at": float(self.updated_at or 0.0),
             "archived_at": float(self.archived_at or 0.0),
+            "trashed_at": float(self.trashed_at or 0.0),
             "channel": _clean_channel(self.channel),
             "conversation_id": str(self.conversation_id or "")[:200],
             "created_at": float(self.created_at or 0.0),
@@ -173,6 +176,10 @@ class ChatSession:
         except (TypeError, ValueError):
             archived_at = 0.0
         try:
+            trashed_at = float(raw.get("trashed_at") or 0.0)
+        except (TypeError, ValueError):
+            trashed_at = 0.0
+        try:
             created_at = float(raw.get("created_at") or 0.0)
         except (TypeError, ValueError):
             created_at = 0.0
@@ -182,6 +189,7 @@ class ChatSession:
             messages=messages[-MAX_MESSAGES:],
             updated_at=float(raw.get("updated_at") or 0.0),
             archived_at=archived_at,
+            trashed_at=trashed_at,
             channel=_clean_channel(raw.get("channel")),
             conversation_id=str(raw.get("conversation_id") or "")[:200],
             created_at=created_at,
@@ -227,7 +235,11 @@ class SessionStore:
         return session
 
     def list_sessions(
-        self, *, include_archived: bool = False, channel: str | None = None
+        self,
+        *,
+        include_archived: bool = False,
+        include_trashed: bool = False,
+        channel: str | None = None,
     ) -> list[ChatSession]:
         if not self.directory.is_dir():
             return []
@@ -243,6 +255,8 @@ class SessionStore:
             if wanted is not None and session.channel != wanted:
                 continue
             sessions.append(session)
+        if not include_trashed:
+            sessions = [item for item in sessions if not item.trashed_at]
         if not include_archived:
             sessions = [item for item in sessions if not item.archived_at]
         sessions.sort(key=lambda item: item.updated_at, reverse=True)
@@ -286,6 +300,55 @@ class SessionStore:
         session.archived_at = time.time() if archived else 0.0
         self.save(session)
         return session
+
+    def trash(self, session_id: str) -> ChatSession | None:
+        """移入回收站：保留文件与消息，30 天内可恢复。"""
+        session = self.load(session_id)
+        if session is None:
+            return None
+        session.trashed_at = time.time()
+        session.archived_at = 0.0
+        self.save(session)
+        return session
+
+    def restore(self, session_id: str) -> ChatSession | None:
+        """从回收站恢复；不改变 archived_at。"""
+        session = self.load(session_id)
+        if session is None:
+            return None
+        session.trashed_at = 0.0
+        self.save(session)
+        return session
+
+    def list_trashed(self) -> list[ChatSession]:
+        """回收站列表（按删除时间倒序）。"""
+        if not self.directory.is_dir():
+            return []
+        sessions = self.list_sessions(include_archived=True, include_trashed=True)
+        trashed = [item for item in sessions if item.trashed_at]
+        trashed.sort(key=lambda item: item.trashed_at, reverse=True)
+        return trashed
+
+    def purge(self, older_than_days: float = 30.0, *, now: float | None = None) -> int:
+        """永久删除超过保留期的回收站会话；返回删除数量。"""
+        try:
+            days = max(0.0, float(older_than_days))
+        except (TypeError, ValueError):
+            days = 30.0
+        if days <= 0.0:
+            # 0 = 用户选择「不自动清理」，不是「立刻全删」。
+            return 0
+        cutoff = float(now if now is not None else time.time()) - days * 86400.0
+        removed = 0
+        for session in self.list_trashed():
+            if session.trashed_at > cutoff:
+                continue
+            try:
+                if self.delete(session.session_id):
+                    removed += 1
+            except OSError:
+                continue
+        return removed
 
     def load(self, session_id: str) -> ChatSession | None:
         path = self._path(session_id)

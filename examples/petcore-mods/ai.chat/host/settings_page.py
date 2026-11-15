@@ -80,6 +80,8 @@ class AiChatPage(SettingsPage):
         "ai_web_search_max_sources",
         "ai_web_search_page_chars",
         "chat_background",
+        "chat_layout",
+        "chat_trash_retention_days",
         "chat_accent",
         "chat_font_size",
         "chat_font_family",
@@ -712,6 +714,35 @@ class AiChatPage(SettingsPage):
         self._update_thinking_web_visibility()
 
         card3 = self.section("对话窗外观", level=3)
+        self.layout_combo = QComboBox(self)
+        for value, label in (
+            ("desktop", "桌面版（双栏）"),
+            ("phone", "手机版（单栏）"),
+        ):
+            self.layout_combo.addItem(label, value)
+        layout_value = str(self._initial.get("chat_layout") or "desktop")
+        self.layout_combo.setCurrentIndex(
+            max(0, self.layout_combo.findData(layout_value))
+        )
+        self.layout_combo.currentIndexChanged.connect(self._on_changed)
+        card3.add_row(
+            "窗口布局",
+            self.layout_combo,
+            "手机版是单栏消息 + 会话抽屉 + 底部视图切换；下次打开对话窗生效。",
+        )
+        self.trash_days = QSpinBox(self)
+        self.trash_days.setRange(0, 365)
+        self.trash_days.setSuffix(" 天")
+        self.trash_days.setSpecialValueText("不自动清理")
+        self.trash_days.setValue(
+            int(self._initial.get("chat_trash_retention_days") or 0)
+        )
+        self.trash_days.valueChanged.connect(self._on_changed)
+        card3.add_row(
+            "回收站保留天数",
+            self.trash_days,
+            "删除的会话先放回收站；超过这个天数才永久清理。0 = 不自动清理。",
+        )
         self.background_combo = QComboBox(self)
         self._rebuild_background_options()
         self.background_combo.currentIndexChanged.connect(self._on_background_changed)
@@ -1136,6 +1167,10 @@ class AiChatPage(SettingsPage):
         config.set("ai_web_search_max_sources", int(self.web_sources.value()))
         config.set("ai_web_search_page_chars", int(self.web_page_chars.value()))
         config.set("chat_background", self._background_value)
+        config.set("chat_layout", str(self.layout_combo.currentData() or "desktop"))
+        config.set(
+            "chat_trash_retention_days", int(self.trash_days.value())
+        )
         config.set("chat_accent", self._accent_value())
         config.set(
             "chat_font_family",
@@ -1211,6 +1246,16 @@ class AiChatPage(SettingsPage):
 
     def discard_changes(self) -> None:
         self._initial = self._snapshot()
+        self.layout_combo.blockSignals(True)
+        self.layout_combo.setCurrentIndex(
+            max(0, self.layout_combo.findData(str(self._initial.get("chat_layout") or "desktop")))
+        )
+        self.layout_combo.blockSignals(False)
+        self.trash_days.blockSignals(True)
+        self.trash_days.setValue(
+            int(self._initial.get("chat_trash_retention_days") or 0)
+        )
+        self.trash_days.blockSignals(False)
         self._background_value = str(self._initial.get("chat_background") or "")
         self._rebuild_background_options()
         self._sync_persona()

@@ -57,7 +57,13 @@ def _parse_value(raw: str):
         return text
 
 
-def _prepare_root(root: Path, config_from: Path | None, overrides: dict) -> None:
+def _prepare_root(
+    root: Path,
+    config_from: Path | None,
+    overrides: dict,
+    *,
+    left_edge: bool = False,
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
     config_path = root / "config.json"
     if config_from is not None and config_from.is_file():
@@ -67,6 +73,18 @@ def _prepare_root(root: Path, config_from: Path | None, overrides: dict) -> None
     config = Config(root)
     for key, value in overrides.items():
         config.set(key, value)
+    if left_edge:
+        # 贴左缘停放：启动 0.8s 后自动进入 45° 探头（PEEKING 是静息态），
+        # 用来复现「贴边停放时闲置降帧是否真的生效」。
+        character = str(config.get("character") or "shenshen")
+        positions = dict(config.get("positions") or {})
+        entry = dict(positions.get(character) or {})
+        entry["pos_x"] = -212  # shenshen body_box 的 x；其它角色是近似值
+        entry["pos_y"] = 240
+        entry.pop("body_rx", None)
+        entry.pop("body_ry", None)
+        positions[character] = entry
+        config.set("positions", positions)
     config.save()
 
 
@@ -156,6 +174,11 @@ def main(argv=None) -> int:
     parser.add_argument("--startup-seconds", type=float, default=30.0)
     parser.add_argument("--warmup", type=float, default=20.0)
     parser.add_argument("--seconds", type=float, default=60.0)
+    parser.add_argument(
+        "--left-edge",
+        action="store_true",
+        help="把角色停到屏幕左缘，复现贴边探头（PEEKING）下的静息读数",
+    )
     args = parser.parse_args(argv)
 
     overrides = dict(DEFAULT_SETS)
@@ -166,7 +189,7 @@ def main(argv=None) -> int:
         overrides[key.strip()] = _parse_value(value)
     root = Path(args.root).resolve()
     config_from = Path(args.config_from).expanduser() if args.config_from else None
-    _prepare_root(root, config_from, overrides)
+    _prepare_root(root, config_from, overrides, left_edge=bool(args.left_edge))
 
     if args.exe:
         command = [str(Path(args.exe)), "--root", str(root)]

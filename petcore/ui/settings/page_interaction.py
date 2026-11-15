@@ -66,6 +66,7 @@ class InteractionPage(SettingsPage):
         "click_show_balance",
         "balance_tier_color_enabled",
         "drag_physics_enabled",
+        "drag_lean_enabled",
         "drop_gravity_enabled",
         "slingshot_enabled",
         "collision_enabled",
@@ -78,6 +79,7 @@ class InteractionPage(SettingsPage):
         "lock_position",
         "shift_drag",
         "idle_low_fps_enabled",
+        "work_animations_only",
     )
 
     def __init__(self, host, parent=None):
@@ -258,6 +260,24 @@ class InteractionPage(SettingsPage):
                 "开启后拖拽带弹簧跟随，松手按轨迹甩出；关闭时保持跟手拖动。",
             )
             drag_card.add_row(
+                "拖动倾斜",
+                self._checks["drag_lean_enabled"],
+                "被牵着走时身体顺着拖拽方向倾一点，松手弹回正；关掉后完全不旋转。",
+            )
+            self.lean_strength = QSpinBox(self)
+            self.lean_strength.setRange(0, 100)
+            self.lean_strength.setSingleStep(5)
+            self.lean_strength.setSuffix("%")
+            self.lean_strength.setValue(
+                int(self.config().get("drag_lean_strength") or 0)
+            )
+            self.lean_strength.valueChanged.connect(self._on_changed)
+            drag_card.add_row(
+                "倾斜强度",
+                self.lean_strength,
+                "100% = 24°，默认 30%（约 7°）；0% 关闭倾斜。",
+            )
+            drag_card.add_row(
                 "静止放手下落",
                 self._checks["drop_gravity_enabled"],
                 "低速松手也受重力落地；关闭时低速松手直接停住。",
@@ -330,6 +350,11 @@ class InteractionPage(SettingsPage):
                 "闲置降帧",
                 self._checks["idle_low_fps_enabled"],
                 "30 秒无操作后待机动画隔帧播放（24→12fps），降低 CPU 与耗电；点击/拖动立即恢复。",
+            )
+            animation_card.add_row(
+                "工作时只播工作动画",
+                self._checks["work_animations_only"],
+                "AI/DSH 正在处理时停止漫游与随机动作，只播 work 组；角色没有 work 素材时保持待机。",
             )
             self.animation_gap = QSpinBox(self)
             self.animation_gap.setRange(0, 3600)
@@ -1149,6 +1174,7 @@ class InteractionPage(SettingsPage):
         values["playback_speed"] = float(config.get("playback_speed") or 1.0)
         values["click_squash_bounces"] = int(config.get("click_squash_bounces") or 1)
         values["click_squash_strength"] = int(config.get("click_squash_strength") or 100)
+        values["drag_lean_strength"] = int(config.get("drag_lean_strength") or 0)
         values["click_squash_ms"] = int(float(config.get("click_squash_ms") or 220))
         values["animation_gap_seconds"] = int(float(config.get("animation_gap_seconds") or 0.0))
         values["head_pat_enabled"] = bool(config.get("head_pat_enabled", True))
@@ -1201,6 +1227,7 @@ class InteractionPage(SettingsPage):
         values["playback_speed"] = float(self.playback_speed.value())
         values["click_squash_bounces"] = int(self.squash_bounces.value())
         values["click_squash_strength"] = int(self.squash_strength.value())
+        values["drag_lean_strength"] = int(self.lean_strength.value())
         values["click_squash_ms"] = int(self.squash_ms.value())
         values["animation_gap_seconds"] = int(self.animation_gap.value())
         values["head_pat_enabled"] = bool(self.head_pat_enabled.isChecked())
@@ -1275,6 +1302,7 @@ class InteractionPage(SettingsPage):
         self._last_values = self._current()
         config.set("throw_strength", self._initial["throw_strength"])
         config.set("playback_speed", self._initial["playback_speed"])
+        config.set("drag_lean_strength", self._initial["drag_lean_strength"])
         config.set("animation_gap_seconds", self._initial["animation_gap_seconds"])
         config.set("head_pat_enabled", self._initial["head_pat_enabled"])
         config.set("head_pat_animation_mode", self._initial["head_pat_animation_mode"])
@@ -1319,6 +1347,7 @@ class InteractionPage(SettingsPage):
         for widget, key in (
             (self.squash_bounces, "click_squash_bounces"),
             (self.squash_strength, "click_squash_strength"),
+            (self.lean_strength, "drag_lean_strength"),
             (self.squash_ms, "click_squash_ms"),
         ):
             widget.blockSignals(True)

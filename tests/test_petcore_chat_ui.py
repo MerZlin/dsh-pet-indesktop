@@ -78,6 +78,44 @@ class FakePetWindow(QWidget):
         self.pet_moved.emit()
 
 
+def test_title_bar_settings_button_deep_links_to_chat_settings(
+    app, tmp_path: Path
+) -> None:
+    host = FakeHost(tmp_path)
+    opened: list[tuple[str | None, object]] = []
+    host.open_settings = lambda page=None, window=None: opened.append(
+        (page, window)
+    ) or True
+    control = ChatController(host, tmp_path)
+    try:
+        window = _open(control)
+        window.settings_button.click()
+        app.processEvents()
+        assert opened == [("extension:chat#对话窗外观", None)]
+    finally:
+        for state in control.states().values():
+            if state.window is not None:
+                state.window.deleteLater()
+
+
+def test_title_bar_settings_button_falls_back_to_api_page(
+    app, tmp_path: Path
+) -> None:
+    host = FakeHost(tmp_path)
+    opened: list[str | None] = []
+    host.open_settings = lambda page=None, window=None: opened.append(page) or False
+    control = ChatController(host, tmp_path)
+    try:
+        window = _open(control)
+        window.settings_button.click()
+        app.processEvents()
+        assert opened == ["extension:chat#对话窗外观", "api"]
+    finally:
+        for state in control.states().values():
+            if state.window is not None:
+                state.window.deleteLater()
+
+
 def _wait_until(predicate, timeout_ms: int = 2000) -> bool:
     """事件循环里等条件成立（宽预算，不靠固定 sleep 猜时序）。"""
     deadline = time.monotonic() + timeout_ms / 1000
@@ -237,14 +275,12 @@ def test_each_pet_slot_gets_its_own_window_and_session(controller) -> None:
     assert any("sessions-slot-1" in str(path) for path in files)
 
 
-def test_clear_starts_a_new_session(controller) -> None:
+def test_current_session_clear_entry_is_gone(controller) -> None:
     window = _open(controller)
     controller.append("ai.chat", "user", "旧消息")
-    first = controller.states()[("ai.chat", 0)].session.session_id
-    window.clear_button.click()
-    second = controller.states()[("ai.chat", 0)].session.session_id
-    assert first != second
-    assert controller.history("ai.chat") == []
+    assert not hasattr(window, "clear_button")
+    # 内部 clear() 仍保留（新会话/外部调用可用），但不再有用户入口。
+    window.clear()
     assert window.transcript_text() == ""
 
 

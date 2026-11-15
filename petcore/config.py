@@ -97,6 +97,7 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "memory_trim_enabled",
         "quiet_minutes_default",
         "hotkey_toggle_pet",
+        "hotkey_keyboard_move",
         "hotkey_open_chat",
         "hotkey_look_screen",
         "hotkey_screen_capture",
@@ -155,6 +156,8 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "island_show_name",
         "island_show_status",
         "island_show_messages",
+        "island_show_toggle_button",
+        "island_hide_fullscreen",
         "island_info_mode",
         "island_custom_text",
         "island_style",
@@ -169,6 +172,8 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "island_collision",
         "chat_always_on_top",
         "chat_follow_pet",
+        "chat_layout",
+        "chat_trash_retention_days",
         "chat_dsh_mode",
         "chat_dark_mode",
         "chat_background",
@@ -232,6 +237,8 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "voice_chime_volume",
         "music_enabled",
         "music_sing_enabled",
+        "music_buddy_wine_mode",
+        "music_buddy_wine_bpm",
         "music_sing_grace_seconds",
         "music_lyric_enabled",
         "music_lyric_lead_seconds",
@@ -304,6 +311,7 @@ DEFAULTS: dict[str, Any] = {
     "market_index_url": "",
     "edge_probe_enabled": False,
     "hotkey_toggle_pet": "",
+    "hotkey_keyboard_move": "Ctrl+Alt+M",
     "hotkey_open_chat": "",
     "hotkey_look_screen": "",
     "hotkey_screen_capture": "",
@@ -368,6 +376,11 @@ DEFAULTS: dict[str, Any] = {
     "island_opacity": 1.0,
     "island_accent": "blue",
     "island_click_action": "expand",
+    # 展开卡片里的「隐藏/显示桌宠」按钮（默认加；关掉只剩刷新/设置/清除消息）。
+    "island_show_toggle_button": True,
+    # 全屏时连灵动岛一起隐藏（与 auto_hide_fullscreen 共用同一个探测器；
+    # 默认关 = 保持升级前的行为）。
+    "island_hide_fullscreen": False,
     "island_metrics": ["cpu", "mem"],
     "island_x": None,
     "island_y": None,
@@ -384,6 +397,10 @@ DEFAULTS: dict[str, Any] = {
     "balance_tier_color_enabled": True,
     "chat_always_on_top": False,
     "chat_follow_pet": False,
+    # 对话窗布局：desktop = 双栏工作台；phone = 类手机单栏 + 抽屉。
+    "chat_layout": "desktop",
+    # 删除会话先进回收站；超过这个天数才永久清理。0 表示不自动清理。
+    "chat_trash_retention_days": 30,
     "chat_dsh_mode": False,
     "chat_dark_mode": False,
     "chat_background": "",
@@ -396,6 +413,10 @@ DEFAULTS: dict[str, Any] = {
     "click_squash_bounces": 1,
     "click_squash_strength": 100,
     "drag_physics_enabled": False,
+    # 拖动倾斜：被牵着走时按水平速度反向倾一点，松手弹回。
+    "drag_lean_enabled": True,
+    # 倾斜强度百分比：0 关闭，100% = 24°，默认 30%（约 7°，与旧手感一致）。
+    "drag_lean_strength": 30,
     "drop_gravity_enabled": False,
     "throw_strength": "standard",
     "slingshot_enabled": True,
@@ -412,6 +433,8 @@ DEFAULTS: dict[str, Any] = {
     # 闲置降帧：30 秒无交互后待机动画隔帧播放（24fps→12fps），交互即恢复。
     # 用户明确要求降低静息 CPU；与主分支默认关不同，本批默认开、设置页可关。
     "idle_low_fps_enabled": True,
+    # 工作状态（AI/DSH 正在处理）只播 work 组；当前角色没有 work 素材时保持待机。
+    "work_animations_only": True,
     "animation_gap_seconds": 0.0,
     "head_pat_enabled": True,
     "head_pat_animation_mode": "default_click",
@@ -426,6 +449,11 @@ DEFAULTS: dict[str, Any] = {
     # auto_off = 仅手动；blocked = 完全禁用（自动与菜单都拦）。
     "anim_auto_off": [],
     "anim_blocked": [],
+    # 动画素材朝向：默认「原生朝左」（facing=right 才镜像，与主分支一致）。
+    # 生成出来的自定义角色若原生朝右，把这里改成 right；个别组不一样时写进
+    # anim_facing_groups（idle/turn/move/click/drag/act，缺省=跟随默认）。
+    "anim_facing_default": "left",
+    "anim_facing_groups": {},
     "active_pets": [0],
     "spawn_inherit_size": True,
     "spawn_scale": 0.72,
@@ -447,6 +475,9 @@ DEFAULTS: dict[str, Any] = {
     "self_talk_min": 20,
     "self_talk_max": 60,
     "self_talk_duration": 5,
+    # 气泡风格（原分支 5 种预设搬回）：classic_top/paper_left/glass_right/
+    # soft_blue_top/breath_bubble；见 petcore/ui/bubble_style.py。
+    "self_talk_bubble_style": "classic_top",
     "self_talk_image_dir": "",
     "self_talk_image_scale": 100,
     "self_talk_image_chance": 30,
@@ -512,6 +543,8 @@ DEFAULTS: dict[str, Any] = {
     "voice_chime_volume": 1.0,
     "music_enabled": True,
     "music_sing_enabled": True,
+    "music_buddy_wine_mode": False,
+    "music_buddy_wine_bpm": 132,
     "music_sing_grace_seconds": 5.0,
     "music_lyric_enabled": True,
     "music_lyric_lead_seconds": 0.3,
@@ -678,6 +711,7 @@ _LEGACY_SAME_NAME_KEYS = (
     "music_player_paths",
     "music_sing_enabled",
     "music_sing_grace_seconds",
+    "self_talk_bubble_style",
     "todo_reminder_enabled",
     "todo_reminder_lead_minutes",
     "todo_reminder_speak",
@@ -798,6 +832,14 @@ def _text_list(value: Any) -> list[str]:
     return [str(item) for item in value if isinstance(item, str)]
 
 
+#: 旧版把「欧鲸鲸……」写成了「欧金金」；只做整条精确替换，不碰其它自定义台词。
+_LEGACY_SELF_TALK_LINES = {"欧金金": "欧鲸鲸……"}
+
+
+def _rename_legacy_self_talk(lines: list[str]) -> list[str]:
+    return [_LEGACY_SELF_TALK_LINES.get(item, item) for item in lines]
+
+
 def _head_pat_names(value: Any) -> list[str]:
     """Normalize configured head-pat animation names without storing paths."""
     if not isinstance(value, (list, tuple)):
@@ -845,6 +887,10 @@ ISLAND_ACCENTS = ("blue", "green", "purple", "pink", "orange")
 BALANCE_TIER_MODES = frozenset({"default", "liangwen", "custom"})
 #: 自定义峰谷文本的长度上限（气泡副标题只有一行，超过会被气泡截断）。
 BALANCE_TIER_LABEL_MAX = 12
+#: 动画朝向的组词表（与 `pet_window._facing_group()` 的映射一一对应）。
+ANIM_FACING_GROUPS = ("idle", "turn", "move", "click", "drag", "act")
+#: 「素材原生朝向」的两个合法值；默认 left（与主分支素材约定一致）。
+ANIM_FACING_SIDES = frozenset({"left", "right"})
 
 
 def _island_metrics(value: Any) -> list[str]:
@@ -863,6 +909,24 @@ def _island_metrics(value: Any) -> list[str]:
         result.append(metric_id)
         if len(result) >= ISLAND_METRIC_LIMIT:
             break
+    return result
+
+
+def _anim_facing_groups(value: Any) -> dict[str, str]:
+    """清洗 ``anim_facing_groups``：只留 6 个组、值只认 left/right，其余丢弃。
+
+    「跟随默认」= 不写这个键（而不是写一个 ``auto`` 值），所以归一化时
+    非法/未知条目直接消失，不会在配置里留下死项。
+    """
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        group = str(key or "").strip().lower()
+        side = str(item or "").strip().lower()
+        if group not in ANIM_FACING_GROUPS or side not in ANIM_FACING_SIDES:
+            continue
+        result[group] = side
     return result
 
 
@@ -1390,6 +1454,10 @@ class Config:
             round(_number(normalized.get("click_squash_strength"), 100.0, 30.0, 200.0))
         )
         normalized["drag_physics_enabled"] = _bool(normalized.get("drag_physics_enabled"), False)
+        normalized["drag_lean_enabled"] = _bool(normalized.get("drag_lean_enabled"), True)
+        normalized["drag_lean_strength"] = int(
+            round(_number(normalized.get("drag_lean_strength"), 30.0, 0.0, 100.0))
+        )
         normalized["drop_gravity_enabled"] = _bool(normalized.get("drop_gravity_enabled"), False)
         strength = str(normalized.get("throw_strength") or "standard")
         normalized["throw_strength"] = strength if strength in {"gentle", "standard", "strong", "crazy"} else "standard"
@@ -1406,6 +1474,9 @@ class Config:
         normalized["playback_speed"] = _number(normalized.get("playback_speed"), 1.0, 0.5, 2.0)
         normalized["idle_low_fps_enabled"] = _bool(
             normalized.get("idle_low_fps_enabled"), True
+        )
+        normalized["work_animations_only"] = _bool(
+            normalized.get("work_animations_only"), True
         )
         normalized["animation_gap_seconds"] = _number(
             normalized.get("animation_gap_seconds"), 0.0, 0.0, 3600.0
@@ -1439,17 +1510,28 @@ class Config:
         normalized["anim_blocked"] = _animation_tokens(
             normalized.get("anim_blocked")
         )
+        facing = str(normalized.get("anim_facing_default") or "left").strip().lower()
+        normalized["anim_facing_default"] = (
+            facing if facing in ANIM_FACING_SIDES else "left"
+        )
+        normalized["anim_facing_groups"] = _anim_facing_groups(
+            normalized.get("anim_facing_groups")
+        )
         normalized["active_pets"] = _pets(normalized.get("active_pets"))
         normalized["spawn_inherit_size"] = _bool(normalized.get("spawn_inherit_size"), True)
         normalized["spawn_scale"] = _number(
             normalized.get("spawn_scale"), DEFAULTS["spawn_scale"], SCALE_MIN, SCALE_MAX
         )
         normalized["self_talk_enabled"] = _bool(normalized.get("self_talk_enabled"), False)
-        normalized["self_talk_texts"] = _text_list(normalized.get("self_talk_texts"))
+        normalized["self_talk_texts"] = _rename_legacy_self_talk(
+            _text_list(normalized.get("self_talk_texts"))
+        )
         normalized["self_talk_daily_enabled"] = _bool(
             normalized.get("self_talk_daily_enabled"), True
         )
-        daily_texts = _text_list(normalized.get("self_talk_daily_texts"))
+        daily_texts = _rename_legacy_self_talk(
+            _text_list(normalized.get("self_talk_daily_texts"))
+        )
         if daily_texts == list(LEGACY_SELF_TALK_DAILY_TEXTS):
             daily_texts = []
         normalized["self_talk_daily_texts"] = daily_texts
@@ -1463,6 +1545,14 @@ class Config:
         normalized["self_talk_max"] = _number(normalized.get("self_talk_max"), 60.0, 1.0, 3600.0)
         normalized["self_talk_duration"] = _number(
             normalized.get("self_talk_duration"), 5.0, 1.0, 120.0
+        )
+        bubble_style = str(
+            normalized.get("self_talk_bubble_style") or "classic_top"
+        ).strip().lower()
+        from .contracts.bubble_styles import STYLE_IDS
+
+        normalized["self_talk_bubble_style"] = (
+            bubble_style if bubble_style in STYLE_IDS else "classic_top"
         )
         normalized["self_talk_image_dir"] = str(
             normalized.get("self_talk_image_dir") or ""
@@ -1573,6 +1663,16 @@ class Config:
         )
         normalized["music_sing_enabled"] = _bool(
             normalized.get("music_sing_enabled"), True
+        )
+        normalized["music_buddy_wine_mode"] = _bool(
+            normalized.get("music_buddy_wine_mode"), False
+        )
+        normalized["music_buddy_wine_bpm"] = int(
+            round(
+                _number(
+                    normalized.get("music_buddy_wine_bpm"), 132.0, 60.0, 200.0
+                )
+            )
         )
         normalized["music_sing_grace_seconds"] = _number(
             normalized.get("music_sing_grace_seconds"), 5.0, 0.0, 120.0
@@ -1718,6 +1818,7 @@ class Config:
             normalized.get("hotkey_toggle_pet")
         )
         for hotkey_key in (
+            "hotkey_keyboard_move",
             "hotkey_open_chat",
             "hotkey_look_screen",
             "hotkey_screen_capture",
@@ -1904,6 +2005,12 @@ class Config:
         normalized["island_show_messages"] = _bool(
             normalized.get("island_show_messages"), False
         )
+        normalized["island_show_toggle_button"] = _bool(
+            normalized.get("island_show_toggle_button"), True
+        )
+        normalized["island_hide_fullscreen"] = _bool(
+            normalized.get("island_hide_fullscreen"), False
+        )
         mode = str(normalized.get("island_info_mode") or "time").strip().lower()
         normalized["island_info_mode"] = mode if mode in {"time", "custom"} else "time"
         normalized["island_custom_text"] = str(
@@ -1958,6 +2065,11 @@ class Config:
             normalized.get("chat_always_on_top"), False
         )
         normalized["chat_follow_pet"] = _bool(normalized.get("chat_follow_pet"), False)
+        layout = str(normalized.get("chat_layout") or "desktop").strip().lower()
+        normalized["chat_layout"] = layout if layout in {"desktop", "phone"} else "desktop"
+        normalized["chat_trash_retention_days"] = int(
+            round(_number(normalized.get("chat_trash_retention_days"), 30.0, 0.0, 365.0))
+        )
         normalized["chat_dsh_mode"] = _bool(normalized.get("chat_dsh_mode"), False)
         normalized["chat_dark_mode"] = _bool(normalized.get("chat_dark_mode"), False)
         normalized["chat_background"] = str(
@@ -2011,6 +2123,17 @@ class Config:
     def restore(self, snapshot: dict[str, Any]) -> None:
         self.data = self._normalize(dict(snapshot))
 
+    def reload(self) -> bool:
+        """从磁盘重读并归一化；外部 AI/编辑器改完 config.json 后由宿主调用。"""
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if not isinstance(raw, dict):
+            return False
+        self.data = self._normalize({**DEFAULTS, **raw})
+        return True
+
     # ------------------------------------------------------------ 角色别名
     def character_alias(self, character_id: str) -> str:
         """角色自定义显示名；未设置返回空串（调用方回落到目录显示名）。"""
@@ -2047,7 +2170,18 @@ class Config:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
                 stream.write(payload)
                 stream.write("\n")
-            os.replace(tmp_name, self.path)
+            last: OSError | None = None
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_name, self.path)
+                    last = None
+                    break
+                except PermissionError as exc:
+                    # Windows 上另一个进程正在读同一文件时 os.replace 会短暂失败。
+                    last = exc
+                    time.sleep(0.05 * (attempt + 1))
+            if last is not None:
+                raise last
         except BaseException:
             try:
                 os.unlink(tmp_name)

@@ -55,8 +55,37 @@ def test_parse_credits_falls_back_to_default_static_entries() -> None:
         "@張墨林",
         "@MerZlin",
         "@炎圣人但丁",
+        "@浩瀚星空2005",
     ]
-    assert len(credits.special_thanks) == 15
+    assert [item.role for item in credits.author_accounts] == [
+        "桌宠独立端作者",
+        "",
+        "桌宠独立端作者",
+        "",
+        "",
+        "初始动画素材作者",
+    ]
+    assert len(credits.special_thanks) == 17
+    assert "@浩瀚星空2005" not in [item.name for item in credits.special_thanks]
+
+
+def test_parse_accounts_reads_role_and_keeps_one_row_per_handle() -> None:
+    credits = model.parse_credits(
+        _credits_payload(
+            author_accounts=[
+                {"platform": "BiliBili", "handle": "@張墨林", "role": "桌宠独立端作者"},
+                {"platform": "bilibili", "handle": "@張墨林", "role": "重复的一条"},
+                {"platform": "BiliBili", "handle": "@浩瀚星空2005", "role": "初始动画素材作者"},
+                {"platform": "BiliBili", "handle": "@炎圣人但丁"},
+            ]
+        )
+    )
+
+    assert [(item.handle, item.role) for item in credits.author_accounts] == [
+        ("@張墨林", "桌宠独立端作者"),
+        ("@浩瀚星空2005", "初始动画素材作者"),
+        ("@炎圣人但丁", ""),
+    ], "去重键仍是 (platform, handle)，role 不同不拆成两行"
 
 
 def test_merge_credits_prefers_newer_dynamic_entries() -> None:

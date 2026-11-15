@@ -64,6 +64,7 @@ logger = logging.getLogger("petcore.ui.app")
 #: 全局快捷键：配置键 + 动作（AI 三条都走 ai.chat 的 feature command）。
 HOTKEY_CONFIGS = {
     "toggle_pet": "hotkey_toggle_pet",
+    "keyboard_move": "hotkey_keyboard_move",
     "open_chat": "hotkey_open_chat",
     "look_screen": "hotkey_look_screen",
     "screen_capture": "hotkey_screen_capture",
@@ -311,6 +312,25 @@ class _PresentationAdapter:
         window = self._window()
         return bool(window is not None and window.release_loop())
 
+    def squash(
+        self,
+        duration_ms: int = 0,
+        bounces: int = 0,
+        strength: float = 0.0,
+    ) -> bool:
+        if not self._on_gui_thread():
+            self._defer(lambda: self.squash(duration_ms, bounces, strength))
+            return False
+        window = self._window()
+        method = getattr(window, "squash", None)
+        if not callable(method):
+            return False
+        try:
+            return bool(method(duration_ms, bounces, strength))
+        except Exception:  # noqa: BLE001 - 视觉反馈失败不影响调用方
+            logger.debug("presentation squash failed", exc_info=True)
+            return False
+
     def show_image(
         self,
         path,
@@ -471,6 +491,10 @@ class CoreHost:
         self.island = None
         self.island_field = None
         self.fullscreen_hide = None
+        #: 当前是否在全屏（宿主侧只读副本，用于岛的全屏显隐判断）。
+        self._fullscreen_hit = False
+        #: 岛是不是被全屏自动藏起来的（只有我们自己藏的才在离开时恢复）。
+        self._island_hidden_by_fullscreen = False
         self.probe_hub = None
         self.settings_dialog = None
         self.hotkeys: GlobalHotkeyService | None = None
@@ -1129,6 +1153,71 @@ class CoreHost:
 
     # ------------------------------------------------------------ 全屏自动隐藏
 
+    # ------------------------------------------------------------ 外部配置
+    def _config_signature(self) -> dict[str, tuple[int, int]]:
+        root = Path(self.root)
+        files = [root / "config.json", *sorted(root.glob("config-pet-*.json"))]
+        result: dict[str, tuple[int, int]] = {}
+        for path in files:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            result[str(path)] = (int(stat.st_mtime_ns), int(stat.st_size))
+        return result
+
+    def start_config_watch(self) -> None:
+        """2s 检查外部改配置；设置窗打开时延后，避免冲掉用户正在编辑的值。"""
+        if getattr(self, "_config_watch_timer", None) is not None:
+            return
+        timer = QTimer(self.app)
+        timer.setInterval(2000)
+        timer.timeout.connect(self._check_external_config)
+        timer.start()
+        self._config_watch_timer = timer
+        self._config_watch_sig = self._config_signature()
+
+    def _check_external_config(self) -> None:
+        if getattr(self, "settings_dialog", None) is not None:
+            return
+        current = self._config_signature()
+        previous = getattr(self, "_config_watch_sig", None)
+        if previous is None:
+            self._config_watch_sig = current
+            return
+        changed = [
+            path
+            for path in set(current) | set(previous)
+            if previous.get(path) != current.get(path)
+        ]
+        if not changed:
+            return
+        ok = True
+        try:
+            ok = self.config.reload() is not False
+        except Exception:  # noqa: BLE001 - 坏文件保留内存值
+            ok = False
+            logger.warning("external config reload failed", exc_info=True)
+        pets = getattr(self, "pets", None)
+        windows = pets.each() if pets is not None else [getattr(self, "window", None)]
+        for window in windows:
+            config = getattr(window, "config", None)
+            reloader = getattr(config, "reload", None)
+            if callable(reloader):
+                try:
+                    if reloader() is False:
+                        ok = False
+                except Exception:  # noqa: BLE001
+                    ok = False
+                    logger.debug("pet config reload failed", exc_info=True)
+        self.apply_live_settings()
+        if ok:
+            self._config_watch_sig = current
+            logger.info("external config reload: %d file(s)", len(changed))
+        else:
+            # 失败不推进签名：编辑器非原子写入的半截 JSON 下一拍还会重试。
+            logger.warning("external config reload incomplete; will retry")
+
     def start_fullscreen_hide(self) -> None:
         """创建进程内唯一的全屏监视器并按配置门启停（多宠共用一个）。
 
@@ -1141,16 +1230,48 @@ class CoreHost:
             self.fullscreen_hide = FullscreenHideController(
                 self._windows, parent=self.app
             )
+            self.fullscreen_hide.fullscreen_changed.connect(
+                self._on_fullscreen_changed
+            )
         self.apply_fullscreen_hide()
 
     def apply_fullscreen_hide(self, enabled: bool | None = None) -> None:
-        """把「开关 + 当前配置」作用到监视器（设置页实时预览与取消回滚共用）。"""
+        """把「开关 + 当前配置」作用到监视器（设置页实时预览与取消回滚共用）。
+
+        探测器由**两个**用途共用：桌宠隐藏（``auto_hide_fullscreen``）与灵动岛
+        隐藏（``island_hide_fullscreen``）。只要任一开着就起表；宠物那一半由
+        ``set_hide_pets`` 单独门控，关掉桌宠开关不会连带关掉岛的探测。
+        """
         controller = getattr(self, "fullscreen_hide", None)
         if controller is None:
             return
         if enabled is None:
             enabled = bool(self.config.get("auto_hide_fullscreen", True))
-        controller.set_enabled(bool(enabled))
+        island = bool(self.config.get("island_hide_fullscreen", False))
+        controller.set_hide_pets(bool(enabled))
+        controller.set_enabled(bool(enabled) or island)
+
+    def _on_fullscreen_changed(self, hit: bool) -> None:
+        """全屏翻转：按配置把灵动岛一起藏/恢复（只动我们自己藏的那次）。"""
+        self._fullscreen_hit = bool(hit)
+        island = getattr(self, "island", None)
+        if hit:
+            if not bool(self.config.get("island_hide_fullscreen", False)):
+                return
+            if island is None or not island.isVisible():
+                return
+            island.set_visible(False)
+            self._island_hidden_by_fullscreen = True
+            return
+        if not self._island_hidden_by_fullscreen:
+            return
+        self._island_hidden_by_fullscreen = False
+        if island is None or not bool(self.config.get("island_enabled", False)):
+            return
+        try:
+            self.apply_island_settings()
+        except Exception:  # noqa: BLE001 - 岛恢复失败不许影响桌宠
+            logger.exception("failed to restore the island after fullscreen")
 
     def set_auto_hide_fullscreen(self, enabled: bool, *, persist: bool = True) -> None:
         """全屏自动隐藏开关（菜单/设置/命令共用入口）。"""
@@ -1187,6 +1308,10 @@ class CoreHost:
         )
         self.island.balance_requested.connect(self.request_balance)
         self.island.settings_requested.connect(lambda: self.open_settings("api"))
+        # 卡片按钮与「点胶囊 = 显隐桌宠」共用同一个入口（顺带修掉
+        # island_click_action=toggle_pet 只发信号、宿主没接线的死开关）。
+        self.island.toggle_pet_requested.connect(self._toggle_pet_visible)
+        self.island.clicked.connect(self._toggle_pet_visible)
         self.island.set_avoidance_callback(self._avoid_island_overlap)
         self.island.set_pet_visible(self._any_pet_visible())
         self.island_field = self._build_island_field(self.island)
@@ -1281,7 +1406,15 @@ class CoreHost:
                 self.config, character_name=self._island_character_name()
             )
             island.refresh_from_config()
-            island.set_visible(True)
+            # 全屏隐藏生效期间不要因为一次「应用设置」把岛拉回全屏画面上；
+            # 退出全屏由 _on_fullscreen_changed 统一恢复。
+            if self._fullscreen_hit and bool(
+                self.config.get("island_hide_fullscreen", False)
+            ):
+                self._island_hidden_by_fullscreen = True
+                island.set_visible(False)
+            else:
+                island.set_visible(True)
             # 岛可能在后来的某一轮才被启用：启用时按当前可见性补一次，否则状态点
             # 会停在「隐藏」直到下一次显隐变化。
             self._sync_island_pet_visible()
@@ -1321,6 +1454,9 @@ class CoreHost:
         current_scale = float(getattr(state, "scale", scale))
         if abs(scale - current_scale) > 1e-9:
             window.set_scale(scale, persist=False)
+        speed_setter = getattr(window, "apply_playback_speed", None)
+        if callable(speed_setter):
+            speed_setter(float(pet_config.get("playback_speed") or 1.0))
         on_top = bool(pet_config.get("always_on_top"))
         if on_top != bool(getattr(window, "always_on_top", on_top)):
             window.set_always_on_top(on_top, persist=False)
@@ -1380,9 +1516,56 @@ class CoreHost:
             logger.warning("无法注册全局快捷键 %s(%s)：%s", normalized, kind, message)
         return ok, message
 
+    @property
+    def keyboard_drive_target(self):
+        controller = getattr(self, "_keyboard_drive", None)
+        return getattr(controller, "target", None)
+
+    def toggle_keyboard_drive(self, window=None) -> None:
+        """开启/关闭键盘控制移动；同一时刻只控制一只宠。"""
+        from .keyboard_drive import KeyboardDriveController
+        from ..platform import keyboard_state
+
+        target = (
+            window
+            or getattr(self, "_active_window", None)
+            or getattr(self, "window", None)
+        )
+        if target is None:
+            return
+
+        def notify(text: str) -> None:
+            say = getattr(target, "say", None)
+            if not callable(say):
+                return
+            try:
+                say(text, 3600)
+            except Exception:  # noqa: BLE001 - 提示失败不影响模式切换
+                pass
+
+        if not keyboard_state.supported():
+            notify("键盘控制目前只支持 Windows")
+            return
+        controller = getattr(self, "_keyboard_drive", None)
+        if controller is None:
+            parent = getattr(self, "app", None)
+            controller = KeyboardDriveController(parent)
+            self._keyboard_drive = controller
+        if controller.target is target:
+            controller.stop()
+            notify("键盘控制已关闭")
+            return
+        controller.set_target(target)
+        notify(
+            "键盘控制已开启：W/A/S/D 或方向键移动，松手播放收尾；"
+            "再按快捷键或右键「控制移动」关闭"
+        )
+
     def _hotkey_callback(self, kind: str):
         if kind == "toggle_pet":
             return self._toggle_pet_visible
+        if kind == "keyboard_move":
+            return self.toggle_keyboard_drive
         command = HOTKEY_COMMANDS.get(str(kind))
         if command is None:
             return lambda: None
@@ -1399,7 +1582,7 @@ class CoreHost:
             self.window.set_visible(not self.window.isVisible())
             self._sync_island_pet_visible()
 
-    def open_settings(self, initial_page: str | None = None, *, window=None) -> None:
+    def open_settings(self, initial_page: str | None = None, *, window=None) -> bool:
         from .settings.dialog import SettingsDialog
 
         dialog = self.settings_dialog
@@ -1412,15 +1595,19 @@ class CoreHost:
                 self.settings_dialog = None
             dialog.deleteLater()
             dialog = None
+        selected = True
         if dialog is None:
             dialog = SettingsDialog(self, initial_page=initial_page, target_window=target)
             dialog.finished.connect(lambda _result, d=dialog: self._settings_closed(d))
             self.settings_dialog = dialog
+            if initial_page:
+                selected = bool(dialog.select_page(initial_page))
         elif initial_page:
-            dialog.select_page(initial_page)
+            selected = bool(dialog.select_page(initial_page))
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+        return selected
 
     def _settings_closed(self, dialog) -> None:
         if self.settings_dialog is dialog:
@@ -1549,6 +1736,21 @@ class CoreHost:
         ``source`` 是来源名（chat / screen / ...）：岛按来源归并（错误 > 待确认 > 工作），
         所以截图收尾发 idle 不会把仍在流式回答的对话一起关掉。
         """
+        pets = getattr(self, "pets", None)
+        windows = (
+            pets.each()
+            if pets is not None
+            else [getattr(self, "window", None)]
+        )
+        for window in windows:
+            work_setter = getattr(window, "set_work_state", None)
+            if not callable(work_setter):
+                continue
+            try:
+                work_setter(state)
+            except Exception:  # noqa: BLE001 - 动画锁坏了不许影响岛/主流程
+                logger.debug("work animation state failed", exc_info=True)
+
         island = getattr(self, "island", None)
         setter = getattr(island, "set_agent_state", None)
         if not callable(setter):
@@ -1938,6 +2140,7 @@ def run(
     QTimer.singleShot(120, load_features_after_start)
     # 全屏自动隐藏：单实例监视器，1 Hz 探测；配置门关闭时不建定时器。
     host.start_fullscreen_hide()
+    host.start_config_watch()
     if str(config.get("frameseq") or "auto") != "off":
         from ..media.provision import start_background_provision
 

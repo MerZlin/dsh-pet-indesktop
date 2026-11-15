@@ -112,6 +112,42 @@ class MusicPage(SettingsPage):
             "播放音乐时循环播放「悠闲哼歌」；纯音乐不唱。",
         )
 
+        self.buddy_wine = make_checkbox(self)
+        self.buddy_wine.setChecked(
+            bool(config.get("music_buddy_wine_mode", DEFAULTS["music_buddy_wine_mode"]))
+        )
+        self.buddy_wine.toggled.connect(
+            lambda _checked=False: self._write(
+                "music_buddy_wine_mode", self.buddy_wine.isChecked()
+            )
+        )
+        card.add_row(
+            "朋友的酒模式",
+            self.buddy_wine,
+            "识别到音乐时按下面的节奏压缩回弹；暂停或停止播放即停。",
+        )
+
+        self.buddy_wine_bpm = QSpinBox(self)
+        self.buddy_wine_bpm.setRange(60, 200)
+        self.buddy_wine_bpm.setSuffix(" BPM")
+        self.buddy_wine_bpm.setValue(
+            int(
+                float(
+                    config.get(
+                        "music_buddy_wine_bpm", DEFAULTS["music_buddy_wine_bpm"]
+                    )
+                )
+            )
+        )
+        self.buddy_wine_bpm.valueChanged.connect(
+            lambda value: self._write("music_buddy_wine_bpm", int(value))
+        )
+        card.add_row(
+            "弹跳节奏",
+            self.buddy_wine_bpm,
+            "土味 DJ 常见 128–140 BPM；默认 132（约 0.45 秒一次）。",
+        )
+
         self.grace = QSpinBox(self)
         self.grace.setRange(0, 120)
         self.grace.setSuffix(" 秒")
@@ -463,6 +499,8 @@ class MusicPage(SettingsPage):
         return {
             "music_enabled": bool(self.enabled.isChecked()),
             "music_sing_enabled": bool(self.sing.isChecked()),
+            "music_buddy_wine_mode": bool(self.buddy_wine.isChecked()),
+            "music_buddy_wine_bpm": int(self.buddy_wine_bpm.value()),
             "music_sing_grace_seconds": int(self.grace.value()),
             "music_lyric_enabled": bool(self.lyric.isChecked()),
             "music_lyric_lead_seconds": round(float(self.lead.value()), 1),
@@ -503,6 +541,7 @@ class MusicPage(SettingsPage):
         for widget, key in (
             (self.enabled, "music_enabled"),
             (self.sing, "music_sing_enabled"),
+            (self.buddy_wine, "music_buddy_wine_mode"),
             (self.lyric, "music_lyric_enabled"),
             (self.browser, "music_browser_media_enabled"),
             (self.filter_enabled, "music_filter_enabled"),
@@ -512,6 +551,7 @@ class MusicPage(SettingsPage):
             widget.blockSignals(False)
         for widget, key in (
             (self.grace, "music_sing_grace_seconds"),
+            (self.buddy_wine_bpm, "music_buddy_wine_bpm"),
             (self.cache, "music_lyric_cache_limit"),
         ):
             widget.blockSignals(True)
@@ -556,6 +596,12 @@ class MusicPage(SettingsPage):
             "下一首",
             "歌词",
             "唱歌",
+            "朋友的酒",
+            "BPM",
+            "弹跳频率",
+            "Q弹",
+            "压缩",
+            "回弹",
             "识别",
             "切歌",
             "播放控制",

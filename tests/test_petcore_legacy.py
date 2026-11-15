@@ -294,6 +294,44 @@ def test_missing_move_strides_is_an_empty_table(tmp_path):
     assert character.move_strides == {}
 
 
+def test_move_segments_are_parsed_from_stride_objects(tmp_path):
+    base = tmp_path / "characters"
+    _make_character(
+        base,
+        move_strides={
+            "run": {
+                "stride": 150,
+                "curve": [0.0, 0.5, 1.0],
+                "segments": {
+                    "start": 0,
+                    "loop_start": 1,
+                    "loop_end": 2,
+                    "end": 3,
+                },
+            }
+        },
+    )
+    character = _load(base)
+    assert character is not None
+    assert character.move_segments == {
+        "run": {"start": 0, "loop_start": 1, "loop_end": 2, "end": 3}
+    }
+
+
+def test_move_segments_drop_invalid_values(tmp_path):
+    base = tmp_path / "characters"
+    _make_character(
+        base,
+        move_strides={
+            "run": {"stride": 150, "segments": {"loop_start": -1, "loop_end": "2"}},
+            "walk": {"stride": 90, "segments": {"loop_start": 1, "loop_end": 4}},
+        },
+    )
+    character = _load(base)
+    assert character is not None
+    assert character.move_segments == {"walk": {"loop_start": 1, "loop_end": 4}}
+
+
 def test_text_clips_no_mirror_collects_strings(character_root):
     character = _load(character_root)
     assert character is not None

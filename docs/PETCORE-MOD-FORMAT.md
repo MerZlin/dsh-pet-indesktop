@@ -36,6 +36,41 @@ mods/<id>/
 }
 ```
 
+`videos/` 允许 `.webm`、`.gif`、`.webp`。WebP 精灵表有两种声明方式：
+
+1. `videos/manifest.json` 的 `clips`（推荐，导入器会写这个）：
+```json
+{"clips": {"走路": {"sheet": "move/走路.webp", "frame_w": 640, "frame_h": 360,
+                    "columns": 8, "rows": 15, "frame_count": 120, "fps": 12,
+                    "folder": "move"}}}
+```
+   `folder` 决定语义（idle/turn/move/click/drag/work/events）；`sheet` 相对
+   `videos/`，不许路径逃逸。
+2. 同名 `.json` 边车：`videos/move/走路.webp` + `走路.json`，字段兼容
+   `FrameWidth/FrameHeight/Columns/Rows/FrameCount/SampleFps`（aboutme-pets 格式）。
+   没有边车的 `.webp` 按单文件动画播放；Qt 不支持 WebP 随机跳帧，键盘控制会退回整段循环。
+
+`canvas` 缺省 640×360；`body_box`/`head_box` 按 `canvas` 校验，不再写死 640×360。
+
+`videos/move_strides.json` 的条目可以是整数（`{"左转奔跑": 240}`）或对象：
+
+```json
+{
+  "左转奔跑": {
+    "stride": 240,
+    "curve": [0.0, 0.0, 0.0034, "... 241 个 0..1 的值 ...", 1.0],
+    "segments": {"start": 0, "loop_start": 56, "loop_end": 104, "end": 240}
+  }
+}
+```
+
+- `stride` 是**整条 curve 0→1** 的水平位移（px，scale=1.0）；键盘驱动每圈按
+  `stride × (curve[loop_end] − curve[loop_start])` 推进。
+- `segments` 可选，帧号闭区间；用来声明「真正可循环的中间段」。素材把绊倒/趴地
+  烤进 clip 时，把 `loop_end` 放在绊倒前，松手从 `loop_end + 1` 播收尾。
+  缺省时仍按 curve 自动推导（前导 0 = 前摇，尾部 1 = 收尾）。
+- 非法/越界/倒序的 `segments` 会被丢弃，回落自动推导，不会让桌宠不能走。
+
 feature 包额外字段（`requires` 只校验格式，不做依赖解析/自动安装）：
 
 ```json
@@ -185,6 +220,17 @@ python -m petcore mods doctor
 
 安装流程：校验 manifest → staging 目录 → 校验内容摘要 → 原子改名到 `mods/<id>`；目标已存在时拒绝，`--force` 才替换（旧目录先移入 `.trash-*`）。ZIP 安装拒绝 zip-slip。
 
+### 6.0 从 URL 安装（设置 → 扩展管理）
+
+「从链接安装」接受 `http/https` 直链 zip，先下载到 `cache/mods/url-install`，预览后再安装：
+
+- 根目录（或唯一子目录）有 `mod.json`：按扩展包安装（feature 仍需先允许功能扩展）；
+- 根目录有 `manifest.json` + `actions.json`：按 aboutme 单角色包走 `sprite_pack`；
+- 其他形态（多包合集、裸素材目录）明确拒绝。
+
+下载上限 128 MiB；解包预算 512 MiB / 20000 条目；zip-slip、Windows 设备名、大小写重复、
+symlink 沿用 `mods.install.open_archive` 的校验。实现：`petcore/mods/url_install.py`。
+
 ### 6.1 授信标记 `.trusted`
 
 功能包默认需要用户打开「允许功能扩展」（`allow_feature_mods`）。Windows 安装向导
@@ -238,7 +284,7 @@ python -m petcore mods doctor
 - 设置页不再各自占侧边栏：第三方 mod 的 `settings_page` 进入「扩展管理」页内导航；Core 内置特性用 `Contribution.data["host_page"]` 声明归属（`interaction` / `menu` / `about`），由对应 Core 页内嵌，见 §9。
 - `HostPorts` 新增：
   - `pets`：只读宠物句柄（body_rect / velocity / move_by / show / hide / say / play_animation / play_event）；
-  - `presentation`：`say` / `show_image` / `play_animation` / `play_event` / `notify`；
+  - `presentation`：`say` / `show_image` / `play_animation` / `release_loop` / `squash` / `play_event` / `notify`；
   - `interaction`：`on_click`、`on_drop`、`on_tick`、`cancel_owner`；`on_drop` 回调收到的是
     **已投喂的文件路径列表**（Core 先做投喂动画与统计，再通知监听者；`file_feeding_enabled`
     关闭时不会有 drop 事件）；
@@ -455,10 +501,21 @@ ports.presentation.release_loop()                          # 当前这圈播完�
 探头、击飞、拖拽接管时 Core 会自动解除循环；`play_animation` 返回 `False` 表示角色
 没有这个素材，mod 应安静降级（不要自己找替代素材名）。
 
+### 压缩回弹
+
+节奏类视觉反馈（「朋友的酒模式」）用：
+
+```python
+ports.presentation.squash()                  # 一次 Q 弹，沿用 click_squash_* 配置
+ports.presentation.squash(260, 2, 1.4)       # 时长 ms / 次数 / 强度（0 = 配置默认）
+```
+
+只改渲染形变，不改动画名与位置；拖拽/抛掷/探头/击飞接管时返回 `False` 且不叠加。
+
 ### 参考实现
 
 - `examples/petcore-mods/voice.chime` 1.1.0：日程/台词/预缓存/免打扰 + 设置页（含四家后端与密钥状态）。
-- `examples/petcore-mods/media.music` 1.2.0：三源识别（SMTC / 音频会话 / 播放器窗口标题）+ 歌词（三源打分，`HostPorts.http`）+ 唱跳循环 + 播放器启动。
+- `examples/petcore-mods/media.music` 1.4.0：三源识别（SMTC / 音频会话 / 播放器窗口标题）+ 歌词（三源打分，`HostPorts.http`）+ 唱跳循环 + 播放器启动；朋友的酒模式用 `music_buddy_wine_bpm`（60–200，默认 132）的独立节拍器。
 
 ## 13. 卸载、分组与音乐识别（P4-b2，2026-10-23）
 
@@ -488,7 +545,7 @@ ports.presentation.release_loop()                          # 当前这圈播完�
 
 ### 13.3 音乐识别：三源判定与识别范围
 
-> 2026-10-26 重写（`media.music` 1.2.0）。旧版只有 SMTC 一条源，下面这张表是
+> 2026-10-26 重写（`media.music` 1.3.0）。旧版只有 SMTC 一条源，下面这张表是
 > **唯一判定真源**；改判定必须先改这里与 `host/recognizer.py` 的用例。
 
 **三个来源各管一件事**

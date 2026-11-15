@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import paths
+from ...config import ANIM_FACING_GROUPS
 from ...engine.geometry import DEFAULT_SCALE, SCALE_MAX, SCALE_MIN, SCALE_STEPS
 from ...platform import autostart, hotkey_spec, screens
 from ...platform.desktop import capabilities as desktop_capabilities
@@ -874,6 +876,10 @@ class AppearancePage(SettingsPage):
         self._initial_edge_probe = bool(self.config().get("edge_probe_enabled"))
         self._initial_hotkey = str(self.config().get("hotkey_toggle_pet") or "")
         self._last_hotkey = self._initial_hotkey
+        self._initial_keyboard_hotkey = str(
+            self.config().get("hotkey_keyboard_move") or ""
+        )
+        self._last_keyboard_hotkey = self._initial_keyboard_hotkey
         self._initial_ui_font_size = int(self.config().get("ui_font_size") or 13)
         self._initial_bubble_text_scale = int(self.config().get("bubble_text_scale") or 100)
         self._initial_stream_capture = bool(self.config().get("stream_capture_mode"))
@@ -1017,6 +1023,90 @@ class AppearancePage(SettingsPage):
             desktop_capabilities()["global_hotkeys"].reason or "全局快捷键，至少包含一个修饰键；留空表示不绑定。",
         )
 
+        self.keyboard_hotkey_edit = QLineEdit(self)
+        self.keyboard_hotkey_edit.setPlaceholderText("例如 Ctrl+Alt+M（留空 = 不绑定）")
+        self.keyboard_hotkey_edit.setText(self._initial_keyboard_hotkey)
+        self.keyboard_hotkey_edit.setEnabled(
+            desktop_capabilities()["global_hotkeys"].supported
+        )
+        self.keyboard_hotkey_edit.setToolTip(
+            desktop_capabilities()["global_hotkeys"].reason
+        )
+        self.keyboard_hotkey_edit.setMinimumWidth(220)
+        self.keyboard_hotkey_edit.editingFinished.connect(
+            self._on_keyboard_hotkey_finished
+        )
+        card.add_row(
+            "键盘控制快捷键",
+            self.keyboard_hotkey_edit,
+            "开启后 W/A/S/D 或方向键移动桌宠，松手播放收尾；"
+            "右键「桌宠控制 → 控制移动」也可切换。",
+        )
+
+        facing_card = self.section("动画朝向")
+        self._initial_facing_default = str(
+            self.config().get("anim_facing_default") or "left"
+        )
+        initial_groups = self.config().get("anim_facing_groups") or {}
+        self._initial_facing_groups = dict(initial_groups) if isinstance(initial_groups, dict) else {}
+        self.facing_default_combo = QComboBox(self)
+        self.facing_default_combo.addItem("朝左（默认）", "left")
+        self.facing_default_combo.addItem("朝右", "right")
+        default_index = self.facing_default_combo.findData(self._initial_facing_default)
+        self.facing_default_combo.setCurrentIndex(max(0, default_index))
+        facing_card.add_row(
+            "素材默认朝向",
+            self.facing_default_combo,
+            "角色素材本身朝哪边。自定义角色如果走路方向和朝向相反（左右反了），"
+            "把它改成「朝右」即可；只影响镜像，不影响移动方向。",
+        )
+        group_grid = QWidget(self)
+        grid = QGridLayout(group_grid)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(6)
+        self.facing_group_combos: dict[str, QComboBox] = {}
+        for index, (group, label) in enumerate(
+            (
+                ("idle", "待机"),
+                ("move", "移动"),
+                ("turn", "转向"),
+                ("click", "点击"),
+                ("drag", "拖拽"),
+                ("act", "其他动作"),
+            )
+        ):
+            if group not in ANIM_FACING_GROUPS:
+                continue
+            cell = QWidget(group_grid)
+            cell_layout = QHBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.setSpacing(6)
+            cell_label = QLabel(label, cell)
+            cell_label.setMinimumWidth(56)
+            combo = QComboBox(cell)
+            combo.addItem("跟随默认", "")
+            combo.addItem("朝左", "left")
+            combo.addItem("朝右", "right")
+            combo.setCurrentIndex(
+                max(0, combo.findData(str(self._initial_facing_groups.get(group) or "")))
+            )
+            cell_layout.addWidget(cell_label)
+            cell_layout.addWidget(combo, 1)
+            grid.addWidget(cell, index // 2, index % 2)
+            self.facing_group_combos[group] = combo
+        facing_card.add_row(
+            "分组朝向",
+            group_grid,
+            "只有某一组素材方向和默认不同时才需要改；选「跟随默认」不写配置。",
+            expand=True,
+        )
+        self.facing_default_combo.currentIndexChanged.connect(
+            self._on_anim_facing_changed
+        )
+        for combo in self.facing_group_combos.values():
+            combo.currentIndexChanged.connect(self._on_anim_facing_changed)
+
         tabs.close()
         tabs.enter_context(self.tab("island", "灵动岛"))
         island_card = self.section("灵动岛")
@@ -1091,6 +1181,33 @@ class AppearancePage(SettingsPage):
             self.island_messages_check,
             "开启后展开卡片列出最近 8 条气泡消息，并可一键清除；"
             "关闭时不记录也不显示历史，消息引发的胶囊果冻也一并停掉；读数不受影响。默认关闭。",
+        )
+
+        self.island_toggle_button_check = make_checkbox(self)
+        self.island_toggle_button_check.setChecked(
+            bool(self.config().get("island_show_toggle_button", True))
+        )
+        self.island_toggle_button_check.toggled.connect(self._on_island_changed)
+        island_card.add_row(
+            "显隐桌宠按钮",
+            self.island_toggle_button_check,
+            "展开卡片里加一个「隐藏桌宠 / 显示桌宠」按钮。默认开启；"
+            "关掉后只保留刷新余额、设置与清除消息。",
+        )
+
+        self.island_fullscreen_check = make_checkbox(self)
+        self.island_fullscreen_check.setChecked(
+            bool(self.config().get("island_hide_fullscreen", False))
+        )
+        if not desktop_capabilities()["fullscreen_detection"].supported:
+            self.island_fullscreen_check.setEnabled(False)
+            self.island_fullscreen_check.setToolTip("仅在 Windows 上可用。")
+        self.island_fullscreen_check.toggled.connect(self._on_island_changed)
+        island_card.add_row(
+            "全屏时隐藏",
+            self.island_fullscreen_check,
+            "全屏游戏或视频期间把灵动岛一起收起来（与桌宠共用同一个探测器）。"
+            "默认关闭；关闭时岛照常浮在全屏画面上。",
         )
 
         info_row = QWidget(self)
@@ -1412,6 +1529,20 @@ class AppearancePage(SettingsPage):
         config.set("island_show_name", self.island_name_check.isChecked())
         config.set("island_show_status", self.island_status_check.isChecked())
         config.set("island_show_messages", self.island_messages_check.isChecked())
+        config.set(
+            "island_show_toggle_button",
+            self.island_toggle_button_check.isChecked(),
+        )
+        config.set(
+            "island_hide_fullscreen",
+            self.island_fullscreen_check.isChecked(),
+        )
+        applier = getattr(self.host, "apply_fullscreen_hide", None)
+        if callable(applier):
+            try:
+                applier()
+            except Exception:  # noqa: BLE001 - 探测器坏了不许把设置页弄崩
+                pass
         config.set("island_info_mode", self.island_info_combo.currentData() or "time")
         config.set("island_custom_text", self.island_info_text.text().strip())
         config.set("island_metrics", self._island_metrics())
@@ -1450,6 +1581,24 @@ class AppearancePage(SettingsPage):
             setter = getattr(window, "set_edge_probe_enabled", None)
             if callable(setter):
                 setter(bool(enabled), persist=False)
+        self.changed.emit()
+
+    def _facing_groups_value(self) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for group, combo in self.facing_group_combos.items():
+            side = str(combo.currentData() or "")
+            if side in ("left", "right"):
+                result[group] = side
+        return result
+
+    def _on_anim_facing_changed(self, _index: int = 0) -> None:
+        """朝向写完即时生效：宠物每帧读配置，不需要额外的 apply 通道。"""
+        config = self.config()
+        config.set(
+            "anim_facing_default",
+            str(self.facing_default_combo.currentData() or "left"),
+        )
+        config.set("anim_facing_groups", self._facing_groups_value())
         self.changed.emit()
 
     def _stream_mode_value(self) -> str:
@@ -1594,6 +1743,35 @@ class AppearancePage(SettingsPage):
             applier(normalized)
         self.changed.emit()
 
+    def _on_keyboard_hotkey_finished(self) -> None:
+        raw = self.keyboard_hotkey_edit.text().strip()
+        normalized = hotkey_spec.normalize(raw)
+        if raw and not normalized:
+            self.keyboard_hotkey_edit.setText(self._last_keyboard_hotkey)
+            QMessageBox.warning(
+                self,
+                "快捷键",
+                "无法识别这个组合键；请使用类似 Ctrl+Alt+M 的写法，至少包含一个修饰键。",
+            )
+            return
+        self.keyboard_hotkey_edit.setText(normalized)
+        self._last_keyboard_hotkey = normalized
+        self.config().set("hotkey_keyboard_move", normalized)
+        applier = getattr(self.host, "set_hotkey", None)
+        if callable(applier):
+            try:
+                result = applier(normalized, kind="keyboard_move")
+            except TypeError:
+                result = applier(normalized)
+            if isinstance(result, tuple) and len(result) >= 2 and not result[0]:
+                # 注册失败必须可见；只写日志等于用户以为绑上了。
+                QMessageBox.warning(
+                    self,
+                    "快捷键",
+                    f"这个组合键没能注册：{result[1] or '可能已被其它程序占用'}。",
+                )
+        self.changed.emit()
+
     def _on_text_sizes_changed(self, _value: int = 0) -> None:
         config = self.config()
         font_size = int(self.ui_font_size_spin.value())
@@ -1665,6 +1843,11 @@ class AppearancePage(SettingsPage):
             or self.multi_screen_check.isChecked() != self._initial_multi_screen
             or self.edge_probe_check.isChecked() != self._initial_edge_probe
             or self.hotkey_edit.text().strip() != self._initial_hotkey
+            or self.keyboard_hotkey_edit.text().strip()
+            != self._initial_keyboard_hotkey
+            or str(self.facing_default_combo.currentData() or "left")
+            != self._initial_facing_default
+            or self._facing_groups_value() != self._initial_facing_groups
         )
 
     def draft(self) -> None:
@@ -1702,6 +1885,24 @@ class AppearancePage(SettingsPage):
             spin.blockSignals(False)
         self.config().set("ui_font_size", self._initial_ui_font_size)
         self.config().set("bubble_text_scale", self._initial_bubble_text_scale)
+        self.config().set("anim_facing_default", self._initial_facing_default)
+        self.config().set(
+            "anim_facing_groups", dict(self._initial_facing_groups)
+        )
+        self.facing_default_combo.blockSignals(True)
+        self.facing_default_combo.setCurrentIndex(
+            max(0, self.facing_default_combo.findData(self._initial_facing_default))
+        )
+        self.facing_default_combo.blockSignals(False)
+        for group, combo in self.facing_group_combos.items():
+            combo.blockSignals(True)
+            combo.setCurrentIndex(
+                max(
+                    0,
+                    combo.findData(str(self._initial_facing_groups.get(group) or "")),
+                )
+            )
+            combo.blockSignals(False)
         self.config().set("stream_capture_keycolor", self._initial_stream_keycolor)
         self.config().set("stream_capture_mode", self._initial_stream_capture)
         self.config().set("stream_key_color", self._initial_stream_key_color)
@@ -1733,6 +1934,13 @@ class AppearancePage(SettingsPage):
         applier = getattr(self.host, "set_hotkey", None)
         if callable(applier):
             applier(self._initial_hotkey, persist=False)
+        self.keyboard_hotkey_edit.setText(self._initial_keyboard_hotkey)
+        self._last_keyboard_hotkey = self._initial_keyboard_hotkey
+        if callable(applier):
+            try:
+                applier(self._initial_keyboard_hotkey, persist=False, kind="keyboard_move")
+            except TypeError:
+                pass
         if self._window is not None:
             setter = getattr(self._window, "set_edge_probe_enabled", None)
             if callable(setter):

@@ -52,6 +52,16 @@ class PetClip:
             callback(message)
 
     @property
+    def estimated_bytes(self) -> int:
+        getter = getattr(self._impl, "estimated_bytes", None)
+        if not callable(getter):
+            return 0
+        try:
+            return max(0, int(getter()))
+        except Exception:  # noqa: BLE001
+            return 0
+
+    @property
     def frame_count(self) -> int:
         try:
             return max(0, int(self._impl.frameCount()))
@@ -149,16 +159,24 @@ class PetClip:
             except Exception:
                 pass
 
+    @property
+    def supports_frame_divisor(self) -> bool:
+        """该后端是否支持「隔帧采样」语义的闲置降帧。
+
+        只有真正会跳过中间帧、保持时长的后端（帧序列/精灵表）才允许降帧。
+        WebM 的 ``set_decode_throttle`` 是消费端降速 + reader 背压，时长会真的
+        拉长 2 倍；把它当作 ``set_frame_divisor`` 会让 2x 变成 1x。
+        """
+        return callable(getattr(self._impl, "set_frame_divisor", None))
+
     def set_frame_divisor(self, divisor: int) -> None:
-        """闲置降帧：帧序列走跳帧，WebM 没有该接口时退回解码节流。"""
+        """闲置降帧：只走后端原生的跳帧接口，不回退到解码节流。"""
         native = getattr(self._impl, "set_frame_divisor", None)
         if callable(native):
             try:
                 native(divisor)
-                return
             except Exception:
                 pass
-        self.set_decode_throttle(divisor)
 
     def set_playback_speed(self, speed: float) -> None:
         setter = getattr(self._impl, "set_playback_speed", None)

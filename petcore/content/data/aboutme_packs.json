@@ -1,0 +1,221 @@
+{
+  "schema": 1,
+  "source": "https://github.com/hunmer/aboutme-pets",
+  "license": "CC BY-NC-SA 4.0 / 素材禁止商用；二创须署名（详见各角色 NOTICE.txt）",
+  "packs": [
+    {
+      "id": "dsh",
+      "name": "蓝毛小女仆",
+      "pet_dir": "pets/dsh",
+      "canvas": [
+        640,
+        360
+      ],
+      "facing": "left",
+      "body_box": [
+        249,
+        224,
+        380,
+        331
+      ],
+      "head_box": [
+        246,
+        90,
+        383,
+        220
+      ],
+      "clips": {
+        "idle": "待机呼吸休闲",
+        "move": "螃蟹走路",
+        "click": "原地敲击桌面互动",
+        "drag": "被鼠标拖拽悬空反馈",
+        "work": "写代码",
+        "random": [
+          "三球抛接",
+          "下五子棋"
+        ]
+      },
+      "files": [
+        {
+          "path": "pets/dsh/manifest.json",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/manifest.json",
+          "size": 5562,
+          "sha256": "e25662e25801ac4fe9a73bf371c6520dc4533b54ac2379e0ffcdccbe7e636dec"
+        },
+        {
+          "path": "pets/dsh/actions.json",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/actions.json",
+          "size": 39335,
+          "sha256": "e027e79fd071bc7a073fe5b8a6c2d08164ed6a46239a0d0276333576eca78fb8"
+        },
+        {
+          "path": "pets/dsh/NOTICE.txt",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/NOTICE.txt",
+          "size": 1482,
+          "sha256": "c4e5634ff407fd641f41e486f6598273f1eea19b50f882cc728df4d64e47edc1"
+        },
+        {
+          "path": "pets/dsh/LICENSE-assets.txt",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/LICENSE-assets.txt",
+          "size": 1069,
+          "sha256": "22757dc9c895b2729a2fc684d227cadfb54d5af3dd300029926839e8c4e269ce"
+        },
+        {
+          "path": "pets/dsh/LICENSE-code.txt",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/LICENSE-code.txt",
+          "size": 1069,
+          "sha256": "22757dc9c895b2729a2fc684d227cadfb54d5af3dd300029926839e8c4e269ce"
+        },
+        {
+          "path": "pets/dsh/SOURCE-upstream.txt",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/SOURCE-upstream.txt",
+          "size": 289,
+          "sha256": "57c5e1c42d3e156d3b878bcc7dad6de9c833a1621e2764911c86da9b88a4a037"
+        },
+        {
+          "path": "pets/dsh/spritesheet/待机呼吸休闲.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/spritesheet/%E5%BE%85%E6%9C%BA%E5%91%BC%E5%90%B8%E4%BC%91%E9%97%B2.webp",
+          "size": 990292,
+          "sha256": "f76ec34bd97005bd161de2f36cae43ca4de0ddef80afe4a11184963ed34f5a2f"
+        },
+        {
+          "path": "pets/dsh/spritesheet/螃蟹走路.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/spritesheet/%E8%9E%83%E8%9F%B9%E8%B5%B0%E8%B7%AF.webp",
+          "size": 990376,
+          "sha256": "61cb1e1365eb9b21b434d1738ad9e89c4a20d773f6bf04ae8ccbdc5950e958ef"
+        },
+        {
+          "path": "pets/dsh/spritesheet/原地敲击桌面互动.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/spritesheet/%E5%8E%9F%E5%9C%B0%E6%95%B2%E5%87%BB%E6%A1%8C%E9%9D%A2%E4%BA%92%E5%8A%A8.webp",
+          "size": 995742,
+          "sha256": "926799612b02c785e541e3c8f72c878932f7aad001ec2e92b980b4d0a653ebf7"
+        },
+        {
+          "path": "pets/dsh/spritesheet/被鼠标拖拽悬空反馈.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/spritesheet/%E8%A2%AB%E9%BC%A0%E6%A0%87%E6%8B%96%E6%8B%BD%E6%82%AC%E7%A9%BA%E5%8F%8D%E9%A6%88.webp",
+          "size": 987672,
+          "sha256": "d8a5eeed69cf0ce1aaa473e02b6ac7d9796a8bc32e9216a09f3396e267ba8db1"
+        },
+        {
+          "path": "pets/dsh/spritesheet/写代码.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/spritesheet/%E5%86%99%E4%BB%A3%E7%A0%81.webp",
+          "size": 998382,
+          "sha256": "72fd356c0ca01e9f0570fbc3b5c143aa38e3a95fae160063d5684d5126dacc3a"
+        },
+        {
+          "path": "pets/dsh/spritesheet/三球抛接.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/spritesheet/%E4%B8%89%E7%90%83%E6%8A%9B%E6%8E%A5.webp",
+          "size": 998826,
+          "sha256": "18a2926aaae97ddea717b759db2cedbeb1b1e7558910365fdd6a3aad8cefbef2"
+        },
+        {
+          "path": "pets/dsh/spritesheet/下五子棋.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh/spritesheet/%E4%B8%8B%E4%BA%94%E5%AD%90%E6%A3%8B.webp",
+          "size": 990898,
+          "sha256": "f5b395dd7ba274dd359402c50b2f8e224af12d9f6953f2c6c9f8dc7198b587bb"
+        }
+      ]
+    },
+    {
+      "id": "dsh1",
+      "name": "蓝毛小女仆·新动作包",
+      "pet_dir": "pets/dsh1",
+      "canvas": [
+        640,
+        360
+      ],
+      "facing": "left",
+      "body_box": [
+        242,
+        193,
+        380,
+        315
+      ],
+      "head_box": [
+        241,
+        48,
+        379,
+        189
+      ],
+      "clips": {
+        "idle": "站着晃神打瞌睡",
+        "move": "走路",
+        "click": null,
+        "drag": "站着晃神打瞌睡",
+        "work": "写毛笔字",
+        "random": [
+          "中国功夫",
+          "举哑铃弯举"
+        ]
+      },
+      "files": [
+        {
+          "path": "pets/dsh1/manifest.json",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/manifest.json",
+          "size": 3925,
+          "sha256": "46979ed7671976f795d7edbdfc01a837477c1cecd39c6cc2f97934a24c2a323c"
+        },
+        {
+          "path": "pets/dsh1/actions.json",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/actions.json",
+          "size": 63388,
+          "sha256": "9deaec6b8d99c1c79cc3fd9f2c6aa9626114191392ee84ea00eb08c74604320f"
+        },
+        {
+          "path": "pets/dsh1/NOTICE.txt",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/NOTICE.txt",
+          "size": 1043,
+          "sha256": "8e15d70a3f69420c86ffda64a5364712f579c2d733e508d13654008a4294b343"
+        },
+        {
+          "path": "pets/dsh1/LICENSE-assets.txt",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/LICENSE-assets.txt",
+          "size": 1069,
+          "sha256": "22757dc9c895b2729a2fc684d227cadfb54d5af3dd300029926839e8c4e269ce"
+        },
+        {
+          "path": "pets/dsh1/LICENSE-code.txt",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/LICENSE-code.txt",
+          "size": 1069,
+          "sha256": "22757dc9c895b2729a2fc684d227cadfb54d5af3dd300029926839e8c4e269ce"
+        },
+        {
+          "path": "pets/dsh1/BATCH-source.txt",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/BATCH-source.txt",
+          "size": 576,
+          "sha256": "c69f649538f58ff904cbd1e95d28a2e05aa7ed49c33491bb9933103eb4e695ad"
+        },
+        {
+          "path": "pets/dsh1/spritesheet/站着晃神打瞌睡.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/spritesheet/%E7%AB%99%E7%9D%80%E6%99%83%E7%A5%9E%E6%89%93%E7%9E%8C%E7%9D%A1.webp",
+          "size": 1498438,
+          "sha256": "a72519a5fbfd04e5df12c85b1f84ed7007948c3fc222b63510cd9a95b277c2ea"
+        },
+        {
+          "path": "pets/dsh1/spritesheet/走路.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/spritesheet/%E8%B5%B0%E8%B7%AF.webp",
+          "size": 1484232,
+          "sha256": "7c5bada89a1d7e27ef9fc75c651f85f2cfd6a54f8eac25cb3469b7111d9b15ba"
+        },
+        {
+          "path": "pets/dsh1/spritesheet/写毛笔字.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/spritesheet/%E5%86%99%E6%AF%9B%E7%AC%94%E5%AD%97.webp",
+          "size": 1490250,
+          "sha256": "9ea0296c98a65e3677cc752530fe158e88c2f294565af0076fee49d67a365e2d"
+        },
+        {
+          "path": "pets/dsh1/spritesheet/中国功夫.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/spritesheet/%E4%B8%AD%E5%9B%BD%E5%8A%9F%E5%A4%AB.webp",
+          "size": 1494924,
+          "sha256": "1e84c2b5292ff74f7c515851a66622222b94ebea8e1ad2a67c27f03b97321c11"
+        },
+        {
+          "path": "pets/dsh1/spritesheet/举哑铃弯举.webp",
+          "url": "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/dsh1/spritesheet/%E4%B8%BE%E5%93%91%E9%93%83%E5%BC%AF%E4%B8%BE.webp",
+          "size": 1487064,
+          "sha256": "ecb3980ff666d0a62d1c50ee73bfeb1d69cbc959d08c512e48de1430888ff2fd"
+        }
+      ]
+    }
+  ]
+}

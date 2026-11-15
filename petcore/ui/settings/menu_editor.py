@@ -368,6 +368,15 @@ class MenuEditor(QWidget):
         payload = dict(item.data(0, NODE_ROLE) or {})
         if payload.get("type") not in {"separator", "submenu"}:
             return
+        answer = QMessageBox.question(
+            self,
+            "删除菜单项",
+            f"确定删除「{item.text(0)}」？该操作只改菜单布局，之后仍可重新添加。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         parent = item.parent()
         if parent is None:
             self.tree.takeTopLevelItem(self.tree.indexOfTopLevelItem(item))

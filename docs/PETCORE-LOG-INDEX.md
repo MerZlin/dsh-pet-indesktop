@@ -230,3 +230,9 @@
 | L193 | 2026-11-08 | Mac 人工恢复与登录自启 | 真人穿透恢复及重新登录自启通过，截图与事件记录互证，清理测试项并复核源码只读。 | manual、tray、autostart、relogin、cleanup、evidence |
 | L194 | 2026-11-08 | macOS 里程碑推送范围 | 用户授权推送 Mac 代码、回归与证据文档，保留架构图及未过门禁，不发布正式包。 | git、macos、scope、verification、limitations |
 | L195 | 2026-11-09 | 开发者 README 重写 | 根 README 聚焦分支架构与近期改动，说明 Linux/macOS 实测边界，移除旧版用户教程文字守卫。 | readme、developer、linux、macos、documentation、scope |
+
+| L196 | 2026-11-13 | 反馈批次 4：朝向 / 岛按钮 / 气泡风格 / 岛全屏 / 拖动倾斜 / 静息成本 | 六项反馈落地 petcore；贴边探头静息单核 12.2%→6.4%，线程 17→10；6 个新键 + 6 个新测试文件。 | facing、island-card、bubble-style、fullscreen、drag-lean、idle-cpu |
+| L197 | 2026-11-13 | 反馈批次 5：气泡回退 / 手机版 / 回收站 / 工作动画 / 键盘控制 / WebP / 设置公开接口 | 默认气泡改 plain 无尾巴；手机版对话窗 + 30 天回收站；工作锁与 WASD 控制；WebP 精灵表与 aboutme curated 下载；B 站实时总数；278 键 schema + `petcore settings` CLI + live reload + 使用手册三子页。 | bubble-plain, phone-chat, trash, work-anim, keyboard-drive, webp-sheet, aboutme, bilibili, settings-schema, settings-cli, manual |
+| L198 | 2026-11-14 | 反馈批次 6：手机版窄窗 / 模式返回 / 朗读 / 抛掷探头 / 键盘成本 / 朋友的酒 / 致谢 / URL 安装 | 手机版 380 宽 + 常驻 chips；逐条朗读与按窗口取消；抛掷中不探头；键盘自适应轮询与 no-op move；`PresentationPort.squash` + 音乐 1.3.0 朋友的酒；B 站 total 4788 + total_fetched_at；aboutme 来源按钮 + `url_install` 从链接安装（审查修复 6 项）。 | phone-chat, speech, edge-probe, keyboard, buddy-wine, bilibili, url-install, aboutme |
+| L199 | 2026-11-15 | 反馈批次 7：移动收尾 / 播放速度 / 朋友的酒 BPM / 致谢 / 手机版 | `move_strides.json` 显式 segments（绊倒帧排除出按住循环、松手补摔倒过程）；闲置降帧只给隔帧后端、2x 实时生效；`music_buddy_wine_bpm` 132 默认；致谢 role 与手机版 440 宽/`[⋯][✕]`。 | keyboard-drive, segments, idle-fps, playback-speed, buddy-wine-bpm, credits-role, phone-chat, self-talk |
+| L200 | 2026-11-15 | 反馈批次 4–7 累计提交（L196–L199） | 131 文件 +14262/−1143；设置 schema/CLI、WebP/精灵表、手机版对话窗、键盘移动、气泡风格、岛按钮/全屏、致谢与 B 站名单；记录提交范围、验证与未验证项。 | cumulative-commit, branch, evidence, scope |

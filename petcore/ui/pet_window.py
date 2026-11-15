@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import sys
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from PySide6.QtGui import QColor, QContextMenuEvent, QCursor, QImage, QPainter
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .. import paths
-from ..config import Config
+from ..config import ANIM_FACING_GROUPS, Config
 from ..contracts.content import AnimationSpec, CharacterSpec
 from ..engine.animation import AnimationPlayer
 from ..engine.behavior import (
@@ -42,6 +43,11 @@ from ..engine.geometry import (
     body_local_rect,
     body_position_ratio,
     content_size,
+)
+from ..engine.keyboard_drive import (
+    build_drive_plan,
+    drive_position_at_frame,
+    move_segments,
 )
 from ..engine.motion import (
     choose_move_direction,
@@ -91,6 +97,10 @@ logger = logging.getLogger("petcore.ui.window")
 IDLE_LOW_FPS_THRESHOLD = 30.0
 #: 隔帧除数：2 = 24fps→12fps（用户 2x 播放时 48→24fps）。
 IDLE_LOW_FPS_DIVISOR = 2
+#: 静息成本统计：只在 ``PET_PETCORE_COST_STATS=1`` 时每 60s 打一行 INFO。
+#: 未设环境变量时所有计数分支都是死的，不新增常驻开销。
+COST_STATS_ENABLED = os.environ.get("PET_PETCORE_COST_STATS") == "1"
+COST_STATS_INTERVAL_S = 60.0
 
 
 @dataclass
@@ -151,6 +161,7 @@ class PetWindow(PetSurface):
         self.bubble = SpeechBubble(self)
         self.bubble.clicked.connect(self._on_bubble_clicked)
         self.bubble.set_text_scale(self._text_scale_factor())
+        self.bubble.set_style(self._bubble_style_id())
         self.bubble.set_stream_mode(
             self.stream_capture_mode,
             keycolor=self.stream_capture_keycolor,
@@ -205,6 +216,19 @@ class PetWindow(PetSurface):
         self._right_menu_armed = False
         self._through_hold_until = 0.0
         self._paused_for_session = False
+        # 工作状态由 CoreHost.notify_agent_state 扇出；working 时只播 work 组。
+        self._work_state = "idle"
+        # 键盘控制移动：按住循环中段、松手播收尾；位置走同一套帧号插值。
+        self._drive_active = False
+        self._drive_holding = False
+        self._drive_releasing = False
+        self._drive_jumping = False
+        self._drive_spec = None
+        self._drive_segments = None
+        self._drive_curve = None
+        self._drive_plan: dict = {}
+        self._drive_frames = 0
+        self._drive_direction = (0.0, 0.0)
         self._left_hold_timer = QTimer(self)
         self._left_hold_timer.setSingleShot(True)
         self._left_hold_timer.setInterval(POINTER_DRAG_HOLD_MS)
@@ -213,10 +237,18 @@ class PetWindow(PetSurface):
         self._right_hold_timer.setSingleShot(True)
         self._right_hold_timer.setInterval(POINTER_MENU_HOLD_MS)
         self._right_hold_timer.timeout.connect(self._on_right_hold)
-        # 闲置降帧：30 秒无交互后待机动画隔帧（24→12fps），任何点击/拖动立即
-        # 恢复。1Hz 检查一次；只在 idle 动作上生效，随机动作/移动/拖拽全速。
+        # 闲置降帧：30 秒无交互后空闲/自播动画隔帧（24→12fps），任何点击/拖动
+        # 立即恢复。1Hz 检查一次；键盘移动、循环动作（唱歌）与漫游全速，拖拽/
+        # 甩飞也全速。divisor 只下发给真正支持隔帧的后端（帧序列/精灵表）。
         self._last_activity = time.monotonic()
         self._idle_low_fps_active = False
+        #: 已下发给当前 clip 的 divisor；0 = 新 clip 尚未同步，强制再下发一次。
+        self._idle_divisor_value = 0
+        # 成本统计（仅 PET_PETCORE_COST_STATS=1 时有意义）
+        self._cost_frames = 0
+        self._cost_paint_ns = 0
+        self._cost_paint_n = 0
+        self._cost_last_log = time.monotonic()
         self._idle_fps_timer = QTimer(self)
         self._idle_fps_timer.setInterval(1000)
         self._idle_fps_timer.timeout.connect(self._tick_idle_fps)
@@ -546,7 +578,18 @@ class PetWindow(PetSurface):
             # 锁屏期间外部事件（DSH/点击台词）不许把动画重新拉起；
             # 待机由 resume/set_visible 在解锁后重新收敛。
             return
+        if self._drive_active and kind != "drive":
+            self._cancel_keyboard_drive()
         self._loop_active = False
+        if self._work_lock_active() and kind not in ("work", "idle", "click", "head_pat", "drive"):
+            work = self._work_spec()
+            if work is not None:
+                spec, kind = work, "work"
+            else:
+                idle = self.catalog.find_for(GraphType.IDEL, AnimatType.B_LOOP)
+                if idle is None:
+                    return
+                spec, kind = idle, "idle"
         if self._effects_lock_active() and not self._spec_allowed_while_locked(spec):
             # 主分支 _effects_filter_switch：探头/彩蛋接管期间只允许待机与转向，
             # 其它素材（act/click/手动播放）一律降级待机。
@@ -571,6 +614,7 @@ class PetWindow(PetSurface):
             return
         self._stop_clip()
         self._clip = clip
+        self._idle_divisor_value = 0  # 新 clip 可能带着缓存里的旧 divisor，强制同步
         clip.clear_callbacks()
         clip.on_frame(self._on_frame)
         clip.on_finished(self._on_finished)
@@ -580,14 +624,23 @@ class PetWindow(PetSurface):
         self._action_kind = kind
         self._pending_flip = kind == KIND_TURN and not self._effects_lock_active()
         speed = float(self.config.get("playback_speed") or 1.0)
-        if abs(speed - 1.0) > 1e-9:
-            clip.set_playback_speed(speed)
+        # 1.0 也要下发：从 2x 改回 1x 时缓存里的 clip 仍可能停在 2x。
+        clip.set_playback_speed(speed)
         clip.start()
         self._apply_idle_divisor(self._idle_low_fps_allowed())
         if clip.current_image() is not None:
             self._on_frame(clip.current_frame_number())
         if kind == KIND_MOVE:
             self._begin_move(spec, clip.duration_seconds)
+
+    def apply_playback_speed(self, speed: float) -> None:
+        """设置页改「播放速率」立即作用到当前动画（含缓存 reuse 的 clip）。"""
+        clip = self._clip
+        if clip is not None:
+            try:
+                clip.set_playback_speed(max(0.1, float(speed)))
+            except Exception:  # noqa: BLE001 - 变速失败不能影响播放
+                logger.debug("apply playback speed failed", exc_info=True)
 
     def _start_fallback(self) -> None:
         clip = self.library.fallback()
@@ -601,10 +654,13 @@ class PetWindow(PetSurface):
 
     def _stop_clip(self) -> None:
         if self._clip is not None:
+            # 旧 clip 可能还带着 divisor=2：它会被 LRU 复用，先复位再放手。
+            self._set_clip_divisor(self._clip, 1)
             self._clip.stop()
             self._clip.clear_callbacks()
             self._clip = None
         self._idle_low_fps_active = False
+        self._idle_divisor_value = 1
 
     # ---------------------------------------------------------------- 闲置降帧
     def _note_activity(self) -> None:
@@ -620,51 +676,178 @@ class PetWindow(PetSurface):
             return False
         if self._clip is None:
             return False
-        if self.dragging or self.motion.thrown or self._effects_lock_active():
+        if self.dragging or self.motion.thrown:
             return False
-        if bool(getattr(self, "probe_active", False)):
+        # 探头（贴边 45° 只露头）与击飞接管只是锁**动画选择**，不是"还在交互"：
+        # 探头 PEEKING 是静息态，可能停几个小时。以前这里把 `_effects_lock_active()`
+        # 也当成满速条件，结果贴边停放时闲置降帧永远不生效（实测单核 40%+ 不下降）。
+        if (
+            getattr(self, "_drive_active", False)
+            or getattr(self, "_loop_active", False)
+            or getattr(self, "_move_plan", None) is not None
+        ):
+            # 用户正在移动 / 唱歌循环 / 漫游：这些不是静息态，降帧会变成半速。
             return False
         return (time.monotonic() - self._last_activity) >= IDLE_LOW_FPS_THRESHOLD
 
-    def _apply_idle_divisor(self, active: bool) -> None:
-        active = bool(active)
-        if active == self._idle_low_fps_active:
-            return
-        self._idle_low_fps_active = active
-        clip = self._clip
-        if clip is None:
-            return
+    @staticmethod
+    def _set_clip_divisor(clip, divisor: int) -> bool:
+        """只给真正支持隔帧的后端下发 divisor；失败不影响播放。"""
+        if not bool(getattr(clip, "supports_frame_divisor", True)):
+            return False
         setter = getattr(clip, "set_frame_divisor", None)
         if not callable(setter):
-            return
+            return False
         try:
-            setter(IDLE_LOW_FPS_DIVISOR if active else 1)
+            setter(int(divisor))
         except Exception:  # noqa: BLE001 - 降帧失败不能影响播放
             logger.debug("idle frame divisor failed", exc_info=True)
+            return False
+        return True
+
+    def _apply_idle_divisor(self, active: bool) -> None:
+        active = bool(active)
+        clip = self._clip
+        if clip is None:
+            self._idle_low_fps_active = False
+            self._idle_divisor_value = 1
+            return
+        if not bool(getattr(clip, "supports_frame_divisor", True)):
+            # WebM/单文件 WebP 的「降速」会真的把时长拉长；宁可不降帧。
+            self._idle_low_fps_active = False
+            self._idle_divisor_value = 1
+            return
+        desired = IDLE_LOW_FPS_DIVISOR if active else 1
+        if desired == self._idle_divisor_value:
+            self._idle_low_fps_active = active
+            return
+        if not self._set_clip_divisor(clip, desired):
+            self._idle_low_fps_active = False
+            self._idle_divisor_value = 1
+            return
+        self._idle_divisor_value = desired
+        self._idle_low_fps_active = active
 
     def _tick_idle_fps(self) -> None:
         self._apply_idle_divisor(self._idle_low_fps_allowed())
+        if COST_STATS_ENABLED:
+            self._log_cost_stats()
+
+    def _log_cost_stats(self) -> None:
+        """静息成本的一行真实读数（clip / 除数 / 到帧率 / 绘制耗时 / 线程数）。"""
+        now = time.monotonic()
+        elapsed = now - self._cost_last_log
+        if elapsed < COST_STATS_INTERVAL_S:
+            return
+        paint_ms = (
+            self._cost_paint_ns / self._cost_paint_n / 1_000_000.0
+            if self._cost_paint_n
+            else 0.0
+        )
+        current = self.state.current
+        logger.info(
+            "cost stats window=%.1fs clip=%s divisor=%s fps=%.1f paint_ms=%.2f threads=%d",
+            elapsed,
+            getattr(current, "name", "-"),
+            2 if self._idle_low_fps_active else 1,
+            self._cost_frames / elapsed if elapsed else 0.0,
+            paint_ms,
+            threading.active_count(),
+        )
+        self._cost_frames = 0
+        self._cost_paint_ns = 0
+        self._cost_paint_n = 0
+        self._cost_last_log = now
 
     def _on_frame(self, _number: int) -> None:
         if self._clip is None:
             return
+        if self._drive_active:
+            # 越界帧先拉回循环段再取图：否则 24fps 下会闪一帧「趴地」。
+            # 跳帧时 jump_to_frame 会同步再进一次 _on_frame，这一次已经渲染好了。
+            if self._advance_keyboard_drive():
+                return
+        if COST_STATS_ENABLED:
+            self._cost_frames += 1
         image = self._clip.current_image()
         self._image = image
         if image is not None:
             # 只做 QImage→QPixmap；缩放/镜像在 paintEvent 按当前目标矩形做。
             self._pixmap = frame_pixmap(image)
-        self._advance_move_from_frame()
+        if not self._drive_active:
+            self._advance_move_from_frame()
         self.update()
 
+    def _facing_group(self) -> str:
+        """当前素材属于哪个「动画组」（朝向设置的粒度）。
+
+        `_action_kind` 是实际播放语义（drag/throw/head_pat 这类不来自 GraphType），
+        优先用它；缺省再从 `GraphType` 推（`_kind_for_spec` 与行为链同一口径）。
+        """
+        kind = self._action_kind
+        if kind == KIND_TURN:
+            return "turn"
+        if kind in ("drag", "throw"):
+            return "drag"
+        if kind in ("click", "head_pat"):
+            return "click"
+        if kind == KIND_MOVE:
+            return "move"
+        if kind == "idle":
+            return "idle"
+        if kind == "act":
+            return "act"
+        current = self.state.current
+        if current is None:
+            return "act"
+        derived = self._kind_for_spec(current)
+        return derived if derived in ANIM_FACING_GROUPS else "act"
+
+    def _native_facing(self, group: str) -> str:
+        """该组素材的原生朝向：组覆盖 → 全局默认 → left（主分支素材约定）。"""
+        groups = self.config.get("anim_facing_groups") or {}
+        side = groups.get(group) if isinstance(groups, dict) else None
+        if side in ("left", "right"):
+            return side
+        default = str(self.config.get("anim_facing_default") or "left").strip().lower()
+        return default if default in ("left", "right") else "left"
+
     def _mirrored(self) -> bool:
-        """``facing == "right"`` 时水平镜像（素材原生朝左，同主分支）。"""
-        if self.character is None or self.state.facing != "right":
+        """``facing`` 与「本组素材原生朝向」相反时水平镜像。
+
+        素材默认原生朝左（``facing == "right"`` 才翻，同主分支）；生成出来就朝右
+        的自定义角色把 ``anim_facing_default``（或某一组）改成 right 即可，渲染
+        只改镜像，不改 ``state.facing`` 与移动/转向数学。含可读文字的素材
+        （``text_clips``）永远不翻。
+        """
+        if self.character is None:
             return False
         current = self.state.current
-        return current is None or current.name not in self.character.text_clips
+        if current is not None and current.name in self.character.text_clips:
+            return False
+        return self.state.facing != self._native_facing(self._facing_group())
 
     def _on_finished(self) -> None:
         if not self.isVisible():
+            return
+        if self._drive_active:
+            if self._drive_holding and self._clip is not None:
+                # 后端不支持跳帧时（WebP）整段会播完：按住期间重新起播，
+                # 不许掉回随机动作。能跳帧的回到循环段起点，不再补播前摇。
+                self._clip.start()
+                segments = self._drive_segments
+                if (
+                    segments is not None
+                    and self._clip.current_frame_number() != segments.loop_start
+                ):
+                    # start() 没同步发首帧的后端：补跳一次，但不让跳帧再计一帧位移。
+                    self._drive_jumping = True
+                    try:
+                        self._clip.jump_to_frame(segments.loop_start)
+                    finally:
+                        self._drive_jumping = False
+                return
+            self._finish_keyboard_drive()
             return
         if self._loop_active:
             # 循环接缝（唱歌/报时）：被探头、击飞、拖拽接管时立即解除，
@@ -734,6 +917,13 @@ class PetWindow(PetSurface):
 
     def _roll_next(self) -> None:
         self._gap_until = 0.0
+        if self._work_lock_active():
+            work = self._work_spec()
+            if work is not None:
+                self._play_spec(work, "work")
+            else:
+                self._play_idle()
+            return
         action = self.director.choose()
         if action is None:
             self._play_idle()
@@ -853,6 +1043,8 @@ class PetWindow(PetSurface):
         self._move_loop = 0
         self._move_last_frame = -1
         self._move_timer.start()
+        # 漫游是活跃动画：从静息态直接起走时立刻回到全速（不等 1Hz 检查）。
+        self._apply_idle_divisor(self._idle_low_fps_allowed())
 
     def _tick_move(self) -> None:
         plan = self._move_plan
@@ -922,7 +1114,8 @@ class PetWindow(PetSurface):
         frames_elapsed = self._move_loop * per_loop + frame
         x, y = move_position_at_frame(plan, frames_elapsed)
         x, y = self._clamp_position(int(round(x)), int(round(y)))
-        self.move(x, y)
+        if (x, y) != (self.x(), self.y()):
+            self.move(x, y)
 
     def _finish_move(self) -> None:
         plan = self._move_plan
@@ -1205,6 +1398,7 @@ class PetWindow(PetSurface):
             return
         if not visible:
             self._head_pat_tracker.reset()
+            self._cancel_keyboard_drive()
             self._cancel_pointer_holds()
             if self._input_controller is not None:
                 self._input_controller.stop()
@@ -1234,6 +1428,7 @@ class PetWindow(PetSurface):
 
     def pause_animation(self) -> None:
         """锁屏/睡眠：停播放节拍与位移动画（保留当前帧），解锁后原地续播。"""
+        self._cancel_keyboard_drive()
         self._paused_for_session = True
         self._cancel_pointer_holds()
         self._move_timer.stop()
@@ -1256,6 +1451,236 @@ class PetWindow(PetSurface):
         if self._move_plan is not None and not self._move_timer.isActive():
             self._move_timer.start()
 
+    def set_work_state(self, state: str) -> None:
+        """AI/DSH 工作状态；working 时锁到 work 组，结束/出错后恢复行为链。"""
+        state = str(state or "idle").strip().lower()
+        if state not in {"working", "done", "error", "idle", "attention", "waiting"}:
+            state = "idle"
+        if state == self._work_state:
+            return
+        was_locked = self._work_lock_active()
+        self._work_state = state
+        locked = self._work_lock_active()
+        if locked and not was_locked:
+            self._enter_work_animation()
+        elif was_locked and not locked:
+            self._leave_work_animation()
+
+    def _work_lock_active(self) -> bool:
+        if not bool(self.config.get("work_animations_only", True)):
+            return False
+        if self._work_state != "working":
+            return False
+        return not (
+            self._paused_for_session
+            or self.dragging
+            or self.motion.thrown
+            or self._effects_lock_active()
+        )
+
+    def _work_spec(self):
+        spec = self.catalog.find_for(GraphType.WORK, AnimatType.B_LOOP)
+        if spec is not None:
+            return spec
+        specs = self.catalog.specs_for(GraphType.WORK)
+        return specs[0] if specs else None
+
+    def _enter_work_animation(self) -> None:
+        spec = self._work_spec()
+        if spec is None:
+            # 默认角色没有 work 素材：保持待机，不伪造工作动画。
+            if self._action_kind not in (None, "idle", "work"):
+                self._play_idle()
+            logger.info("work animation lock: character has no work clips")
+            return
+        self._play_spec(spec, "work")
+
+    def _leave_work_animation(self) -> None:
+        if self._action_kind in (None, "idle", "work"):
+            self._roll_next()
+
+    @property
+    def keyboard_drive_active(self) -> bool:
+        host = getattr(self, "host", None)
+        return getattr(host, "keyboard_drive_target", None) is self
+
+    def toggle_keyboard_drive(self) -> None:
+        toggle = getattr(self.host, "toggle_keyboard_drive", None)
+        if callable(toggle):
+            toggle(self)
+
+    def drive_keyboard(self, directions) -> None:
+        # UI 16ms 表每拍调用；空集合 = 松手。
+        keys = set(directions or ())
+        if not keys:
+            if self._drive_active and self._drive_holding:
+                self._release_keyboard_drive()
+            return
+        if (
+            not self.isVisible()
+            or self._paused_for_session
+            or self.dragging
+            or self.motion.thrown
+        ):
+            if self._drive_active:
+                self._cancel_keyboard_drive()
+            return
+        # 按住方向键是用户交互：重置 30s 闲置计时，松手后的待机不会立刻掉到半速。
+        self._note_activity()
+        dx = (1.0 if "right" in keys else 0.0) - (1.0 if "left" in keys else 0.0)
+        dy = (1.0 if "down" in keys else 0.0) - (1.0 if "up" in keys else 0.0)
+        if dx == 0.0 and dy == 0.0:
+            return
+        if (
+            not self._drive_active
+            or self._drive_releasing
+            or (dx, dy) != self._drive_direction
+        ):
+            # 收尾段里再按同方向也要重新起跑：只置 _drive_holding 会卡在
+            # 「趴地播完 → 整套重播 → 原地不动」。
+            self._start_keyboard_drive(dx, dy)
+        if self._drive_active:
+            self._drive_holding = True
+
+    def _start_keyboard_drive(self, dx: float, dy: float) -> None:
+        spec = self._keyboard_move_spec()
+        if spec is None or self.character is None:
+            return
+        self._cancel_animation_gap()
+        self._cancel_move_plan()
+        if self.probe_active:
+            self._edge_probe.cancel("keyboard_drive", restore=True)
+        if dx > 0.0:
+            self.state.facing = "right"
+        elif dx < 0.0:
+            self.state.facing = "left"
+        self._pending_flip = False
+        self._cancel_keyboard_drive(play_idle=False)
+        self._play_spec(spec, "drive")
+        clip = self._clip
+        if clip is None or self._action_kind != "drive":
+            # 工作锁等闸门把生态位抢走时，不能假装键盘驱动还在走。
+            self._cancel_keyboard_drive()
+            return
+        curve = (self.character.move_curves or {}).get(spec.name)
+        override = (self.character.move_segments or {}).get(spec.name)
+        segments = move_segments(curve, clip.frame_count, override)
+        jump_ok = clip.jump_to_frame(segments.loop_start) if segments.loop_start else True
+        if not jump_ok:
+            # 该后端不支持随机跳帧：退回整段循环，不假装能跳过前摇。
+            segments = move_segments(None, max(1, clip.frame_count))
+            curve = None
+        stride_px = stride_for(spec, self.character.move_strides) * self.state.scale
+        plan = build_drive_plan(
+            segments=segments,
+            curve=curve,
+            direction=(dx, dy),
+            stride=stride_px,
+            start_x=float(self.x()),
+            start_y=float(self.y()),
+        )
+        if not plan:
+            self._cancel_keyboard_drive()
+            return
+        self._drive_spec = spec
+        self._drive_segments = segments
+        self._drive_curve = curve
+        self._drive_plan = plan
+        self._drive_frames = 0
+        self._drive_direction = (dx, dy)
+        self._drive_active = True
+        self._drive_releasing = False
+        self._drive_holding = True
+        # 键盘移动是活跃动画：静息 30 秒后起走也要立刻回全速。
+        self._apply_idle_divisor(self._idle_low_fps_allowed())
+        self.update()
+
+    def _advance_keyboard_drive(self) -> bool:
+        """推进一帧；返回 True 表示这一拍已跳回 loop_start（由嵌套回调渲染）。
+
+        圈末帧（``loop_end``）必须先画出来再回绕：在它之前的这一拍只推进位置，
+        下一拍读到 ``loop_end + 1`` 时才跳回 ``loop_start``。否则循环段最后一帧
+        永远看不到，接缝还会把 ``loop_start`` 连画两次。
+        """
+        if self._drive_jumping:
+            return False
+        if not self._drive_active or self._drive_releasing:
+            return False
+        clip = self._clip
+        segments = self._drive_segments
+        if clip is None or segments is None or not self._drive_plan:
+            return False
+        frame = clip.current_frame_number()
+        if frame < segments.loop_start:
+            # 前摇/重新起播：不推进位移，只把画面拉回循环段起点。
+            self._drive_jumping = True
+            try:
+                clip.jump_to_frame(segments.loop_start)
+            finally:
+                self._drive_jumping = False
+            return True
+        # 圈末之后的这一拍就是下一圈的第 0 帧（jump 会同步渲染 loop_start），
+        # 所以先计数/推进再回绕；否则每圈少走 1 帧（48/49 ≈ 1.7% 的脚底打滑）。
+        self._drive_frames += 1
+        x, y = drive_position_at_frame(self._drive_plan, self._drive_frames)
+        x, y = self._clamp_position(int(round(x)), int(round(y)), settle=False)
+        if (x, y) != (self.x(), self.y()):
+            # 贴边按住方向键时坐标不变；重复 SetWindowPos 只会整窗重绘。
+            self.move(x, y)
+        if frame > segments.loop_end:
+            self._drive_jumping = True
+            try:
+                clip.jump_to_frame(segments.loop_start)
+            finally:
+                self._drive_jumping = False
+            return True
+        return False
+
+    def _release_keyboard_drive(self) -> None:
+        self._drive_holding = False
+        if not self._drive_active:
+            return
+        self._drive_releasing = True
+        clip = self._clip
+        segments = self._drive_segments
+        if clip is not None and segments is not None and segments.has_recovery:
+            if clip.jump_to_frame(segments.loop_end + 1):
+                return
+        self._finish_keyboard_drive()
+
+    def _finish_keyboard_drive(self) -> None:
+        self._cancel_keyboard_drive(play_idle=False)
+        self._play_idle()
+
+    def _cancel_keyboard_drive(self, *, play_idle: bool = False) -> None:
+        was_active = self._drive_active
+        self._drive_active = False
+        self._drive_holding = False
+        self._drive_releasing = False
+        self._drive_spec = None
+        self._drive_segments = None
+        self._drive_curve = None
+        self._drive_plan = {}
+        self._drive_frames = 0
+        self._drive_direction = (0.0, 0.0)
+        if was_active and play_idle:
+            self._play_idle()
+
+    def _keyboard_move_spec(self):
+        specs = [
+            spec
+            for spec in self.catalog.specs_for(GraphType.MOVE)
+            if spec.locate != "in_place" and spec.animat is AnimatType.B_LOOP
+        ]
+        if specs:
+            return specs[0]
+        specs = [
+            spec
+            for spec in self.catalog.specs_for(GraphType.MOVE)
+            if spec.locate != "in_place"
+        ]
+        return specs[0] if specs else None
+
     def _sync_host_pet_visibility(self) -> None:
         """显隐是四条路（快捷键/托盘全部/托盘逐宠/右键隐藏）共用的收口点。
 
@@ -1270,8 +1695,20 @@ class PetWindow(PetSurface):
         except Exception:  # noqa: BLE001 - 状态点坏了不许挡住显隐
             logger.debug("island pet visibility failed", exc_info=True)
 
+    def _rotation_angle(self) -> float:
+        """画面旋转的唯一出处：探头 + 特效（击飞/黄金回旋）+ 拖动倾斜**相加**。
+
+        paint、命中逆变换与输入修订都只读这里，任何新旋转通道都必须加进这一处
+        （AGENTS：旋转不许互相覆盖）。
+        """
+        return (
+            float(self._probe_angle)
+            + float(self.effects.effect_angle())
+            + float(self.motion.lean_angle())
+        )
+
     def _unrotated_point(self, local: QPoint) -> QPoint:
-        angle = self._probe_angle + self.effects.effect_angle()
+        angle = self._rotation_angle()
         if abs(angle) < 1e-6:
             return local
         cx = self.width() / 2.0
@@ -1349,6 +1786,7 @@ class PetWindow(PetSurface):
         return self._frame_base_rect()
 
     def paintEvent(self, _event) -> None:
+        started = time.perf_counter_ns() if COST_STATS_ENABLED else 0
         painter = QPainter(self)
         # Explicitly clear the native surface on XWayland; never set a visual mask.
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
@@ -1357,6 +1795,9 @@ class PetWindow(PetSurface):
         painter.translate(self._draw_offset)
         self._paint_content(painter)
         painter.end()
+        if COST_STATS_ENABLED and started:
+            self._cost_paint_ns += time.perf_counter_ns() - started
+            self._cost_paint_n += 1
         if os.name != "nt" and self._input_controller is not None:
             self._input_controller.refresh()
 
@@ -1366,7 +1807,8 @@ class PetWindow(PetSurface):
             image.cacheKey() if image is not None else 0,
             self.width(), self.height(), QWidget.width(self), QWidget.height(self),
             self._draw_offset.x(), self._draw_offset.y(), float(self.devicePixelRatioF()),
-            self._probe_angle, self.effects.effect_angle(), self.effects.squash_rect() if self.effects.squash_active else None,
+            round(self._rotation_angle(), 1),
+            self.effects.squash_rect() if self.effects.squash_active else None,
             self._mirrored(), self.click_through, self.dragging, self._press_global is not None,
             self.stream_capture_mode, self.stream_capture_keycolor,
         )
@@ -1388,7 +1830,7 @@ class PetWindow(PetSurface):
         if self._pixmap is None:
             return
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        angle = self._probe_angle + self.effects.effect_angle()
+        angle = self._rotation_angle()
         if abs(angle) >= 1e-6:
             center = QPointF(self.width() / 2.0, self.height() / 2.0)
             painter.translate(center)
@@ -1592,6 +2034,7 @@ class PetWindow(PetSurface):
             ):
                 return
             self._head_pat_tracker.reset()
+            self._cancel_keyboard_drive()
             self.dragging = True
             self.state.dragging = True
             self._probe_drag_throw = self._edge_probe.on_drag_started()
@@ -1623,6 +2066,7 @@ class PetWindow(PetSurface):
             return
         self._left_drag_armed = True
         self._head_pat_tracker.reset()
+        self._cancel_keyboard_drive()
         self.dragging = True
         self.state.dragging = True
         self._probe_drag_throw = self._edge_probe.on_drag_started()
@@ -1834,6 +2278,9 @@ class PetWindow(PetSurface):
         """进入抛掷接管态：停 gap/移动计划，绑定飞行（或拖拽）动画。"""
         self._cancel_animation_gap()
         self._cancel_move_plan()
+        # 抛掷与 45° 探头是两套旋转：飞行期间必须退出探头，否则窗口斜着继续反弹。
+        if self.probe_active:
+            self._edge_probe.cancel("thrown", restore=False)
         self._play_throw_animation()
 
     def _on_click(self, *, sound_already_played: bool = False) -> None:
@@ -2012,6 +2459,30 @@ class PetWindow(PetSurface):
         if bool(self.config.get("collision_sound")):
             self._play_click_sound()
 
+    def squash(
+        self,
+        duration_ms: int = 0,
+        bounces: int = 0,
+        strength: float = 0.0,
+    ) -> bool:
+        """外部（音乐扩展「朋友的酒模式」）触发的压缩回弹。
+
+        独立于 `click_squash_enabled`（用户关掉点击 Q 弹不代表关掉这个模式），
+        但仍沿用 `click_squash_*` 的时长/次数/强度；接管态（拖拽/抛掷/探头/
+        击飞）不叠加第二套形变。
+        """
+        if self.dragging or self.motion.thrown or self.probe_active:
+            return False
+        if bool(getattr(self.effects, "throw_egg_active", False)):
+            return False
+        self.effects.start_squash(
+            int(duration_ms) or None,
+            force=True,
+            bounces=int(bounces) or None,
+            strength=float(strength) or None,
+        )
+        return True
+
     def island_hit_feedback(self) -> None:
         """撞岛反馈（挤压 + 碰撞音效）。
 
@@ -2092,6 +2563,7 @@ class PetWindow(PetSurface):
             return False
         # 设置页只写配置，这里在每次新气泡前同步一次字号（未变时是空操作）。
         self.bubble.set_text_scale(self._text_scale_factor())
+        self.bubble.set_style(self._bubble_style_id())
         self.bubble.show_text(
             text, self.bubble_anchor_rect(), duration_ms, subtitle=subtitle
         )
@@ -2142,6 +2614,7 @@ class PetWindow(PetSurface):
             return
         text, subtitle, duration = self._say_sequence_items.popleft()
         self.bubble.set_text_scale(self._text_scale_factor())
+        self.bubble.set_style(self._bubble_style_id())
         self.bubble.show_text(
             text, self.bubble_anchor_rect(), duration, subtitle=subtitle
         )
@@ -2171,6 +2644,9 @@ class PetWindow(PetSurface):
         except (TypeError, ValueError):
             percent = 100.0
         return percent / 100.0
+
+    def _bubble_style_id(self) -> str:
+        return str(self.config.get("self_talk_bubble_style") or "classic_top")
 
     def set_text_scale(self, percent: int, *, persist: bool = True) -> None:
         """设置气泡文字缩放（百分比 50–300），已显示的气泡立即重排。"""
@@ -2205,6 +2681,7 @@ class PetWindow(PetSurface):
         if image_scale is None:
             image_scale = self._image_scale_factor("easter_egg_image_scale")
         self.bubble.set_text_scale(self._text_scale_factor())
+        self.bubble.set_style(self._bubble_style_id())
         try:
             shown = self.bubble.show_image(
                 path,
@@ -2263,6 +2740,8 @@ class PetWindow(PetSurface):
             return False
         self._play_spec(spec, self._kind_for_spec(spec))
         self._loop_active = bool(loop)
+        # 循环动作（唱歌）属于活跃动画，不能按静息态降帧。
+        self._apply_idle_divisor(self._idle_low_fps_allowed())
         return True
 
     def release_loop(self) -> bool:

@@ -113,6 +113,7 @@ $pyiArgs = @(
     "--add-data", "$root/petcore/menu_templates;petcore/menu_templates",
     # 致谢/粉丝随包快照：关于页在断网时仍要显示「提交时状态」。
     "--add-data", "$root/petcore/community/data;petcore/community/data",
+    "--add-data", "$root/petcore/content/data;petcore/content/data",
     "--collect-submodules", "petcore",
     "--hidden-import", "pet.webm_clip",
     "--hidden-import", "pet.library",

@@ -154,3 +154,33 @@ def test_hide_pauses_and_resume_keeps_transition(app):
     probe._tick()
     assert probe.mode == PEEKING
     probe.shutdown()
+
+
+def test_thrown_or_moving_pet_never_enters_probe(app):
+    from types import SimpleNamespace
+
+    window = FakeWindow(at_edge=True)
+    window.motion = SimpleNamespace(
+        thrown=True, dragging=False, velocity=lambda: (400.0, 0.0)
+    )
+    probe = EdgeProbeController(window, clock=FakeClock())
+    probe._enter_if_at_edge()
+    assert probe.mode == "OFF"
+    assert window.poses == []
+    assert window.moves == []
+    probe.on_release(True)
+    assert probe._rest_timer.isActive() is False
+    probe.shutdown()
+
+
+def test_settled_pet_still_enters_probe_after_throw(app):
+    from types import SimpleNamespace
+
+    window = FakeWindow(at_edge=True)
+    window.motion = SimpleNamespace(
+        thrown=False, dragging=False, velocity=lambda: (0.0, 0.0)
+    )
+    probe = EdgeProbeController(window, clock=FakeClock())
+    probe._enter_if_at_edge()
+    assert probe.mode == "ENTERING"
+    probe.shutdown()

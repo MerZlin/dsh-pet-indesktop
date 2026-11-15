@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMessageBox,
     QPushButton,
     QWidget,
 )
@@ -194,6 +195,15 @@ class WeatherPage(SettingsPage):
         item = self.city_list.currentItem()
         if item is None:
             self.status.setText("先在列表里选中一个城市")
+            return
+        answer = QMessageBox.question(
+            self,
+            "移除城市",
+            f"确定从列表移除「{item.text()}」？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
             return
         self._cities, self._current = remove_city(self._cities, item.text(), self._current)
         self._refresh()

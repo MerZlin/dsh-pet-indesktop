@@ -122,7 +122,10 @@ petcore/
    右侧分页必须仍然可达。
 9. **子选项跟随父开关**：从属设置（如「点击时跳过点击动画」之于「点击触发黄金
    回旋」）缩进显示，父项关闭时隐藏。
-10. **朝向口径**：角色素材原生朝左；`facing == "right"` 才水平镜像（与主分支一致）。
+10. **朝向口径**：角色素材**默认**原生朝左；`facing == "right"` 才水平镜像（与主分支一致）。
+    生成出来就朝右的自定义角色用 `anim_facing_default="right"` 反转，个别组不同写
+    `anim_facing_groups`（idle/turn/move/click/drag/act）；`_mirrored()` 是唯一判据
+    （paint/命中/input_revision 共用），`text_clips` 里的文字素材永远不镜像。
 11. **碰边反馈逐次生效**：抛掷/弹射过程中每次「离地→接触」边界都要 Q 弹 + 音效，
     不允许整个会话只触发一次。
 12. **气泡贴着角色**：锚点用 `head_box`（回退 `body_box`/整窗），气泡不压住角色、
@@ -306,7 +309,7 @@ petcore/
 - **单进程多宠**：`PetManager` 管理 slot 0 主宠与 slot 1–15 子宠；每宠独立 `config-pet-N.json`；生成/收回/重启恢复；宠物间椭圆近似碰撞与 Q 弹；设置页「多宠」。
 - **交互 Core**：点击 Q 弹（220ms，旋转/探头叠加、命中逆变换）、拖动物理（弹簧/抛掷/碰边）、弹弓、黄金回旋、探头击飞旋转、拖文件投喂、碰撞；菜单「播放动画」「播放速率」「拖动物理」「不自动移动」「黄金回旋」「生小肥鱼」「退出子肥鱼」。
 - **内置 mod**：`fun.self-talk`、`fun.click-talk`、`tool.quick-launch`、`tool.quiet-mode`、`tool.links`、`tool.memory-trim`、`tool.network-info`；受信任内置包随 core 加载，第三方 feature 仍需 `allow_feature_mods`。`fun.divination`、`fun.festival`、`reminder.todo`、`voice.chime`、`media.music` 是 `examples/petcore-mods/` 的可导入样板，不再内置。
-- **设置聚合**：所有 mod `settings_page` 进入「扩展管理」页内标签（`SettingsTabContainer`）；P6 起侧边栏 8 页（新增「API 与账户」）；2026-10-27 起 9 页（新增「语音」，排在「互动与物理」之后）；2026-11-01 起 10 页（致谢从「关于与诊断」的页内标签提升为独立页，排在最后）。
+- **设置聚合**：所有 mod `settings_page` 进入「扩展管理」页内标签（`SettingsTabContainer`）；P6 起侧边栏 8 页（新增「API 与账户」）；2026-10-27 起 9 页（新增「语音」，排在「互动与物理」之后）；2026-11-01 起 10 页（致谢从「关于与诊断」的页内标签提升为独立页，排在最后）；2026-11-13 起 11 页（新增「使用手册」，含常见问题/使用说明/给 AI 的提示词三个子页，排在「关于与诊断」之前）。
 - **移动同步**：朝向由移动方向决定；窗口位置由 clip 帧号 + `move_curves` 推进，静态帧不位移，末拍精确到位。
 
 - **打包**：PyInstaller 6.22.3 装入 `.venv`；Inno Setup 6.7.3 便携安装到 `tools/InnoSetup`；`scripts/build_petcore.ps1 -Clean -Installer` 实际产出 onedir 与安装包，`--check --out` 取证。
@@ -625,7 +628,7 @@ petcore/
 | 服务 | `petcore/speech/service.py`：后端链、无网预检换默认音色、缓存（非空才命中）、2 次重试 + 默认音色兜底、失败删产物、密钥 owner `speech.<provider>` |
 | 端口 | `petcore/ui/ports.py::CoreSpeechPort`：后台合成 → `AudioAdapter` 共享音频通道 → 回调；`stop/playing` |
 | 报时 | `voice.chime` 1.1.0：6 档日程 + 自定义时刻、按日轮换台词、朗读/气泡文案分离、60 秒预缓存、免打扰丢弃 |
-| 音乐 | `media.music` 1.2.0：三源识别（SMTC / WASAPI 音频会话 / 播放器窗口标题，判定表见 `PETCORE-MOD-FORMAT.md` §13.3）、歌词三源打分（直连→代理一次）、LRC 解析/偏移、唱跳循环、播放器启动 |
+| 音乐 | `media.music` 1.3.0：三源识别（SMTC / WASAPI 音频会话 / 播放器窗口标题，判定表见 `PETCORE-MOD-FORMAT.md` §13.3）、歌词三源打分（直连→代理一次）、LRC 解析/偏移、唱跳循环、播放器启动 |
 
 **动画循环接缝**：`PresentationPort.play_animation(name, loop=True)` 让一段素材一直播，
 `release_loop()` 解除；探头、击飞、拖拽接管时 `_on_finished()` 自动解除，不破
@@ -875,13 +878,15 @@ wav；歌词真实抓到 33 行（酷狗源，0.66s）；SMTC 无播放器时 47
      告警色只染数值与单位，label/竖线不沾；`island_show_status` 的画法是行尾一个状态点，
      颜色取行内最高告警级（无色时用强调色）。胶囊左侧**不画头标**：内容（名字/信息位）
      直接从 `CONTENT_PAD = 19px` 起排（L101 删掉了强调色圆点）。
-5. **配置键**（全部全局作用域，16 个）
+5. **配置键**（全部全局作用域，18 个）
 
    | 键 | 默认 | 取值 |
    |---|---|---|
    | `island_enabled` | `False` | 总开关（菜单「灵动岛」写它） |
    | `island_show_name` / `island_show_status` | `True` | 角色名 / 状态点 |
    | `island_show_messages` | `False` | 消息显示：开启才记录并在展开卡片列出最近 8 条气泡消息（含「清除消息」按钮）；关闭时不记录也不显示，胶囊读数不受影响 |
+   | `island_show_toggle_button` | `True` | 展开卡片里的「隐藏/显示桌宠」按钮；关掉后只剩刷新余额/设置/清除消息 |
+   | `island_hide_fullscreen` | `False` | 全屏时连岛一起隐藏（与 `auto_hide_fullscreen` 共用探测器；只恢复「我们自己藏的那次」） |
    | `island_info_mode` | `"time"` | `time` / `custom` |
    | `island_custom_text` | `""` | ≤80 字符 |
    | `island_style` | `"dark"` | `dark` / `light` / `glass` |
@@ -1188,3 +1193,223 @@ system 追加彩蛋目录清单（`easter_egg_image_dir`，空 = `assets/big_blu
   **先试哪套源**：`auto` 按索引意图（GitHub 单文件优先）、`mirror` 先分片镜像、`github`
   只用单文件；任何一套失败都会自动换另一套，所以三个取值都不会让下载彻底不可用。
   下载完成行会写出实际来源主机（`来自 release-assets.githubusercontent.com`）。
+
+
+## 31. 反馈批次 4：朝向 / 岛按钮 / 气泡风格 / 岛全屏 / 拖动倾斜 / 静息成本（2026-11-13）
+
+- **动画朝向（每宠）**：`anim_facing_default`（`left` 默认 / `right`）+ `anim_facing_groups`
+  （`idle/turn/move/click/drag/act` → `left|right`，缺省跟随默认）。判据只有
+  `PetWindow._mirrored()`：`state.facing != 本组原生朝向` 才镜像；`text_clips` 永远不镜像。
+  只改渲染，不改 `state.facing` 与移动/转向数学。
+- **灵动岛卡片按钮**：`island_show_toggle_button`（默认 `True`）控制「隐藏/显示桌宠」按钮；
+  文案随 `set_pet_visible()` 变化，点击走 `CoreHost._toggle_pet_visible`。同时补上
+  `island.clicked` 的接线，`island_click_action="toggle_pet"` 不再是死开关。
+- **气泡风格（每宠）**：`self_talk_bubble_style`，默认 `classic_top`；五条预设
+  （classic_top / paper_left / glass_right / soft_blue_top / breath_bubble）来自原分支
+  `BUBBLE_STYLE_PRESETS`，数据在 `petcore/contracts/bubble_styles.py`，绘制在
+  `petcore/ui/bubble_style.py`：自绘底色/描边/圆角/三层柔和阴影/朝向角色的三角尾巴；
+  `breath_bubble` 用有机贝塞尔主泡。文本气泡的 `text_panel` QSS 改为透明（背景只画一次）。
+  图片气泡沿用预设配色但保留自己的圆角面板；快速对话窗不跟随（已知边界）。
+- **灵动岛全屏隐藏**：`island_hide_fullscreen`（全局，默认 `False`）。探测器仍只有
+  `FullscreenHideController` 一个：`set_enabled(auto or island)` 决定是否起表，
+  `set_hide_pets(auto)` 单独门控宠物隐藏；翻转时发 `fullscreen_changed(bool)`，宿主据此
+  藏/恢复岛，且只恢复「我们自己藏的那次」；全屏期间 `apply_island_settings()` 不会把岛
+  拉回画面。
+- **拖动倾斜**：`drag_lean_enabled`（每宠，默认开）。`MotionController` 按最近 ~120ms
+  水平拖速给目标角 `-v/1000*7°`（钳 ±7°），弹簧 `k=120/c=10` 积分；松手 0.6s 内回零并
+  停表，甩飞时清零。渲染/命中/输入修订共用 `PetWindow._rotation_angle()`
+  （探头 + 特效 + 倾斜相加）。
+- **静息成本**：`_idle_low_fps_allowed()` 不再把探头/击飞接管当成满速条件（探头 PEEKING
+  是静息态）；`ClipLibrary` 加 16 段 LRU（淘汰即 `close()`）；`PET_PETCORE_COST_STATS=1`
+  时每 60s 打一行 `cost stats`（clip/divisor/fps/paint_ms/threads）。
+  `scripts/bench_petcore_idle_cpu.py --left-edge` 可复现贴边探头的静息读数。
+
+
+## 32. 反馈批次 5：对话窗 / 动画控制 / WebP / 设置公开接口（2026-11-13）
+
+### 32.1 气泡与拖动倾斜
+
+- **默认气泡回退重写版**：`classic_top` 改为 plain 自绘圆角矩形（白底、蓝灰描边、半径 12），
+  没有三角尾巴、没有 10px 透明边；窗口尺寸 = 可见卡片，靠边不再因「窗口装不下」被推走。
+  其余 4 种风格保留，自绘路径仍支持尾巴/阴影/水泡。
+- **倾斜强度**：`drag_lean_strength`（每宠，0–100，默认 30）。`0` 关闭；`100%` = 24°；
+  默认 30% ≈ 7.2°，与旧手感一致。`MotionController._lean_limit()` 是唯一上限出处。
+
+### 32.2 对话窗
+
+- **设置深链**：`SettingsDialog.select_page()` 支持 `页键#行文案` 并返回 bool；对话窗标题栏
+  齿轮调用 `open_settings("extension:chat#对话窗外观")`，扩展缺失时降级 `api`。
+- **回收站**：`ChatSession.trashed_at`（schema 2 可选键）；`SessionStore.trash/restore/
+  purge/list_trashed`；删除会话先进回收站，`chat_trash_retention_days`（全局，默认 30）
+  控制自动清理；回收站永久删除/清空、清空当前会话、菜单节点/天气城市/签名删除都有二次确认。
+- **手机版**：`PhoneChatWindow(ChatWindow)` 单栏 380×760，顶栏返回/新建/更多，会话列表为
+  全高抽屉，底部 AI/DSH/扩展视图 chips；桌面标题栏全部按钮进 `⋮` 菜单。入口为标题栏手机
+  图标 + `chat_layout`（`desktop|phone`，默认 desktop）。chip 强调色经
+  `chat/contrast.ensure_contrast`，避免白字压浅色/黑字压深色。
+
+### 32.3 工作动画与键盘控制
+
+- **工作锁**：`work_animations_only`（每宠，默认开）。`CoreHost.notify_agent_state()` 把
+  `working` 扇出到每只 `PetWindow.set_work_state()`；锁内 `_roll_next()` 只选 `GraphType.WORK`
+  的 `B_LOOP`，没有 work 素材则保持 idle；显式点击/摸头仍可播；拖拽/探头/甩飞/锁屏不锁。
+- **键盘控制**：右键「桌宠控制 → 控制移动」或 `hotkey_keyboard_move`（默认 `Ctrl+Alt+M`）
+  开启；Windows `GetAsyncKeyState` 16ms 轮询 WASD/方向键，非 Windows 明确不支持。按下从
+  `move_curves` 推导的 loop_start 起播（跳过前摇），按住在 loop 段回绕，松手播收尾段；
+  位置由 `build_drive_plan()` + `move_position_at_frame()` 推进；拖拽/探头/甩飞/隐藏取消。
+
+### 32.4 WebP / 精灵表 / 致谢 / B 站
+
+- **WebP 单文件**：`petcore/media/webp_clip.py`（QMovie，真实帧延时）；`backends` 注册 `webp`；
+  `MEDIA_SUFFIXES` 加 `.webp`。Qt 的 WebP handler 不支持随机跳帧，键盘控制会自动退回整段循环。
+- **精灵表**：`SheetSpec(path, frame_w, frame_h, columns, rows, frame_count, fps)`；
+  `SheetClip` 一次解码整张图（超过 16M 像素等比缩小），按网格切帧 + 4 帧缓存 + QTimer；
+  支持 `videos/manifest.json` 的 `clips` 与同名 `.json` 边车；`--check` 的 `backends` 报 `sheet`。
+- **aboutme-pets**：`petcore/content/sprite_pack.py` 把单角色目录转成 `character.<id>` content
+  mod；`petcore/net/aboutme_packs.py` 按 curated 索引逐文件下载并校验 sha256（不随包，保留
+  NOTICE/CC BY-NC-SA 声明）；多宠页可「用新角色生成子宠」。
+- **致谢/B 站**：`credits.json` 与 `DEFAULT_SPECIAL_THANKS` 加 MerZlin/Animations、VPet、
+  aboutme-pets；特别鸣谢按 kind 分组。B 站 `x/relation/stat` 免登录总数直连优先，成功即写
+  `<data_root>/community/fans-count.json`；无 SESSDATA 只更新总数、不再报「未登录」错误；
+  UI 显示「B 站实时总数 + 名单快照」并给「打开粉丝页」。
+
+### 32.5 设置公开接口与使用手册
+
+- **schema**：`petcore/settings_schema.py` 覆盖 `DEFAULTS` 全部键（scope/type/default/
+  min/max/choices/label/kind/restart_required）；状态键只读。范围/类型由
+  `scripts/gen_settings_meta.py` 从 `_normalize` 生成初稿。
+- **CLI**：`petcore settings list|describe|get|set|export|path`；`set` 支持 `--slot/--force/
+  --out`，写流程 = 目录锁 → 重读 → 白名单 → 逐键 set → 回读；状态/敏感/未知键拒绝，越界
+  默认报错。`Config.save()` 对 `os.replace` 加 5 次退避重试。
+- **live reload**：`Config.reload()` + `CoreHost.start_config_watch()` 每 2s 比对
+  `config.json`/`config-pet-*.json` 的 mtime/size；设置窗打开时延后，关闭后下一拍应用。
+- **使用手册**：侧栏第 11 页 `ManualPage`，三个子页（常见问题/使用说明/给 AI 的提示词）；
+  提示词动态填程序目录、数据根、配置/schema 路径与 CLI 示例；可复制、可导出
+  `settings-schema.json` + `settings-guide.md`。
+
+## 33. 反馈批次 6：手机版窄窗 / 模式返回 / 朗读 / 抛掷探头 / 键盘成本 / 朋友的酒 / 致谢 / URL 安装（2026-11-14）
+
+### 33.1 手机版窄窗与模式返回
+
+- **最小宽度**：手机版 380×560（原 340）；右侧正文不再被裁。
+- **正文留给气泡**：手机版 `message_horizontal_margin=16`、composer 左右 12px、空态 24px；
+  `_update_bubble_widths()` 的可用宽度改为真实视口（下限 160），assistant 的
+  `QLabel` 最小宽改成 `min(360, available)`——窄窗不再出现「气泡固定宽小于正文最小宽」的裁切。
+- **常驻模式栏**：手机版视图 chips 挂在 `chat_main` 的 `view_stack` 下方，DSH/记忆/网页 AI
+  页同样可见；点「对话」回 AI，再从同一栏换模式；手机「更多」菜单另有「回到对话」。
+- **删除入口**：侧栏 footer 的「清空当前会话」按钮与确认路径删除；`clear()` 内部方法保留。
+
+### 33.2 逐条朗读
+
+- assistant 气泡的复制按钮旁新增喇叭按钮；再点切到停止。`MessageBubble.speak_requested`
+  → `ChatWindow.speech_requested` → `ChatController` 的 `host.ports.speech`。
+- 文本先经 `petcore/ui/chat/speech_text.py::clean_for_speech`（去 Markdown、4000 字上限），
+  单条一次 `SpeechRequest`；`owner="chat"`、`slot=当前宠`；关窗/切会话/新请求
+  `cancel_owner("chat")`，迟到回调按代数丢弃。
+- 自动朗读仍是 `ai.chat` 扩展的 `ai_voice_reply`（按句滴灌 + 预合成），核心按钮不重复造开关；
+  没有语音端口时气泡状态行提示「语音不可用：请到设置 → 语音配置后端」。
+
+### 33.3 抛掷撞边与探头
+
+- `EdgeProbeController` 新增 `_throw_or_moving()`：`motion.thrown`、`throw_egg_active`、
+  速度 > 8 px/s 任一成立都不进入/不排探头；`on_release()` 在抛掷接管中不排定时器。
+- `PetWindow._on_thrown()` 取消活动探头（`restore=False`）；探头 `_tick` 遇到 thrown 直接退出。
+  45° 旋转不再与飞行叠加。
+
+### 33.4 键盘控制的成本
+
+- `KeyboardDriveController` 自适应轮询：按住 16ms，连续 6 个空拍后 50ms；检测到按键立即回
+  16ms。空闲唤醒从 62.5/s 降到约 20/s。
+- `_advance_keyboard_drive()` / `_advance_move_from_frame()` 坐标未变化不调 `move()`，
+  贴边按住方向键不再每帧 `SetWindowPos` + 重绘；目标隐藏时不读键。
+- 首次按方向键的移动 clip 预热（`FrameSeqClip` prefetch）是**一次性**成本，保留并在报告里
+  给实测；`ClipLibrary` 的 16 段 LRU 继续兜底。
+
+### 33.5 「朋友的酒模式」
+
+- `PresentationPort.squash(duration_ms=0, bounces=0, strength=0)`：视觉形变，不改动画/位置。
+  `_PresentationAdapter` → `PetWindow.squash()` → `EffectController.start_squash(force=True)`；
+  拖拽/抛掷/探头/击飞不叠加。
+- `media.music` 在 `playing` 决策拍按 `music_buddy_wine_mode` 与节流逐宠发 `squash()`；
+  暂停/停止不发。设置页「播放与唱歌 → 朋友的酒模式」，全局键，默认 `False`。
+  批次 7 起节流间隔由 `music_buddy_wine_bpm` 决定（见 §34.3）。
+
+### 33.6 致谢与 B 站名单
+
+- 作者账号区在批次 6 曾用底部小字说明「张墨林制作桌宠软件框架…」；批次 7 改为
+  作者角色（见 §34.4），该小字已删除。
+- `fans.json` 增加 `total_fetched_at`：本轮用免登录 `x/relation/stat` 更新 total（4788），
+  保留 `fetched_at` 与旧 names；总数与名单日期不同时页面分别显示两个日期，不再把差额
+  称作「同名占位」；`scripts/refresh_community_snapshot.py --total-only` 可在无
+  SESSDATA 时只更新总数，完整名单仍需凭据。
+
+### 33.7 从链接安装与 aboutme 来源
+
+- 扩展管理新增「从链接安装」：`http/https` zip → 下载到 `cache/mods/url-install` → 预览
+  （`petcore/mods/url_install.py`）→ 确认 → 安装。支持 `mod.json` 扩展（feature/content）
+  与 aboutme 单角色包（`manifest.json`+`actions.json`），单层根目录自动识别；多包合集拒绝。
+- 安全沿用本地导入：zip-slip、设备名、大小写重复、symlink、128 MiB 下载上限、
+  512 MiB/20000 条目解包预算；feature 包在未勾选「允许功能扩展」时拒绝安装并提示入口。
+- aboutme 角色素材包卡片新增「素材来源」按钮（打开
+  `https://github.com/hunmer/aboutme-pets`）；下载确认框与菜单 tooltip 显示来源 URL。
+
+
+## 34. 反馈批次 7：移动收尾 / 播放速度 / 朋友的酒 BPM / 致谢 / 手机版（2026-11-15）
+
+### 34.1 键盘移动的显式分段
+
+- `videos/move_strides.json` 的条目可带 `segments`：`start / loop_start / loop_end / end`
+  （帧号闭区间）。`CharacterSpec.move_segments` 由 `legacy` / `modcontent` 解析，非法值
+  丢弃、缺省仍由 `engine/keyboard_drive.move_segments()` 按 curve 自动推导。
+- `shenshen` 的 `左转奔跑` 配为 `loop_start=56, loop_end=104, end=240`：按住只在
+  56..104 循环（105 起是绊倒/趴地），松手从 105 播「绊倒→趴地→起身」，不再每圈摔一跤。
+- 每圈位移按曲线跨度算：`stride * (curve[loop_end] - curve[loop_start])`。`stride` 仍是
+  整条 0→1 曲线的位移，缩短循环段不会凭空加速。
+- 收尾段内再按同方向重新起跑；`_on_finished()` 按住时先 `start()` 再跳到 `loop_start`；
+  `_on_frame()` 在键盘驱动时先推进再取图，越界帧不会闪一帧趴地。
+
+### 34.2 播放速度与闲置降帧
+
+- 闲置降帧只给真正支持隔帧的后端：`PetClip.supports_frame_divisor` 为真才下发；
+  `FrameSeqClip` 与 `SheetClip` 保留隔帧（`SheetClip._tick` 每拍前进 divisor 帧，时长不变），
+  WebM/单文件 WebP 不再被 `set_decode_throttle` 拉成半速。
+- `_stop_clip()` 把旧 clip 的 divisor 复位为 1 再释放 LRU；切换 clip 后强制重新下发一次，
+  `_idle_low_fps_active` 只记录真实生效的降帧。
+- `_idle_low_fps_allowed()` 在键盘驱动、`play_animation(loop=True)` 循环动作、漫游计划
+  进行中返回 False；这三类活跃动画不降帧。
+- `playback_speed` 在 `_play_spec()` 中无条件下发（含 1.0），设置页改动经
+  `CoreHost._apply_live_to()` → `PetWindow.apply_playback_speed()` 立即作用到当前动画。
+
+### 34.3 朋友的酒 BPM
+
+- 新全局键 `music_buddy_wine_bpm`：int，默认 **132**，范围 60–200；节流间隔
+  `60 / bpm` 秒。设置页「音乐 → 播放与唱歌 → 弹跳节奏」，60–200 BPM，显示后缀 ` BPM`。
+- `media.music` 1.4.0：`buddy_wine_interval_seconds()` 负责钳制与换算；**节拍器独立于
+  1Hz 判定拍**（`ports.scheduler.call_every(60000/bpm)`），否则 60–200 BPM 全区间都会
+  退化成 1Hz。改 BPM 后下一次 1Hz 判定重挂定时器；暂停/停止取消定时器，不发 `squash()`。
+
+### 34.4 致谢作者角色
+
+- `AuthorAccount` 新增 `role`（空串 = 不显示）；随包 `credits.json` 与
+  `DEFAULT_AUTHOR_ACCOUNTS` 同步：
+  - `@張墨林`（BiliBili / 抖音）→ `桌宠独立端作者`
+  - `@浩瀚星空2005`（BiliBili）→ `初始动画素材作者`，从特别鸣谢移到作者区
+- 作者行标题为 `handle · role`，用 `settingLabel` 正文字号；平台作为小字副行；
+  旧的「张墨林制作框架…」底部小字删除。
+
+### 34.5 自言自语台词
+
+- 配置归一化对 `self_talk_texts` 与 `self_talk_daily_texts` 做整条精确替换：
+  `欧金金` → `欧鲸鲸……`。只命中完全相等的条目，不碰其它自定义台词；内置默认值本就是
+  `欧鲸鲸……`，语音映射仍是 happy-08。
+
+### 34.6 手机版对话窗
+
+- 尺寸：最小 440×560，最大 560×1000，初始 460×780（比旧版 380 宽 80px，扣掉右侧
+  12px padding 后正文仍多约 5 个 13px 汉字）。
+- assistant 气泡正文 `padding: 8px 12px 8px 0`（右侧 12px、左侧 0，文字保持靠左）；
+  `_update_bubble_widths()` 的正文可用宽扣除 12px，正文最小宽由窗口按
+  `min(360, available - 12)` 统一算，构造时不再硬钉 360；滚动条 `rangeChanged` 与
+  viewport Resize 后都重算，消除滚动条宽度的瞬时偏差。
+- 按钮：新建会话在底部模式栏最右端（36px 圆形）；标题栏右侧为 `[⋯][✕]`；「更多」菜单
+  保留「新建会话」与「关闭」；图标全部经 `tool_icon(..., dark=...)` 按深浅色重绘，
+  close hover 浅色 `#fbe8e8` / 深色 `#5a2727`。

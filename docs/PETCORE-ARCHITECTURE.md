@@ -187,12 +187,13 @@ feature 包的生命周期是 `discover → validate → enable → start`，`st
   `tabs` 门面只为兼容旧调用，内部不再是横向标签条。ModsPage 同口径过滤，展示 `name_zh`。
 - `SettingsPage.prepare_embedded()` 隐藏内嵌页重复标题、收紧边距；`dirty/draft/confirm_save/discard_changes/dispose` 由 `ExtensionsPage` 统一委托。
 - `ModsPage` 提供「允许功能扩展」复选框与「重新加载扩展」按钮；feature mod 安装后需要开启并重载。
-- 侧边栏固定 7 页；`SettingsDialog` 不再把 contributed page 追加成侧边栏项。
+- 侧边栏固定 11 页（含「使用手册」）；`SettingsDialog` 不再把 contributed page 追加成侧边栏项。
 
 ## 16. 可导入样例与移动同步
 
 - 内置只保留 7 个强交互 mod；`fun.divination`、`fun.festival`、`reminder.todo`、`voice.chime`、`media.music`、`tool.weather`、`tool.file-reader` 移到 `examples/petcore-mods/`，可用 `petcore mods install` 安装。
 - `CharacterSpec.move_curves` 保存 `move_strides.json` 的 `curve`；`content/legacy.py` 与 `content/modcontent.py` 解析并清洗（0..1、≥2 项）。
+- `CharacterSpec.move_segments` 保存同一文件的 `segments`（`start/loop_start/loop_end/end`）；键盘驱动按住只循环中间段、松手从 `loop_end+1` 播收尾，素材里烤进的绊倒/趴地不再进入按住循环。
 - `engine/motion.py` 新增 `body_reach`、`choose_move_direction`、`quantize_move`、`move_position_at_frame`；位置由 clip 帧号 + curve 推进，静态帧不位移。
 - `PetWindow._begin_move` 先按方向设置 `state.facing`，再渲染首帧；`_on_frame` 调用 `_advance_move_from_frame`；`_on_finished` 提交终点/循环重播。固定 33ms 线性步进已删除。
 
@@ -513,3 +514,27 @@ Agent 侧（写方）                         桌宠侧（ai.agent mod）
 - **凭据**：B 站 SESSDATA 与语音 Key 都只进钥匙串；诊断快照只输出 bool/计数。
 - **线程**：刷新是守护线程，关闭设置窗只取消信号，不 `wait`；网络单请求有超时上限。
 - **本地路由**：本地 TTS 不能被系统代理接管；云端 TTS 仍沿用 `net/http` 的代理/直连规则。
+
+## 反馈批次 6：窄窗对话、朗读与 URL 安装（2026-11-14）
+
+- **手机版布局**：`PhoneChatWindow` 最小 380 宽；视图 chips 从 AI 页移到
+  `chat_main` 的 `view_stack` 下方，成为跨 DSH/扩展页常驻的模式栏；气泡宽度按
+  真实视口计算，assistant 的 `QLabel` 最小宽不再大于气泡宽。
+- **朗读链路**：`MessageBubble`（assistant）→ `ChatWindow.speech_requested` →
+  `ChatController` → `host.ports.speech`（`SpeechRequest`，`owner="chat"`，按 slot）；
+  文本经 `speech_text.clean_for_speech` 清洗。自动朗读仍由 `ai.chat` 的
+  `ai_voice_reply` 负责，核心按钮是单条入口，两者共用同一条语音通道。
+- **探头守卫**：`EdgeProbeController._throw_or_moving()` 以 `motion.thrown` /
+  `throw_egg_active` / 速度阈值挡掉飞行中的探头；`PetWindow._on_thrown()` 主动
+  退出已激活的探头，避免 45° 姿态与抛掷位移叠加。
+- **键盘轮询**：`KeyboardDriveController` 空闲 50ms、按住 16ms；移动落点未变化
+  不调 `move()`。首次按方向键仍会预热移动 clip（一次性），不做假优化。
+- **朋友的酒模式**：`PresentationPort.squash` 是新的视觉反馈端口，核心实现
+  `PetWindow.squash()`；`media.music` 在每个 playing 决策拍按开关与 `music_buddy_wine_bpm`
+  （60–200，默认 132）节流触发。
+- **闲置降帧只给隔帧后端**：`PetClip.supports_frame_divisor` 只在帧序列/精灵表为真；
+  WebM/单文件 WebP 的 `set_decode_throttle` 会把时长真的拉长，不再用于闲置降帧；
+  键盘驱动、唱歌循环、漫游进行中一律不降帧。
+- **URL 安装**：`petcore/mods/url_install.py` 负责下载/预览/安装；解包复用
+  `mods.install.open_archive` 的安全校验（zip-slip、设备名、symlink、预算）。
+  支持 `mod.json` 扩展与 aboutme 单角色包；多包合集与裸素材目录明确拒绝。

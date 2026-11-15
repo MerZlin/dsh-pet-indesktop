@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from petcore import paths
 from petcore.config import DEFAULTS
+from petcore.contracts.bubble_styles import STYLE_IDS, style_preset
 from petcore.contracts.contributions import Contribution
 from petcore.contracts.feature import FeatureDefinition
 from petcore.contracts.speech import SpeechRequest
@@ -645,6 +647,27 @@ class SelfTalkPage(SettingsPage):
         self._preview_offset = 0
         self._refresh_daily_preview()
 
+        bubble_card = self.section("气泡")
+        self.bubble_style = QComboBox(self)
+        for style_id in STYLE_IDS:
+            self.bubble_style.addItem(style_preset(style_id)["label"], style_id)
+        self.bubble_style.setCurrentIndex(
+            max(
+                0,
+                self.bubble_style.findData(
+                    str(self.config().get("self_talk_bubble_style") or "classic_top")
+                ),
+            )
+        )
+        self.bubble_style.currentIndexChanged.connect(self._on_changed)
+        bubble_card.add_row(
+            "气泡风格",
+            self.bubble_style,
+            "经典暖黄 / 纸感卡片 / 深色玻璃 / 柔蓝对话 / 吐气水泡；"
+            "每种带自己的配色、圆角、尾巴与首选落位。改完下一句气泡生效。",
+            search_keys=("气泡类型", "气泡样式", "水泡", "玻璃", "纸感", "暖黄"),
+        )
+
         extra = self.section("语音与彩蛋")
         self.voice_enabled = make_checkbox(self)
         self.voice_enabled.setChecked(bool(self.config().get("self_talk_voice_enabled")))
@@ -691,6 +714,9 @@ class SelfTalkPage(SettingsPage):
             "min": int(float(config.get("self_talk_min") or 20)),
             "max": int(float(config.get("self_talk_max") or 60)),
             "duration": int(float(config.get("self_talk_duration") or 5)),
+            "bubble_style": str(
+                config.get("self_talk_bubble_style") or "classic_top"
+            ),
             "texts": list(config.get("self_talk_texts") or []),
             "daily_enabled": bool(config.get("self_talk_daily_enabled", True)),
             "daily_texts": list(config.get("self_talk_daily_texts") or []),
@@ -709,6 +735,7 @@ class SelfTalkPage(SettingsPage):
             "min": int(self.min_spin.value()),
             "max": int(self.max_spin.value()),
             "duration": int(self.duration_spin.value()),
+            "bubble_style": str(self.bubble_style.currentData() or "classic_top"),
             "texts": parse_lines(self.texts.toPlainText()),
             "daily_enabled": self.daily_enabled.isChecked(),
             "daily_texts": parse_lines(self.daily_texts.toPlainText()),
@@ -859,6 +886,7 @@ class SelfTalkPage(SettingsPage):
         config.set("self_talk_min", values["min"])
         config.set("self_talk_max", max(values["min"], values["max"]))
         config.set("self_talk_duration", values["duration"])
+        config.set("self_talk_bubble_style", values["bubble_style"])
         config.set("self_talk_texts", list(values["texts"]))
         config.set("self_talk_daily_enabled", values["daily_enabled"])
         config.set("self_talk_daily_texts", list(values["daily_texts"]))
@@ -888,6 +916,7 @@ class SelfTalkPage(SettingsPage):
         config.set("self_talk_min", self._initial["min"])
         config.set("self_talk_max", self._initial["max"])
         config.set("self_talk_duration", self._initial["duration"])
+        config.set("self_talk_bubble_style", self._initial["bubble_style"])
         config.set("self_talk_texts", list(self._initial["texts"]))
         config.set("self_talk_daily_enabled", self._initial["daily_enabled"])
         config.set("self_talk_daily_texts", list(self._initial["daily_texts"]))
@@ -920,6 +949,11 @@ class SelfTalkPage(SettingsPage):
         self.champion_chance.setValue(self._initial["champion_chance"])
         self.champion_chance.setEnabled(self._initial["champion"])
         self.champion_chance.blockSignals(False)
+        self.bubble_style.blockSignals(True)
+        self.bubble_style.setCurrentIndex(
+            max(0, self.bubble_style.findData(self._initial["bubble_style"]))
+        )
+        self.bubble_style.blockSignals(False)
         self.daily_count.blockSignals(True)
         self.daily_count.setValue(self._initial["daily_count"])
         self.daily_count.blockSignals(False)

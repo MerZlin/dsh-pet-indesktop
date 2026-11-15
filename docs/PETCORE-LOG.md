@@ -7152,3 +7152,316 @@ clip.py +4/-1；其余逐文件清单与原生续测、成本见 [Mac 报告](PR
 Windows 已有失败、Qt 压力退出超时和 arm64 包未交付状态均继续公开，架构图未动。
 验证：文档/报告 373 passed（3.90s），ruff 与 diff 检查通过；63 处本地链接有效。
 余下 54 个测试函数与基线 AST 一致，55 项（含参数化）收集成功，未重新执行 Qt 行为。
+## L196 · 2026-11-13 · 反馈批次 4：朝向 / 岛显隐按钮 / 气泡风格 / 岛全屏隐藏 / 拖动倾斜 / 静息成本
+
+六条用户反馈都落在 petcore（唯一随包入口），`pet/` 旧壳不动。
+
+1. **动画朝向（每宠）**：新增 `anim_facing_default`（left/right）+ `anim_facing_groups`
+   （idle/turn/move/click/drag/act）。`_mirrored()` 改成「`facing` 与本组素材原生朝向
+   不同才镜像」，`text_clips` 仍绝对不镜像；只改渲染，不改 `state.facing` 与移动/转向
+   数学。设置页「大小与外观 → 动画朝向」一个主下拉 + 六个组下拉。
+2. **岛卡片显隐桌宠**：`_IslandCard` 第 4 个按钮 + `toggle_pet_requested`，文案随
+   `set_pet_visible()` 变化；宿主接 `_toggle_pet_visible`，并补上 `island.clicked` 的
+   接线（`island_click_action="toggle_pet"` 以前只发信号、没人接）。新键
+   `island_show_toggle_button`（全局，默认开）。
+3. **气泡风格（每宠）**：`contracts/bubble_styles.py` 存 5 条原分支预设（数据、零 Qt），
+   `ui/bubble_style.py` 负责 QSS/表面路径/三层柔和阴影/水泡轮廓；文本气泡自绘表面
+   （`text_panel` QSS 透明，不双画）。尾巴尖沿边投影到角色中心并钳进圆角（长气泡靠边
+   不再指向气泡中点）；`breath_bubble` 左窄右宽让文字靠左。新键
+   `self_talk_bubble_style`（默认 classic_top，旧壳同名键已补进迁移别名）。
+4. **灵动岛全屏隐藏**：新键 `island_hide_fullscreen`（全局，默认关）。探测器仍只有一个：
+   `set_enabled(auto or island)` 决定起表、`set_hide_pets(auto)` 单独门控宠物隐藏；
+   翻转发 `fullscreen_changed(bool)`，宿主只恢复「自己藏的那次」；全屏期间
+   `apply_island_settings()` 不把岛拉回画面。
+5. **拖动倾斜（每宠）**：`drag_lean_enabled` 默认开；`MotionController` 按最近 ~120ms
+   水平拖速给 ±7° 目标角（方向跟随拖动），弹簧 k=120/c=10；松手 0.6s 回零并停表，
+   甩飞清零。旋转收敛到 `PetWindow._rotation_angle()`（探头 + 特效 + 倾斜），
+   paint/命中/input_revision 共用。
+6. **静息成本**：`_idle_low_fps_allowed()` 不再把探头/击飞接管当满速条件（探头 PEEKING
+   是静息态，0.5.0 贴边停放单核 40%+ 不下降的根因）；`ClipLibrary` 加 16 段 LRU
+   （淘汰即 `close()`）；`PET_PETCORE_COST_STATS=1` 每 60s 打一行 `cost stats`；
+   `scripts/bench_petcore_idle_cpu.py` 加 `--left-edge`。
+
+文件（`git diff --numstat`，新增文件按行数）：`petcore/config.py` +62、`petcore/ui/pet_window.py`
++117/−10、`petcore/ui/island.py` +32/−2、`petcore/ui/app.py` +51/−3、`petcore/ui/motion.py`
++122/−1、`petcore/ui/bubble.py` +148/−73、`petcore/ui/fullscreen_hide.py` +30/−2、
+`petcore/ui/settings/pages_core.py` +146、`petcore/ui/settings/page_interaction.py` +6、
+`petcore/media/library.py` +27、`petcore/builtin/features/fun.self-talk/host/factory.py` +34、
+`petcore/AGENTS.md` +9/−2、`scripts/bench_petcore_idle_cpu.py` +25/−2；新增
+`petcore/contracts/bubble_styles.py` 86、`petcore/ui/bubble_style.py` 257；
+测试新增 `test_petcore_anim_facing.py` 214、`test_petcore_bubble_styles.py` 203、
+`test_petcore_clip_cache.py` 75、`test_petcore_drag_lean.py` 242、
+`test_petcore_island_card_actions.py` 77、`test_petcore_island_fullscreen.py` 193，
+更新 `test_petcore_bubble.py`、`test_petcore_fullscreen_hide.py`、`test_petcore_idle_fps.py`、
+`test_petcore_island_p5.py`、`test_petcore_settings.py`；文档 `docs/PETCORE-SPEC.md` +37/−2、
+`docs/SETTINGS-CHANGE-GATES.md` +14、`docs/INDEX.md` +2、本索引 +2 与本报告。
+
+验证：聚焦 221 例通过（朝向 8、气泡 37、岛 38、全屏 6、倾斜 6、缓存 2、闲置 5、设置等）；
+全量 `python -m pytest -q` = **11803 passed, 22 skipped, 8 failed**，其中 6 例为既有失败
+（`test_bundle_slim.py` 4 例、`test_desktop_pet_features.py` 的 V43/V44 文档品牌提及、
+`test_packaging_keyring_notices.py` 的 build_onedir.ps1 无 BOM），2 例由本批文档补齐后转绿
+（LOG 与索引同步、PR 报告三章节）。ruff 全绿。
+
+实机（本机 Windows，源码与构建各跑）：岛卡片真实鼠标点「隐藏桌宠」→ 文案变「显示桌宠」、
+状态点空心、窗口 `IsWindowVisible=false`，再点恢复；气泡（中文/长文本靠边尾巴指向角色）
+截图确认；边缘探头（左缘 `-292` = 0.55 露出的目标位）截图确认；拖动跟随与拖拽动画正常。
+静息 A/B（同配置、固定预热 120s、psutil 采样 60s、左缘探头）：0.5.0 安装版单核 **12.2%**、
+线程 17；本批构建 **6.4%**、线程 10（−47.5%）。
+
+未验证/风险：真实全屏游戏/视频下的岛隐藏只由单测覆盖；macOS/Linux 未做同口径 A/B；
+拖动倾斜方向是主观项（已按实机反馈改为跟随拖动方向）；`pet/` 旧壳不提供新设置；
+首跑帧序列供给会在空闲 60s 后吃 CPU（bench 会把供给算进静息，正式数字须先预热 120s）。
+
+
+
+## L197 · 2026-11-13 · 反馈批次 5：气泡回退 / 手机版对话窗 / 回收站 / 工作动画 / 键盘控制 / WebP / 设置公开接口
+
+十条用户反馈全部落在 petcore（唯一随包入口），`pet/` 旧壳不动；同时把上一批未提交的
+气泡风格/朝向/岛按钮代码一起纳入本批的验证口径。
+
+1. **默认气泡回退重写版**：`classic_top` 改为 plain 自绘圆角矩形（白底、蓝灰描边、半径 12），
+   无三角尾巴、无 10px 透明边；`_surface_band()` 对 plain 返回 0，`_paint_surface()` 用
+   `QPainterPath.addRoundedRect()` 画表面，`_column()` 不再预留透明边。其余 4 种风格保留。
+   靠边时窗口 = 可见卡片，不再因「窗口装不下」被推离角色。
+2. **倾斜强度**：新键 `drag_lean_strength`（0–100，默认 30，本宠）；`_lean_limit()` 是唯一
+   上限出处，100% = 24°，默认 30% ≈ 7.2°；0 关闭。设置页「拖拽与投掷 → 倾斜强度」。
+3. **对话窗设置按钮**：标题栏齿轮 + `settings_requested`；`SettingsDialog.select_page()`
+   支持 `页键#行文案` 并返回 bool；`open_settings()` 返回是否命中；`extension:chat#对话窗外观`
+   选不中时降级 `api`。手机版 `⋮` 菜单也有「设置」。
+4. **工作动画锁**：新键 `work_animations_only`（默认开，本宠）。`notify_agent_state()`
+   把 `working` 扇出到每只 `PetWindow.set_work_state()`；锁内 `_roll_next()` 只选 WORK
+   的 `B_LOOP`，无 work 素材保持 idle；显式点击/摸头可播，拖拽/探头/甩飞/锁屏不锁。
+   `--check` 增加 `work_clips`。
+5. **键盘控制**：右键「桌宠控制 → 控制移动」+ 新全局键 `hotkey_keyboard_move`
+   （默认 `Ctrl+Alt+M`）。`platform/keyboard_state.py` 只读 WASD/方向键（GetAsyncKeyState，
+   不装钩子、不记历史）；`ui/keyboard_drive.py` 16ms 表只在模式开启时运行；按下从
+   `move_segments()` 的 loop_start 起播、按住回绕、松手播收尾；位置由
+   `build_drive_plan()` + `move_position_at_frame()` 推进，拖拽/探头/甩飞/隐藏取消。
+6. **回收站**：`ChatSession.trashed_at` + `SessionStore.trash/restore/purge/list_trashed`；
+   删除会话先进回收站，`chat_trash_retention_days`（全局，默认 30，0 = 不清理）控制
+   建窗时 `purge()`。`TrashDialog` 恢复/永久删除/清空；清空当前会话、菜单节点删除、
+   天气城市删除、签名删除都补二次确认。
+7. **手机版对话窗**：`PhoneChatWindow(ChatWindow)` 单栏 380×760，顶栏返回/新建/更多，
+   会话列表全高抽屉，底部 AI/DSH/扩展 chips；桌面标题栏全部按钮进 `⋮` 菜单。
+   `chat_layout`（全局，desktop|phone，默认 desktop）+ 标题栏手机图标即时重建。
+   `chat/contrast.py` 提供 WCAG 对比度与 `ensure_contrast`；chips 的强调色自动调暗/调亮。
+8. **WebP / 精灵表**：`contracts/content.SheetSpec` + `media/webp_clip.py`（QMovie，真实
+   帧延时）+ `media/sheet_clip.py`（一次解码、8M 像素预算、4 帧缓存、QTimer）；
+   `backends` 注册 `webp`；`MEDIA_SUFFIXES` 加 `.webp`；`legacy` 支持 `videos/manifest.json`
+   的 `clips` 与同名 `.json` 边车；`canvas` 从 manifest 读取，`_valid_box` 不再写死 640×360；
+   `character_pack` 同步支持。aboutme-pets 由 `content/sprite_pack.py` 导入、`net/aboutme_packs.py`
+   按 curated 索引逐文件 sha256 下载（不随包，保留 NOTICE/CC BY-NC-SA）。
+9. **致谢 / B 站**：`credits.json` + `DEFAULT_SPECIAL_THANKS` 加 MerZlin/Animations、VPet、
+   aboutme-pets；`_build_special_rows` 按 kind 分组。B 站 `_get_json` 直连优先；成功总数
+   写 `<data_root>/community/fans-count.json`；无 SESSDATA 只更新总数、不再报「未登录」；
+   UI 显示「B 站实时总数 + 名单快照」，加「打开粉丝页」。
+10. **设置公开接口 / 使用手册**：`settings_schema.py` 覆盖全部 278 键（scope/type/default/
+    min/max/choices/label/kind/restart_required，状态键只读）；`settings_schema_ranges.py`
+    由 `scripts/gen_settings_meta.py` 从 `_normalize` 生成；`settings_cli.py` 提供
+    `list|describe|get|set|export|path`，`set` 走目录锁 + 重读 + 白名单 + 回读，越界默认
+    报错、`--force` 才夹取；`Config.save()` 对 `os.replace` 加 5 次退避重试；`Config.reload()`
+    + `CoreHost.start_config_watch()` 每 2s 检查外部配置，设置窗打开时延后；侧栏新增
+    第 11 页「使用手册」（常见问题/使用说明/给 AI 的提示词三子页，提示词动态填路径，
+    可复制、可导出 schema + guide）。
+
+文件：`git diff --numstat` 见 PR 报告；新增 `petcore/engine/keyboard_drive.py`、
+`petcore/ui/keyboard_drive.py`、`petcore/platform/keyboard_state.py`、`petcore/media/webp_clip.py`、
+`petcore/media/sheet_clip.py`、`petcore/content/sprite_pack.py`、`petcore/net/aboutme_packs.py`、
+`petcore/content/data/aboutme_packs.json`、`petcore/settings_schema.py`、
+`petcore/settings_schema_ranges.py`、`petcore/settings_cli.py`、`petcore/storage/config_lock.py`、
+`petcore/ui/chat/phone_window.py`、`petcore/ui/chat/trash_dialog.py`、`petcore/ui/chat/contrast.py`、
+`petcore/ui/settings/page_manual.py`、`petcore/ui/settings/manual_content.py`、
+`scripts/gen_settings_meta.py`、`scripts/gen_aboutme_packs.py`；测试新增 12 个文件
+（keyboard_drive / work_animations / chat_phone / chat_trash / media_webp / sprite_pack /
+settings_cli / settings_schema / config_reload / manual_page 等）。
+
+验证：ruff 全绿；petcore 全量 `3322 passed, 4 skipped`（两条搜索测试因新手册页命中而
+调整为「目标页可见」后转绿）；仓库全量 `python -m pytest -q` = **11871 passed, 22 skipped,
+6 failed（1607.41 s）**，6 例均为既有失败（`test_bundle_slim` 4 例、产品文案 1 例、
+`build_onedir.ps1` BOM 1 例），涉及文件均不在本批 diff 内。
+性能实测：外部配置检查 no-op **0.072 ms/次**、真实变更 **1.09 ms/次**（500/200 次均值）；
+手机版开窗 **18.9 ms** vs 桌面 **17.1 ms**；键盘驱动单拍 **0.006 ms**（1000 次均值，
+仅模式开启时 16ms 表）；5120×5400 精灵表解码 **85.8 ms**、切帧 **0.11 ms**，预算 8M 像素
+后帧 344×193、单张约 32MB。
+
+审查修复（独立子代理）：回收站 `purge(0)` 改无操作；工作锁白名单加 `drive` 并校验
+`_action_kind`；`ClipLibrary` 加 96MB 字节预算；aboutme 下载线程不随设置页销毁；
+坏配置热重载不推进签名、下一拍重试；`hotkey_*` 标 `restart_required`；`settings list`
+接受 `--json`；流式中禁止切布局；`character_id_for()` 统一清洗 id；键盘帧重入保护。
+
+出包：`rel-storage-2026-11-13c/dsh-pet-core-setup.exe` 337,411,764 B / SHA256
+`F4B00191…10A43D` / **NotSigned**；构建内 `--check --strict` 退出 0（`aboutme_packs=2`、
+`strict.problems=[]`）；onedir `settings list --json --out` 冒烟退出 0。
+
+未验证/风险：真实全屏游戏/视频下的岛隐藏仍只有单测；aboutme 下载只验证了索引与本地导入，
+未在无网/限速网络下实测；手机版全功能只做 offscreen 测试与源码实机抽查，未做 30 分钟浸泡；
+`SheetClip` 的 8M 像素/段 + 96MB 字节预算仍可能偏高，大表角色建议转帧序列。
+
+## L198 — 反馈批次 6：手机版窄窗 / 模式返回 / 朗读 / 抛掷探头 / 键盘成本 / 朋友的酒 / 致谢 / URL 安装（2026-11-14）
+
+**改动**
+
+- 手机版最小 380×560；气泡宽度按真实视口计算、assistant 最小宽收到气泡内；视图 chips
+  移到 `chat_main` 的 `view_stack` 下方常驻，DSH/记忆/网页 AI 都能一键回「对话」；
+  删除侧栏「清空当前会话」入口。
+- assistant 气泡新增逐条朗读按钮：`speech_requested` → `ChatController` →
+  `host.ports.speech`（owner=`chat:<owner>:<slot>`，按窗口代数取消）；文本经
+  `speech_text.clean_for_speech`；自动朗读仍走 `ai.chat` 的 `ai_voice_reply`。
+- `EdgeProbeController` 新增抛掷/击飞/速度守卫；`_on_thrown()` 主动取消探头，
+  45° 姿态不再与飞行叠加。
+- 键盘控制自适应轮询（按住 16ms / 空闲 50ms）+ 坐标未变化跳过 `move()`；首次按方向键的
+  移动 clip 预热保留为一次性成本。
+- 新 `PresentationPort.squash()` + `PetWindow.squash()`；`media.music` 1.3.0 新增
+  「朋友的酒模式」（playing 每秒逐宠 Q 弹，暂停不发）；新全局键
+  `music_buddy_wine_mode`（默认 False）。
+- 致谢作者区注明「张墨林制作桌宠软件框架，不制作动画；动画素材来自 B 站
+  @浩瀚星空2005」；`@浩瀚星空2005` note 同步。
+- `fans.json` 只更新总数 4788 + `total_fetched_at`（名单仍 3948，两个日期分开展示）；
+  `refresh_community_snapshot.py --total-only`；无 SESSDATA 不假装更新名单。
+- aboutme 角色包新增「素材来源」按钮与来源 URL；扩展管理新增「从链接安装」
+  （`petcore/mods/url_install.py` + `mods.install.open_archive`），支持 feature/content
+  zip 与 aboutme 单角色包；feature 安装用市场硬预算，角色包 staging 后原子替换。
+
+**验证**
+
+- ruff 全绿；整仓全量 `python -m pytest -q` = **11896 passed, 22 skipped, 7 failed
+  （22:35）**：6 例既有失败 + 旧壳 `test_chat_subsystem.py` 的时序 flake（单独复跑通过）。
+- 实机：380×760 手机窗长回复无右侧裁切；记忆页底部 chips 常驻且「对话」可回；
+  回环 HTTP 真实 zip 完成下载/预览/安装；B 站总数实网 4788；键盘三态 CPU 与首次按键
+  预热数字见 PR 报告。
+- 审查子代理指出的 fans 语义、aboutme 下载回调崩溃、朗读多窗状态、URL 角色包半成品、
+  feature 预算与版本断言均已修复，并有回归测试。
+
+**未验证/风险**：逐条朗读未在本机配置语音后端听声；朋友的酒与抛掷探头为单测/状态机
+验证；B 站完整名单仍缺 SESSDATA；未做 30 分钟浸泡、未安装本轮 setup；上一批 6 例既有
+失败不在本批范围。
+## L199 — 反馈批次 7：移动收尾 / 播放速度 / 朋友的酒 BPM / 致谢 / 手机版（2026-11-15）
+
+**改动**
+
+- 键盘移动：`move_strides.json` 支持 `segments`（`CharacterSpec.move_segments`，legacy/modcontent 双解析）；
+  `左转奔跑` 设为 56/104/240，按住只在 56..104 循环，松手从 105 播「绊倒→趴地→起身」。
+  每圈位移改为 `stride × (curve[loop_end] − curve[loop_start])`；圈末帧先渲染、下一帧越界时先计数再回绕
+  （否则 104 被跳过、56 连画两次）；收尾段内再按同方向重新起跑；
+  `_on_finished` 按住时 `start()+jump(loop_start)`；`_on_frame` 驱动时先推进再取图。
+- 播放速度：`PetClip.supports_frame_divisor` + `set_frame_divisor` 不再回退到
+  `set_decode_throttle`；`SheetClip._tick` 改为隔帧采样且 `duration()` 不变；`_stop_clip` 复位
+  LRU clip 的 divisor；`_idle_low_fps_allowed` 排除键盘驱动/循环动作/漫游，`drive_keyboard`
+  每次按键重置 `_last_activity`（松手后不会立刻半速）；`playback_speed`
+  在 `_play_spec` 无条件下发，设置页经 `_apply_live_to → apply_playback_speed` 立即生效。
+- 朋友的酒：新全局键 `music_buddy_wine_bpm`（默认 132，60–200），`media.music` 1.4.0 用
+  **独立 BPM 定时器** `scheduler.call_every(60000/bpm)`（1Hz 判定拍不能限速 132/200 BPM）；
+  设置页新增「弹跳节奏」spinbox。
+- 致谢：`AuthorAccount.role`；张墨林两条账号写「桌宠独立端作者」，浩瀚星空2005 移到作者区
+  「初始动画素材作者」；作者标题用正文字号，底部小字删除；`fetch_community_credits.py` 保留 role。
+- 自语：`欧金金` → `欧鲸鲸……` 整条精确替换，覆盖 `self_talk_texts` 与 `self_talk_daily_texts`。
+- 手机版：最小 440×560、最大 560×1000、初始 460×780；assistant 右侧 12px padding（左侧 0），
+  正文最小宽按 `min(360, available−12)`；滚动条 `rangeChanged` 后重算；新建会话移到底部
+  chips 最右，标题栏 `[⋯][✕]`，菜单补「新建会话」，图标按深浅色重绘。
+
+**改动文件（`git diff --numstat` 工作区口径，含前序未提交改动）**
+
+- `petcore/ui/pet_window.py` +503/−24；`petcore/ui/app.py` +208/−5；`petcore/config.py` +137/−3；
+  `petcore/content/legacy.py` +205/−8；`petcore/community/model.py` +34/−4；
+  `petcore/community/data/credits.json` +28/−8；`petcore/ui/settings/page_about_thanks.py` +71/−8；
+  `petcore/ui/chat/window.py` +122/−12；`petcore/ui/chat/styles.py` +51/−12；
+  `petcore/ui/chat/widgets.py` +68/−1；`petcore/media/clip.py` +21/−3；`petcore/content/modcontent.py` +7/−0；
+  `petcore/contracts/content.py` +17/−0；`scripts/fetch_community_credits.py` +6/−1；
+  `examples/petcore-mods/media.music/host/runtime.py` +105/−0、`settings_page.py` +46/−0、`mod.json` 1.4.0；
+  `assets/characters/shenshen/videos/move_strides.json` +1/−1。
+- 新增/未跟踪：`petcore/engine/keyboard_drive.py` 161、`petcore/media/sheet_clip.py` 167、
+  `petcore/settings_schema.py` 530、`petcore/ui/chat/phone_window.py` 202；
+  `tests/test_petcore_keyboard_drive.py` 314、`test_petcore_media_webp.py` 209、
+  `test_petcore_buddy_wine.py` 133、`test_petcore_chat_phone.py` 269。
+- 其它测试：`test_petcore_legacy.py` +38、`test_petcore_idle_fps.py` +112、`test_petcore_self_talk.py` +17、
+  `test_petcore_about_thanks.py` +60、`test_petcore_community_bundle.py` +26、
+  `test_petcore_community_store.py` +30、`test_petcore_thanks_page.py` +4/−1、`test_petcore_music_mod.py` +6/−1。
+- 文档：`docs/PETCORE-SPEC.md` §34、`docs/PETCORE-MOD-FORMAT.md` segments、`docs/PETCORE-CHARACTER-PACKS.md` §4、`docs/PETCORE-ARCHITECTURE.md`
+  移动分段/降帧、`docs/SETTINGS-CHANGE-GATES.md` BPM 键、`docs/INDEX.md`、
+  `docs/PR-REPORT-PETCORE-FEEDBACK-BATCH4-2026-11-15.md`。
+
+**验证**
+
+- 聚焦：682 passed（键盘/内容/闲置降帧/WebP 精灵表/帧节拍/移动同步/朋友的酒/音乐扩展/音乐三源/
+  设置 CLI/设置覆盖/致谢/随包致谢/社区存储/手机版/自语）；ruff 31 文件全绿。
+- 实机探针：`shenshen` 真实 `FrameSeqClip` 241 帧，按下帧 56、松手帧 105；2x 上屏 47.5fps
+  （interval 21ms）；唱歌 WebM 1x 24.0fps、2x 48.0fps、模拟 31s 闲置后 45.67fps 且不降帧；
+  手机 440×760 正文 369px、29 行、最右 3 列无墨迹。
+- 全量：**11917 passed, 22 skipped, 6 failed（31:17）**；6 例均为既有失败（4×bundle_slim
+  缺 QtWebView DLL、产品文案外部品牌引用、build_onedir.ps1 UTF-8 BOM），不在本批范围。
+- 出包：`rel-storage-2026-11-15b/dsh-pet-core-setup.exe` 351,230,926 B / SHA256
+  `E3F3766F…816C` / **NotSigned**；随包 fans 4785/4788；构建内 `--check --strict` 退出 0（aboutme_packs=2、
+  strict.problems=[]）；冻结 CLI 命中 `music_buddy_wine_bpm`（132/60–200）。
+
+**未验证/风险**
+
+- WebM 闲置动画不再降帧，静息 CPU 略高于旧实现；shenshen 稳态待机是帧序列，仍隔帧。
+- 长 ASCII/代码块/表格的右侧裁切仍是 QLabel 边界；手机版只做 offscreen 布局/配色验证。
+- B 站名单已通过用户浏览器 SESSDATA 刷新：96 页 / 19.5s，names 4785 / total 4788（2026-11-15）；差额 3 按 B 站口径显示，不再叫「同名占位」。
+- 未做 30 分钟浸泡；未安装本轮 setup。
+
+## L200 — 反馈批次 4–7 累计提交（L196–L199，自 ce96bb4a）（2026-11-15）
+
+**提交范围**
+
+- 分支 `feat/petcore-vpet-architecture`，父提交 `ce96bb4a`（2026-11-09，L195）。
+- 工作区口径：**131 文件，+14330/−1143**（`git diff --numstat`；含 46 个新文件）。
+  分区：`petcore/` 67（+7982/−336）、`tests/` 37（+3737/−21）、`docs/` 14（+2012/−774）、
+  `examples/` 5（+207/−1）、`scripts/` 6（+373/−10）、`assets/` 1（+1/−1）、
+  根 `THIRD_PARTY_NOTICES.md`（+18）。
+- 新文件按领域：设置公开接口（`settings_schema.py` 530、`settings_schema_ranges.py` 185、
+  `settings_cli.py` 286、`storage/config_lock.py` 74、`scripts/gen_settings_meta.py` 95、
+  `ui/settings/page_manual.py` 153、`ui/settings/manual_content.py` 187）；
+  WebP/精灵表与素材包（`media/sheet_clip.py` 167、`media/webp_clip.py` 103、
+  `content/sprite_pack.py` 246、`scripts/gen_aboutme_packs.py` 207、
+  `mods/url_install.py` 270、`net/aboutme_packs.py` 122、`content/data/aboutme_packs.json` 221）；
+  键盘/移动（`engine/keyboard_drive.py` 164、`platform/keyboard_state.py` 55、`ui/keyboard_drive.py` 90）；
+  气泡与对话（`contracts/bubble_styles.py` 87、`ui/bubble_style.py` 309、
+  `ui/chat/phone_window.py` 202、`ui/chat/trash_dialog.py` 176、`ui/chat/speech_text.py` 45、
+  `ui/chat/contrast.py` 95）；19 个新测试文件（共 3698 行）；
+  文档 `docs/PETCORE-ARCHITECTURE-MAP.md` 与 4 份批次 PR 报告。
+
+**行为变化（批次索引，细节与证据见对应 LNNN / PR 报告）**
+
+- 批次 4（L196，`PR-REPORT-PETCORE-FEEDBACK-BATCH-2026-11-13.md`）：每宠 `anim_facing_default` /
+  `anim_facing_groups` 修自定义角色动画反向；岛卡片显示/隐藏桌宠按钮；原分支五套气泡风格
+  （尾巴沿边投影、plain 无尾巴）；岛全屏隐藏；拖动倾斜（默认 30%）；探头静息降帧门控 +
+  ClipLibrary 16 段 LRU + 成本统计（旧版 30% CPU 反馈的重写版对应缺陷）。
+- 批次 5（L197，`PR-REPORT-PETCORE-FEEDBACK-BATCH2-2026-11-13.md`）：手机版对话窗 + 30 天
+  回收站；工作动画锁；WASD/方向键移动；WebP 与精灵表、aboutme 角色包下载；B 站实时总数；
+  278 键设置 schema + `petcore settings` CLI + 2s 外部配置重载 + 使用手册三子页。
+- 批次 6（L198，`PR-REPORT-PETCORE-FEEDBACK-BATCH3-2026-11-14.md`）：手机版 380 宽与常驻
+  模式栏；逐条朗读；抛掷中不探头；键盘自适应轮询；朋友的酒 Q 弹（`PresentationPort.squash`）；
+  致谢作者角色与 URL 安装入口。
+- 批次 7（L199，`PR-REPORT-PETCORE-FEEDBACK-BATCH4-2026-11-15.md`）：移动 clip `segments`
+  （按住排除绊倒帧、松手补完整摔倒收尾）；闲置降帧只给隔帧后端、2x 实时生效；
+  `music_buddy_wine_bpm`（132）；致谢（浩瀚星空2005 = 初始动画素材作者）；手机版 440 宽与
+  `[⋯][✕]` 标题栏 + 底部新建会话。
+- 随包数据：`petcore/community/data/fans.json` 刷新为 names 4785 / total 4788（2026-11-15，
+  96 页 / 19.5s）；`credits.json` 作者 role 调整。
+
+**不入库项**
+
+- `rel-*/` 安装包、`dist/`、`build/`、`.venv/`、`tmp/`、`data/`、`.scratch/` 按 `.gitignore`
+  排除；本次提交不含 setup 产物。
+
+**验证**
+
+- ruff：`ruff check pet/ tests/ petcore/ scripts/` 全绿（2026-11-15 本机）。
+- 聚焦：批次 7 682 passed；B 站名单刷新后社区相关 39 passed。
+- 全量：`QT_QPA_PLATFORM=offscreen python -m pytest -q` = **11917 passed, 22 skipped,
+  6 failed（25:20）**；6 例均为既有失败（4×`test_bundle_slim` 缺 QtWebView DLL、
+  产品文案外部品牌引用、`build_onedir.ps1` UTF-8 BOM），与本批无关。
+- 源码 `python -m petcore --check`：`resource_problems=[]`、`strict.problems=[]`、
+  `aboutme_packs=2`。
+- 构建：`rel-storage-2026-11-15b/dsh-pet-core-setup.exe`（351,230,926 B / SHA-256
+  `E3F3766F…816C` / NotSigned）内 `--check --strict` 退出 0，`aboutme_packs=2`，
+  `strict.problems=[]`。
+
+**未验证/风险**
+
+- 用户尚未安装本轮 setup；真实显示器手机版观感、真实音乐 Q 弹、长按键盘手感只有单测与
+  offscreen 探针。
+- WebM 闲置动画不再降帧，静息 CPU 可能略高于旧实现；长 ASCII/代码块/表格的右侧裁切仍是
+  QLabel 富文本边界。
+- B 站 names 4785 与 total 4788 差 3 是 B 站口径差异，不伪造第 4786–4788 个名字。

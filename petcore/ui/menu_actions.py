@@ -402,6 +402,14 @@ def core_items(window) -> dict[str, MenuItem]:
             icon="pause",
             order=28,
         ),
+        "keyboard_move": MenuItem(
+            "keyboard_move",
+            "控制移动",
+            checked=lambda: bool(getattr(window, "keyboard_drive_active", False)),
+            callback=lambda: window.toggle_keyboard_drive(),
+            icon="pointer",
+            order=29,
+        ),
         "hide_pet": MenuItem(
             "hide_pet", "隐藏桌宠", callback=window.toggle_hidden, icon="hide", order=30
         ),

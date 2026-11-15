@@ -78,6 +78,9 @@ class ChatWindow(QDialog):
     submitted = Signal(str)
     stop_requested = Signal()
     cleared = Signal()
+    #: 逐条回复朗读：正文（Markdown 源码）与停止请求；由 controller 接语音端口。
+    speech_requested = Signal(str)
+    speech_stop_requested = Signal()
     session_selected = Signal(str)
     closed = Signal()
     pin_toggled = Signal(bool)
@@ -85,6 +88,8 @@ class ChatWindow(QDialog):
     record_stopped = Signal()
     session_archive_requested = Signal(str, bool)
     session_delete_requested = Signal(str)
+    #: 侧栏「回收站」：controller 负责打开 TrashDialog。
+    trash_requested = Signal()
     archived_toggled = Signal(bool)
     dsh_session_started = Signal(str)
     dsh_submitted = Signal(str)
@@ -96,6 +101,10 @@ class ChatWindow(QDialog):
     view_activated = Signal(str)
     #: 用户点了标题栏的深色按钮：controller 负责落盘 ``chat_dark_mode``。
     dark_toggled = Signal(bool)
+    #: 标题栏齿轮：打开设置窗并跳到「AI 对话」设置段。
+    settings_requested = Signal()
+    #: 标题栏手机图标 / 手机版菜单：切换对话窗布局（desktop/phone）。
+    layout_requested = Signal(str)
 
     def __init__(
         self,
@@ -137,6 +146,7 @@ class ChatWindow(QDialog):
         self._stream_text = ""
         self._streaming = False
         self._stream_bubble: MessageBubble | None = None
+        self._speaking_bubble: MessageBubble | None = None
         self._last_thinking: tuple[str, list[str]] = ("", [])
         self._bubbles: list[MessageBubble] = []
         self._pending_attachments: list[dict] = []
@@ -419,6 +429,14 @@ class ChatWindow(QDialog):
     def _apply_icon_theme(self) -> None:
         """自绘图标按底色换墨色：深色面板上默认墨色看不见。"""
         dark = self._dark
+        for bubble in getattr(self, "_bubbles", ()):  # 消息内的喇叭按钮
+            bubble.set_dark(dark)
+        self.settings_button.setIcon(
+            tool_icon(self.settings_button, "gear", 16, dark=dark)
+        )
+        self.layout_button.setIcon(
+            tool_icon(self.layout_button, "phone", 16, dark=dark)
+        )
         self.sidebar_toggle_button.setIcon(
             tool_icon(self.sidebar_toggle_button, "sidebar", 17, dark=dark)
         )
@@ -688,12 +706,15 @@ class ChatWindow(QDialog):
         self.archive_button.setToolTip("显示或隐藏已归档会话")
         self.archive_button.setAccessibleName("显示已归档会话")
         footer_layout.addWidget(self.archive_button)
-        self.clear_button = QToolButton(sidebar_footer)
-        self.clear_button.setObjectName("clear-session-button")
-        self.clear_button.setIcon(tool_icon(self.clear_button, "clear", 15))
-        self.clear_button.setToolTip("清空当前会话")
-        self.clear_button.setAccessibleName("清空当前会话")
-        footer_layout.addWidget(self.clear_button)
+        self.trash_button = QToolButton(sidebar_footer)
+        self.trash_button.setObjectName("trash-toggle-button")
+        self.trash_button.setText("回收站")
+        self.trash_button.setToolTip("打开回收站")
+        self.trash_button.setAccessibleName("打开会话回收站")
+        self.trash_button.clicked.connect(
+            lambda _checked=False: self.trash_requested.emit()
+        )
+        footer_layout.addWidget(self.trash_button)
         sidebar_layout.addWidget(sidebar_footer)
         root.addWidget(self.sidebar)
 
@@ -742,6 +763,24 @@ class ChatWindow(QDialog):
         title_text.addWidget(self.header_status)
         title_layout.addLayout(title_text)
         title_layout.addStretch(1)
+        self.settings_button = QToolButton(self.title_bar)
+        self.settings_button.setObjectName("window-settings-button")
+        self.settings_button.setIcon(tool_icon(self.settings_button, "gear", 16))
+        self.settings_button.setToolTip("AI 对话设置")
+        self.settings_button.setAccessibleName("打开 AI 对话设置")
+        self.settings_button.clicked.connect(
+            lambda _checked=False: self.settings_requested.emit()
+        )
+        title_layout.addWidget(self.settings_button)
+        self.layout_button = QToolButton(self.title_bar)
+        self.layout_button.setObjectName("window-layout-button")
+        self.layout_button.setIcon(tool_icon(self.layout_button, "phone", 16))
+        self.layout_button.setToolTip("切换到手机版对话窗")
+        self.layout_button.setAccessibleName("切换手机版对话窗")
+        self.layout_button.clicked.connect(
+            lambda _checked=False: self.layout_requested.emit("phone")
+        )
+        title_layout.addWidget(self.layout_button)
         self.sidebar_toggle_button = QToolButton(self.title_bar)
         self.sidebar_toggle_button.setObjectName("sidebar-toggle-button")
         self.sidebar_toggle_button.setIcon(tool_icon(self.sidebar_toggle_button, "sidebar", 17))
@@ -1162,7 +1201,6 @@ class ChatWindow(QDialog):
         self.dark_button.toggled.connect(self._on_dark_toggled)
         self.new_session_button.clicked.connect(self._on_new)
         self.archive_button.toggled.connect(self._on_archived_toggled)
-        self.clear_button.clicked.connect(self._on_clear)
         self.sidebar_toggle_button.clicked.connect(self.toggle_sidebar)
         self.sidebar_scrim.clicked.connect(self.close_sidebar)
         self.session_list.currentRowChanged.connect(self._on_session_row_changed)
@@ -1194,6 +1232,15 @@ class ChatWindow(QDialog):
             item.setForeground(QColor("#c8cfda" if channel else "#8b93a1"))
         else:
             item.setForeground(QColor("#5a6472" if channel else "#98a1ad"))
+
+    def session_title(self, session_id: str) -> str:
+        """公开给 controller 的标题查询；没有记录时返回空串。"""
+        return str(self._session_titles.get(str(session_id or "")) or "")
+
+    def set_trash_count(self, count: int) -> None:
+        """侧栏回收站按钮显示待恢复数量。"""
+        number = max(0, int(count or 0))
+        self.trash_button.setText(f"回收站 ({number})" if number else "回收站")
 
     def set_history(self, sessions, current_id: str = "") -> None:
         sessions = list(sessions or [])
@@ -1429,9 +1476,6 @@ class ChatWindow(QDialog):
     def _on_new(self) -> None:
         self.session_selected.emit("")
 
-    def _on_clear(self) -> None:
-        self.clear()
-
     def _on_session_row_changed(self, index: int) -> None:
         item = self.session_list.item(index)
         if item is None:
@@ -1461,6 +1505,7 @@ class ChatWindow(QDialog):
     # ---------------------------------------------------------------- 消息渲染
     def load_messages(self, messages) -> None:
         self._flush_timer.stop()
+        self._reset_speech()
         self._messages = [dict(item) for item in (messages or [])]
         self._stream_text = ""
         self._streaming = False
@@ -1587,6 +1632,7 @@ class ChatWindow(QDialog):
 
     def clear(self) -> None:
         self._flush_timer.stop()
+        self._reset_speech()
         self._messages = []
         self._stream_text = ""
         self._stream_bubble = None
@@ -1641,6 +1687,13 @@ class ChatWindow(QDialog):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         bubble = MessageBubble(role, text, self.character_id, self.timeline_host)
+        bubble.set_dark(self._dark)
+        bubble.speak_requested.connect(
+            lambda text, target=bubble: self._on_bubble_speak(target, text)
+        )
+        bubble.speak_stop_requested.connect(
+            lambda target=bubble: self._on_bubble_speak_stop(target)
+        )
         if role == "user":
             row.addStretch(1)
             row.addWidget(bubble)
@@ -1654,6 +1707,54 @@ class ChatWindow(QDialog):
         QTimer.singleShot(0, self, self._update_conversation_height)
         self._bottom(always=role == "user")
         return bubble
+
+    # ---------------------------------------------------------------- 逐条朗读
+    def _on_bubble_speak(self, bubble: MessageBubble, text: str) -> None:
+        if self._speaking_bubble is not None and self._speaking_bubble is not bubble:
+            self._speaking_bubble.set_speaking(False)
+            self._speaking_bubble.set_speech_status("")
+        self._speaking_bubble = bubble
+        bubble.set_speaking(True)
+        bubble.set_speech_status("正在准备朗读…")
+        self.speech_requested.emit(str(text or ""))
+
+    def _on_bubble_speak_stop(self, bubble: MessageBubble) -> None:
+        if self._speaking_bubble is not bubble:
+            return
+        self._speaking_bubble = None
+        bubble.set_speaking(False)
+        bubble.set_speech_status("")
+        self.speech_stop_requested.emit()
+
+    def speech_started(self) -> None:
+        bubble = self._speaking_bubble
+        if bubble is not None:
+            bubble.set_speech_status("朗读中…")
+
+    def speech_finished(self) -> None:
+        bubble = self._speaking_bubble
+        self._speaking_bubble = None
+        if bubble is not None:
+            bubble.set_speaking(False)
+            bubble.set_speech_status("")
+
+    def speech_failed(self, message: str = "") -> None:
+        bubble = self._speaking_bubble
+        self._speaking_bubble = None
+        if bubble is None:
+            return
+        bubble.set_speaking(False)
+        bubble.set_speech_status(
+            str(message or "语音不可用：请到设置 → 语音配置后端")
+        )
+
+    def _reset_speech(self) -> None:
+        bubble = self._speaking_bubble
+        self._speaking_bubble = None
+        if bubble is not None:
+            bubble.set_speaking(False)
+            bubble.set_speech_status("")
+            self.speech_stop_requested.emit()
 
     def _animate_latest_images(self) -> None:
         """只有最后一条助手消息的图起播 GIF；更早的消息画首帧。"""
@@ -1732,13 +1833,19 @@ class ChatWindow(QDialog):
         self.message_host_layout.invalidate()
 
     def _update_bubble_widths(self) -> None:
+        # 320 的下限会在窄窗里把气泡撑得比视口还宽（手机版最窄 440 宽时正文被
+        # 右缘裁掉）。可用宽度以真实视口为准，下限只保护极端窄窗不出现负数。
         available = max(
-            320,
+            160,
             self.scroll.viewport().width() - 2 * self.message_horizontal_margin,
         )
-        user_cap = max(240, int(available * 0.86))
+        # assistant 的正文最小宽只让出右侧 padding（12px）：左侧保持 0，文字靠左；
+        # 外框仍是整行宽，正文多留 12 才不会把 label 撑出气泡右缘。
+        body_min = min(360, max(160, available - 12))
+        user_cap = max(160, int(available * 0.90))
         for bubble in self._bubbles:
             if bubble.role == "assistant":
+                bubble.body.setMinimumWidth(body_min)
                 bubble.setFixedWidth(available)
             else:
                 bubble.setFixedWidth(bubble.preferred_width(user_cap))
@@ -1766,6 +1873,9 @@ class ChatWindow(QDialog):
         """内容高度变化后补上未完成的贴底（布局晚于写入的最大值在此追平）。"""
         if self._scroll_pin and self._stream_follow_output:
             self._apply_bottom()
+        # 滚动条出现/消失会改视口宽，正文折行随之变化；等布局稳定一拍再按真实
+        # 视口重算（在布局过程中改固定宽会被下一拍覆盖，文字右缘被裁）。
+        QTimer.singleShot(0, self, self._update_bubble_widths)
 
     def _bottom(self, *, always: bool = False) -> None:
         """把会话钉到最新内容底部，并在布局随后长高时继续跟到底。"""

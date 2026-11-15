@@ -50,6 +50,7 @@ BUILTIN_DEFAULT_LAYOUT: dict = {
             "children": [
                 {"type": "action", "id": "drag_physics", "visible": True},
                 {"type": "action", "id": "no_move", "visible": True},
+                {"type": "action", "id": "keyboard_move", "visible": True},
                 {"type": "action", "id": "on_top", "visible": True},
                 {"type": "action", "id": "edge_probe", "visible": True},
                 {"type": "action", "id": "dynamic_island", "visible": True},

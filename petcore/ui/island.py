@@ -183,6 +183,7 @@ class IslandConfig:
     metrics: tuple[str, ...] = (isl.CPU, isl.MEM)
     character_name: str = ""
     edge_dock: bool = True
+    show_toggle_button: bool = True
 
     @classmethod
     def from_config(cls, config, *, character_name: str = "") -> "IslandConfig":
@@ -210,6 +211,7 @@ class IslandConfig:
             metrics=tuple(str(item) for item in metrics),
             character_name=character_name,
             edge_dock=bool(value("island_edge_dock", True)),
+            show_toggle_button=bool(value("island_show_toggle_button", True)),
         )
 
 
@@ -220,6 +222,7 @@ class DynamicIsland(QWidget):
     settings_requested = Signal()
     balance_requested = Signal()
     messages_cleared = Signal()
+    toggle_pet_requested = Signal()
     card_expanded = Signal(bool)
 
     def __init__(self, config, *, character_name: str = "", parent=None) -> None:
@@ -350,6 +353,9 @@ class DynamicIsland(QWidget):
         self.card.balance_requested.connect(self.balance_requested.emit)
         self.card.settings_requested.connect(self.settings_requested.emit)
         self.card.messages_cleared.connect(self.clear_messages)
+        self.card.toggle_pet_requested.connect(self.toggle_pet_requested.emit)
+        self.card.set_show_toggle(self.settings.show_toggle_button)
+        self.card.set_pet_visible(self._pet_visible)
         self.card.hide()
 
         self._rebuild_row()
@@ -560,6 +566,7 @@ class DynamicIsland(QWidget):
         if value == self._pet_visible:
             return
         self._pet_visible = value
+        self.card.set_pet_visible(value)
         if self.isVisible():
             self.update()
 
@@ -1566,6 +1573,8 @@ class DynamicIsland(QWidget):
             accent=self.accent_color().name(),
         )
         self.card.set_show_messages(bool(self.settings.show_messages))
+        self.card.set_show_toggle(bool(self.settings.show_toggle_button))
+        self.card.set_pet_visible(self._pet_visible)
         self.card.setWidth_and_rows(self._card_width() - 2 * CAPSULE_INSET, self._card_rows())
         self._apply_card_size()
 
@@ -2444,6 +2453,7 @@ class _IslandCard(QWidget):
     balance_requested = Signal()
     settings_requested = Signal()
     messages_cleared = Signal()
+    toggle_pet_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -2457,10 +2467,16 @@ class _IslandCard(QWidget):
         actions_layout = QHBoxLayout(self._actions)
         actions_layout.setContentsMargins(0, 0, 0, 0)
         actions_layout.setSpacing(6)
+        self._toggle_button = QPushButton("隐藏桌宠", self._actions)
         self._refresh_button = QPushButton("刷新余额", self._actions)
         self._settings_button = QPushButton("设置", self._actions)
         self._clear_button = QPushButton("清除消息", self._actions)
-        for button in (self._refresh_button, self._settings_button, self._clear_button):
+        for button in (
+            self._toggle_button,
+            self._refresh_button,
+            self._settings_button,
+            self._clear_button,
+        ):
             button.setAutoDefault(False)
             button.setMinimumHeight(26)
             actions_layout.addWidget(button)
@@ -2468,6 +2484,7 @@ class _IslandCard(QWidget):
         self._hint = QLabel("点胶囊收起 · 拖动换位置", self)
         self._hint.setObjectName("islandCardHint")
         self._layout.addWidget(self._hint)
+        self._toggle_button.clicked.connect(self.toggle_pet_requested.emit)
         self._refresh_button.clicked.connect(self.balance_requested.emit)
         self._settings_button.clicked.connect(self.settings_requested.emit)
         self._clear_button.clicked.connect(self.messages_cleared.emit)
@@ -2484,7 +2501,12 @@ class _IslandCard(QWidget):
         self._hint.setStyleSheet(
             f"color: {self._muted_color}; font-size: 11px; background: transparent;"
         )
-        for button in (self._refresh_button, self._settings_button, self._clear_button):
+        for button in (
+            self._toggle_button,
+            self._refresh_button,
+            self._settings_button,
+            self._clear_button,
+        ):
             button.setStyleSheet(
                 f"QPushButton {{ color: {self._text_color}; padding: 3px 8px; }}"
                 f"QPushButton:hover {{ border: 1px solid {self._accent_color}; }}"
@@ -2493,6 +2515,14 @@ class _IslandCard(QWidget):
     def set_show_messages(self, visible: bool) -> None:
         """消息显示关掉时，连「清除消息」按钮一起收起来（没有历史可清）。"""
         self._clear_button.setVisible(bool(visible))
+
+    def set_show_toggle(self, visible: bool) -> None:
+        """「显示/隐藏桌宠」按钮的开关门（默认加，设置可关）。"""
+        self._toggle_button.setVisible(bool(visible))
+
+    def set_pet_visible(self, visible: bool) -> None:
+        """文案跟着桌宠整体显隐走：隐藏时按钮变成「显示桌宠」。"""
+        self._toggle_button.setText("隐藏桌宠" if visible else "显示桌宠")
 
     def setWidth_and_rows(self, width: int, rows: list[tuple[str, str, str, str]]) -> None:
         while len(self._rows) < len(rows):

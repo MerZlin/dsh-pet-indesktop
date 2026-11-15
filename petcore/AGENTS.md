@@ -40,10 +40,29 @@
   `modern_settings` 豁免。
 - 菜单默认隐藏不等于删除：隐藏项仍要留在模板里，用户可在设置 →「菜单」重新勾选。
 - **mod 设置页聚合**：所有 `settings_page` 贡献只进「扩展管理」的页内标签
-  （`ui/settings/tabs.py`），不要再追加侧边栏页；P6 起侧边栏 8 页（「API 与账户」
+  （`ui/settings/tabs.py`），不要再追加侧边栏页；当前侧边栏 11 页（含「使用手册」；「API 与账户」
   是 core 页，不是 mod 页）。保存/取消/释放由 `ExtensionsPage` 委托每个内嵌页。
 - **设置搜索必须搜到行**：`_apply_filter` 的匹配口径含页面内所有 `QLabel` 文案，
   命中后 `reveal_text()` 切页 + 滚到该行；只按页面标题过滤不算实现。
+- **设置公开接口**：`petcore/settings_schema.py` 是 `DEFAULTS` 的只读描述，
+  `DEFAULTS` 仍是唯一真值；新增键必须进 schema（`test_petcore_settings_cli` 校验集合）。
+  外部写入只经 `petcore settings set`（目录锁 + 重读 + 回读）；状态键只读。
+  应用 2s 检查外部配置，设置窗打开时延后应用。
+- **使用手册页**：`ManualPage` 固定三个子页（常见问题 / 使用说明 / 给 AI 的提示词）；
+  文案放 `petcore/ui/settings/manual_content.py`，不要依赖 `docs/` 随包。
+- **手机版对话窗**：`PhoneChatWindow` 继承 `ChatWindow`，只重排骨架；新按钮必须同时
+  覆盖桌面标题栏与手机版 `⋮` 菜单；删除/清空/回收站永久删除都要二次确认；chips
+  的强调色用 `chat/contrast.ensure_contrast`，不许白字压浅色。
+- **默认气泡**：`classic_top` 是 plain 自绘圆角矩形（无尾巴/透明边）；新风格必须
+  同时定义 `_surface_band` 与 `surface_path`，否则贴边会再次偏移。
+- **工作动画锁**：`work_animations_only` 默认开；只认 `notify_agent_state("working")`；
+  无 work 素材回退 idle，不伪造；显式点击/摸头可播，随机移动/动作必须被替换。
+- **键盘控制**：Windows 用 `GetAsyncKeyState` 轮询，只在模式开启时建表；非 Windows
+  明确「不支持」；位置仍走 `move_position_at_frame`/`drive_position_at_frame`；
+  拖拽/探头/甩飞/隐藏必须取消，松手播收尾。
+- **WebP/精灵表**：`SheetSpec` 一次解码、按网格切帧；不要用
+  `QImageReader.jumpToImage`（WebP handler 返回 False）。支持 `videos/manifest.json`
+  的 `clips` 与同名 `.json` 边车；aboutme 角色包只应用内下载、不随包，保留 NOTICE。
 - **页内分页不许截断**：标签条在 `QScrollArea` 里，两侧翻页箭头按溢出显隐，
   `setCurrentIndex` 必须 `_ensure_visible`。
 - 设置改动必须实时反馈到桌宠；保存及标题栏 X 关闭负责落盘；取消按钮/Esc 恢复打开时的快照（与 SPEC 的设置窗口契约、现有测试一致）。
@@ -220,8 +239,15 @@
   一句，别让它再挂 2–6 秒。
 - **收起气泡只收自己的**：`PresentationPort.hide(owner)` 在 `owner` 非空时只在闸门仍归它时生效；
   歌词持有者可以收自己的气泡，绝不顺手动别人的（点击台词/提醒）。
-- **朝向口径**：角色素材原生朝左，`facing == "right"` 才水平镜像（同主分支）。
+- **朝向口径**：角色素材**默认**原生朝左，`facing == "right"` 才水平镜像（同主分支）。
+  生成出来就朝右的自定义角色用 `anim_facing_default="right"` 反转；个别组不同写
+  `anim_facing_groups`（idle/turn/move/click/drag/act）。`_mirrored()` 是唯一判据
+  （paint/命中/input_revision 共用），含可读文字的 `text_clips` 永远不镜像。
   `PetState.facing` 默认 `left`；反了就是「位移方向和面朝向相反」。
+- **旋转通道只有一个出处**：`_rotation_angle()` = 探头角 + 特效角 + 拖动倾斜；
+  paint、`_unrotated_point()`、`input_revision()` 全读它，新通道只能加进这里。
+- **拖动倾斜**：`MotionController` 按最近 ~120ms 水平拖速给目标角（±7°），弹簧积分；
+  松手 0.6s 内回零并停表，甩飞（`begin_throw`）时立刻清零，别和击飞角度叠加。
 - **碰边反馈**：抛掷/弹射按「离地→接触」的接触沿触发 `_on_motion_bounce()`，每次
   落地或撞墙都要 Q 弹 + 音效；不许用「整个会话只触发一次」的布尔闸。
 - **边缘探头贴边**：`edge_side_at_rest` 的严格容差只用于判定「已经贴边」；进入探头
@@ -860,7 +886,7 @@
 - **端口 GUI 亲和**：`ChatPort.append/open` 与 `PresentationPort.say/say_sequence/show_image/notify/play_event/play_animation/release_loop/hide` 必须可被后台线程调用——非 GUI 线程一律经信号/`QtScheduler` 排队，**绝不在 worker 线程 `_ensure()` 建窗、碰气泡或 `QSystemTrayIcon.showMessage`**。现场：旧 `dsh.channel` mod 在自己的 SSE 线程里调 `chat.append`，审批卡弹出时整个应用 AppHang（Windows 1002）。
 - **标题栏按钮顺序**：`[pin][最小化][最大化][关闭]`；最大化按钮必须 `addWidget` 进标题栏布局（少这一行会作为裸子控件停在 (0,0)，用户看到标题左侧多一个方块）。
 - **审批路径不整段重放/逐帧落盘**：`DshView._on_history` 每批 20 条、批间 `QTimer.singleShot(0)` 让出事件循环；重放期间的实时帧/审批帧进 `_deferred_frames`，结束后按序落地。`_persist_dsh_frame` 只改内存 + 400ms 合并落盘，`_refresh_history` 跟随落盘；`_on_closed`/`_on_view_changed`/`_on_session`/`_on_dsh_submit`/`_load_fallback` 前必须 `_flush_dsh`。审批处理 >1s 记 warning。
-- **闲置降帧**：`idle_low_fps_enabled`（本宠，默认开）命中条件 = 开关开 + 可见 + 未锁屏 + 非拖拽/探头/击飞 + 距上次用户交互 ≥30s；命中后对当前 clip `set_frame_divisor(2)`（帧序列间隔 ×2、每拍跳 2 帧，时长不变；WebM 退 `set_decode_throttle`）。点击/拖动/滚轮/右键/手动播放/取消隐藏必须立刻回 1；随机自播动作也属于「静息」并降帧（同主分支），别只给 idle clip 降。
+- **闲置降帧**：`idle_low_fps_enabled`（本宠，默认开）命中条件 = 开关开 + 可见 + 未锁屏 + 非拖拽/甩飞 + 距上次用户交互 ≥30s；命中后对当前 clip `set_frame_divisor(2)`（帧序列间隔 ×2、每拍跳 2 帧，时长不变；WebM 退 `set_decode_throttle`）。**探头/击飞接管只是锁动画选择，不再挡降帧**（探头 PEEKING 是静息态，以前把它当满速条件导致贴边停放时单核 40%+ 不下降）。点击/拖动/滚轮/右键/手动播放/取消隐藏必须立刻回 1；随机自播动作也属于「静息」并降帧（同主分支），别只给 idle clip 降。`ClipLibrary` 有 16 段 LRU（淘汰即 `close()`），别把整库动画留在一场会话里；`PET_PETCORE_COST_STATS=1` 时每 60s 打一行 `cost stats`（clip/divisor/fps/paint_ms/threads），这是静息成本的唯一可测口径。
 - **首跑供给等系统空闲**：`start_background_provision` 在 Windows 上等 `GetLastInputInfo` 连续空闲 ≥60s（每 20s 查一次）才起手，非 Windows 保留 5s 初延时；日志写「等待系统空闲」「开始（已空闲 N 秒）」与 `elapsed`。用户活跃时启动的进程**不许**派生 ffmpeg（现场：每次启动迁移 2 个 clip，VP9 解码 + WebP 编码约一分钟、16 核机器 9%）。迁移是质量升级，宁可多等几次启动。
 
 ## 4. 变更纪律
@@ -937,3 +963,15 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest \
 - **素材包分片**：`entry.parts` + `entry.prefer_parts`；逐片下载、已校验的分片跳过、拼装后
   核对整包 `size`/`sha256`、成功后删分片；进度必须按整包字节聚合（`_offset_progress`）。
   分片大小要同时满足 jsDelivr ≤20 MB 与 Gitee ≤100 MB，当前用 18 MiB。
+
+- **从链接安装只走一个入口**：设置页 `ModsPage` 的 URL 输入 → `_UrlPreviewJob` →
+  `petcore/mods/url_install.preview_zip` → 确认 → `install_zip`。下载/预览/安装都
+  不许在 GUI 线程跑；解包必须走 `mods.install.open_archive`（zip-slip、设备名、
+  大小写重复、symlink、预算都在那里），不要自己写 `zipfile.extractall`。
+  支持 `mod.json` 扩展与 aboutme 单角色包；多包合集/裸素材目录明确拒绝。
+- **Q 弹视觉反馈的唯一端口**：`PresentationPort.squash()` → `_PresentationAdapter`
+  → `PetWindow.squash()` → `EffectController.start_squash(force=True)`；拖拽/抛掷/
+  探头/击飞必须返回 `False`，不允许扩展直接碰 `effects` 或叠加第二套形变。
+- **手机版模式栏必须跨页常驻**：`phone_view_bar` 挂在 `chat_main` 的 `view_stack`
+  下方，不在 `ai_layout` 里；任何把扩展页做成整页替换的改动都要复核「从记忆/网页 AI
+  回到对话」仍有点击路径。

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -15,6 +16,61 @@ from PySide6.QtWidgets import (
 
 from ...mods.feature import CORE_FEATURE_IDS
 from .base import SettingsPage, make_button, make_checkbox
+
+#: 下载/安装线程不能挂在页面上：用户关窗时线程可能还在跑。
+_ACTIVE_URL_JOBS: set = set()
+
+
+class _UrlPreviewJob(QThread):
+    ready = Signal(object, str)
+    failed = Signal(str, str)
+
+    def __init__(self, url: str, root: Path) -> None:
+        super().__init__()
+        self.url = str(url)
+        self.root = Path(root)
+
+    def run(self) -> None:
+        from ...mods import url_install
+
+        path = None
+        try:
+            path = url_install.fetch_zip(self.url, root=self.root)
+            preview = url_install.preview_zip(path, source=self.url)
+        except url_install.UrlInstallError as exc:
+            url_install.discard(path)
+            self.failed.emit(exc.reason, str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001 - 线程里不能把异常抛给 Qt
+            url_install.discard(path)
+            self.failed.emit("unavailable", f"{type(exc).__name__}: {exc}")
+            return
+        self.ready.emit(preview, str(path))
+
+
+class _UrlInstallJob(QThread):
+    done = Signal(bool, str)
+
+    def __init__(self, path: str, root: Path, preview, allow_feature: bool) -> None:
+        super().__init__()
+        self.path = str(path)
+        self.root = Path(root)
+        self.preview = preview
+        self.allow_feature = bool(allow_feature)
+
+    def run(self) -> None:
+        from ...mods import url_install
+
+        try:
+            ok, message = url_install.install_zip(
+                Path(self.path),
+                root=self.root,
+                preview=self.preview,
+                allow_feature=self.allow_feature,
+            )
+        except Exception as exc:  # noqa: BLE001 - 线程里不能把异常抛给 Qt
+            ok, message = False, f"{type(exc).__name__}: {exc}"
+        self.done.emit(bool(ok), str(message))
 
 FILTER_ALL = "all"
 FILTER_BASE = "base"
@@ -36,6 +92,10 @@ class ModsPage(SettingsPage):
         self._mod_states: dict[str, bool] = {}
         self._trusted_ids: set[str] = set()
         self._core_ids: set[str] = set()
+        self._url_job = None
+        self._url_zip = ""
+        self._url_preview = None
+        self._disposed = False
 
         if not self._supported:
             self.add_note("扩展 API 不可用，无法管理扩展。请检查 petcore 安装是否完整。")
@@ -102,6 +162,26 @@ class ModsPage(SettingsPage):
         self.detail_label.setObjectName("settingHint")
         self.detail_label.setWordWrap(True)
         card.add_widget(self.detail_label)
+
+        url_card = self.section("从链接安装")
+        self.url_input = QLineEdit(self)
+        self.url_input.setObjectName("modsUrlInput")
+        self.url_input.setAccessibleName("扩展包或角色包 zip 链接")
+        self.url_input.setPlaceholderText("https://…/pack.zip")
+        url_card.add_row(
+            "zip 链接",
+            self.url_input,
+            "支持功能扩展、内容扩展与 aboutme 单角色包；只接受 http/https，"
+            "下载后先预览再确认安装。",
+            expand=True,
+        )
+        self.url_install_button = make_button("下载并安装", self)
+        self.url_install_button.clicked.connect(self._install_from_url)
+        url_card.add_buttons([self.url_install_button])
+        self.url_status = QLabel("", self)
+        self.url_status.setObjectName("settingHint")
+        self.url_status.setWordWrap(True)
+        url_card.add_widget(self.url_status)
 
         diagnostics_card = self.section("诊断信息")
         self.diagnostics_view = QPlainTextEdit(self)
@@ -382,6 +462,128 @@ class ModsPage(SettingsPage):
         if path:
             self._install(Path(path))
 
+    # ------------------------------------------------------------ 从链接安装
+    def _set_url_status(self, text: str) -> None:
+        self.url_status.setText(str(text or ""))
+
+    def _install_from_url(self) -> None:
+        from ...mods.url_install import UrlInstallError, normalize_url
+
+        raw = self.url_input.text().strip()
+        try:
+            url = normalize_url(raw)
+        except UrlInstallError as exc:
+            self._set_url_status(str(exc))
+            return
+        if self._url_job is not None and self._url_job.isRunning():
+            self._set_url_status("上一个下载还没结束。")
+            return
+        self.url_install_button.setEnabled(False)
+        self._set_url_status("正在下载…")
+        job = _UrlPreviewJob(url, self._root())
+        _ACTIVE_URL_JOBS.add(job)
+        job.finished.connect(lambda: _ACTIVE_URL_JOBS.discard(job))
+        job.finished.connect(job.deleteLater)
+        job.ready.connect(self._on_url_preview)
+        job.failed.connect(self._on_url_failed)
+        self._url_job = job
+        job.start()
+
+    def _on_url_failed(self, reason: str, message: str) -> None:
+        from ...mods.url_install import discard
+
+        if self._disposed:
+            return
+        self._url_job = None
+        self.url_install_button.setEnabled(True)
+        labels = {
+            "invalid_url": "链接无效",
+            "not_zip": "链接内容不是 zip",
+            "network": "网络不可达",
+            "timeout": "下载超时",
+            "rate_limit": "请求过于频繁",
+            "protocol": "包结构无法识别",
+            "unsupported": "不是可安装的包",
+        }
+        self._set_url_status(f"{labels.get(reason, '下载失败')}：{message}")
+        discard(getattr(self, "_url_zip", "") or None)
+        self._url_zip = ""
+        self._url_preview = None
+
+    def _on_url_preview(self, preview, path: str) -> None:
+        from ...mods.url_install import discard
+
+        if self._disposed:
+            discard(path)
+            return
+        self._url_job = None
+        self.url_install_button.setEnabled(True)
+        self._url_zip = str(path)
+        self._url_preview = preview
+        detail = preview.label
+        if preview.version:
+            detail += f" · v{preview.version}"
+        if preview.source:
+            detail += f"\n来源：{preview.source}"
+        detail += "\n\n只从你信任的来源安装。功能扩展需要先允许功能扩展。"
+        answer = QMessageBox.question(
+            self,
+            "确认安装",
+            f"要安装「{preview.name}」吗？\n\n{detail}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            discard(self._url_zip)
+            self._url_zip = ""
+            self._url_preview = None
+            self._set_url_status("已取消，未安装。")
+            return
+        self._start_url_install()
+
+    def _start_url_install(self) -> None:
+        if not self._url_zip or self._url_preview is None:
+            return
+        allow_feature = bool(
+            getattr(self.host, "config", None).get("allow_feature_mods")
+            if getattr(self.host, "config", None) is not None
+            else False
+        )
+        self.url_install_button.setEnabled(False)
+        self._set_url_status("正在安装…")
+        job = _UrlInstallJob(
+            self._url_zip, self._root(), self._url_preview, allow_feature
+        )
+        _ACTIVE_URL_JOBS.add(job)
+        job.finished.connect(lambda: _ACTIVE_URL_JOBS.discard(job))
+        job.finished.connect(job.deleteLater)
+        job.done.connect(self._on_url_installed)
+        self._url_job = job
+        job.start()
+
+    def _on_url_installed(self, ok: bool, message: str) -> None:
+        from ...mods.url_install import discard
+
+        if self._disposed:
+            discard(self._url_zip)
+            return
+        self._url_job = None
+        self.url_install_button.setEnabled(True)
+        discard(self._url_zip)
+        self._url_zip = ""
+        self._url_preview = None
+        self._set_url_status(message)
+        if ok:
+            self._reload()
+            QMessageBox.information(self, "安装完成", message)
+        else:
+            QMessageBox.warning(self, "安装失败", message)
+
+    def dispose(self) -> None:
+        self._disposed = True
+        self._url_job = None
+        super().dispose()
+
     def _install(self, source: Path) -> None:
         installer, _ = self._load_api()
         if installer is None:
@@ -471,6 +673,10 @@ class ModsPage(SettingsPage):
             "基础扩展",
             "加装扩展",
             "已并入 Core",
+            "链接",
+            "URL",
+            "zip",
+            "下载安装",
             "install",
             "remove",
         ]

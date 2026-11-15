@@ -7,10 +7,18 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QPainter, QPixmap
+from PySide6.QtCore import QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFontMetrics,
+    QGuiApplication,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from ..contracts.bubble_styles import DEFAULT_BUBBLE_STYLE, style_preset
 from ..media.images import (
     is_animated,
     load_pixmap,
@@ -21,6 +29,7 @@ from ..media.images import (
     screen_dpr,
 )
 from ..platform.win import apply_stream_window, apply_tool_window
+from . import bubble_style
 from .animated_image import AnimatedImage
 from .menu import active_menu, menu_open
 
@@ -169,61 +178,6 @@ def _panel_margins(scale: float) -> tuple[int, int, int, int]:
     return (horizontal, vertical, horizontal, vertical)
 
 
-def _panel_qss(scale: float) -> str:
-    return (
-        "QWidget#bubblePanel{background:rgba(255,255,255,242);"
-        "border:1px solid rgba(120,150,180,180);border-radius:%dpx;}"
-        % _px(_TEXT_RADIUS * scale)
-    )
-
-
-def _text_qss(scale: float) -> str:
-    return (
-        "QLabel{background:transparent;color:#243040;font-size:%dpx;}"
-        % _px(_TEXT_FONT_PX * scale)
-    )
-
-
-def _subtitle_qss(scale: float) -> str:
-    return (
-        "QLabel#bubbleSubtitle{background:transparent;color:rgba(36,48,64,190);"
-        "font-size:%dpx;font-weight:600;}"
-        % _px(_TEXT_SUBTITLE_FONT_PX * scale)
-    )
-
-
-def _pager_qss(scale: float) -> str:
-    return (
-        "QLabel#bubblePager{background:transparent;color:rgba(60,76,94,160);"
-        "font-size:%dpx;}"
-        % _px(_TEXT_PAGER_FONT_PX * scale)
-    )
-
-
-def _caption_qss(scale: float) -> str:
-    return (
-        "QLabel#bubbleCaption{background:rgba(255,255,255,242);color:#243040;"
-        "border:1px solid rgba(120,150,180,180);border-radius:%dpx;"
-        "padding:%dpx %dpx;font-size:%dpx;font-weight:600;}"
-        % (
-            _px(_CAPTION_RADIUS * scale),
-            _px(_CAPTION_PADDING[0] * scale),
-            _px(_CAPTION_PADDING[1] * scale),
-            _px(_CAPTION_FONT_PX * scale),
-        )
-    )
-
-
-_TEXT_QSS = _text_qss(1.0)
-
-_IMAGE_QSS = (
-    "QLabel#bubbleImage{background:rgba(255,255,255,242);"
-    "border:1px solid rgba(120,150,180,180);border-radius:12px;}"
-)
-
-_CAPTION_QSS = _caption_qss(1.0)
-
-
 def clamp_text_scale(scale: float) -> float:
     """把文本缩放系数钳进支持区间；非法值回退 1.0（与旧版逐像素一致）。"""
     try:
@@ -346,11 +300,12 @@ class SpeechBubble(QWidget):
         self._pages: list[str] = []
         self._page_index = 0
         self._duration_ms = 4000
+        #: 气泡风格（原分支 5 种预设）：配色/圆角/落位偏好，见 bubble_style。
+        self._style_id = DEFAULT_BUBBLE_STYLE
 
         self.label = QLabel("")
         self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.label.setWordWrap(False)
-        self.label.setStyleSheet(_TEXT_QSS)
 
         self.subtitle_label = QLabel("")
         self.subtitle_label.setObjectName("bubbleSubtitle")
@@ -358,20 +313,17 @@ class SpeechBubble(QWidget):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
         self.subtitle_label.setWordWrap(True)
-        self.subtitle_label.setStyleSheet(_subtitle_qss(1.0))
         self.subtitle_label.hide()
 
         self.pager = QLabel("")
         self.pager.setObjectName("bubblePager")
         self.pager.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.pager.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.pager.setStyleSheet(_pager_qss(1.0))
         self.pager.hide()
 
         self.text_panel = QWidget(self)
         self.text_panel.setObjectName("bubblePanel")
         self.text_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.text_panel.setStyleSheet(_panel_qss(1.0))
         panel_layout = QVBoxLayout(self.text_panel)
         panel_layout.setContentsMargins(*_panel_margins(1.0))
         panel_layout.setSpacing(2)
@@ -383,7 +335,6 @@ class SpeechBubble(QWidget):
         self.caption_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.caption_label.setObjectName("bubbleCaption")
         self.caption_label.setMaximumWidth(MAX_IMAGE_SIDE + 2 * _IMAGE_PAD)
-        self.caption_label.setStyleSheet(_CAPTION_QSS)
         self.caption_label.hide()
 
         self.image_label = QLabel("")
@@ -391,24 +342,97 @@ class SpeechBubble(QWidget):
         self.image_label.setObjectName("bubbleImage")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setContentsMargins(_IMAGE_PAD, _IMAGE_PAD, _IMAGE_PAD, _IMAGE_PAD)
-        self.image_label.setStyleSheet(_IMAGE_QSS)
         self.image_label.hide()
 
         #: 动图控件（懒建，挂在 image_label 里）。静态图走 image_label 的
         #: pixmap，动图走 QMovie；两者互斥，切换时要停播并隐藏。
         self._animated_image: AnimatedImage | None = None
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(BUBBLE_GAP)
-        layout.addWidget(self.caption_label)
-        layout.addWidget(self.image_label)
-        layout.addWidget(self.text_panel)
+        self._outer_layout = QVBoxLayout(self)
+        self._outer_layout.setContentsMargins(0, 0, 0, 0)
+        self._outer_layout.setSpacing(BUBBLE_GAP)
+        self._outer_layout.addWidget(self.caption_label)
+        self._outer_layout.addWidget(self.image_label)
+        self._outer_layout.addWidget(self.text_panel)
 
+        self._apply_styles()
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
         self._apply_window_flags()
+
+    # ---------------------------------------------------------------- 风格
+    def style_id(self) -> str:
+        return self._style_id
+
+    def style_radius(self) -> int:
+        return bubble_style.style_radius(self._style_id, self._text_scale)
+
+    def _surface_band(self) -> tuple[int, int, int, int]:
+        """文本气泡四周给尾巴/阴影/水泡轮廓留的透明边；图片形态不需要。
+
+        吐气水泡左右不对称：轮廓贴着文字左边、右侧留圆弧余量，否则椭圆居中
+        会把文字推得偏右（用户实机反馈「左半边空太多」）。
+        """
+        if self._content_kind != "text":
+            return 0, 0, 0, 0
+        if bubble_style.is_plain(self._style_id):
+            # 重写版气泡：窗口就是可见卡片，不再为尾巴/阴影留 10px 透明边。
+            return 0, 0, 0, 0
+        if bubble_style.is_breath(self._style_id):
+            return (
+                bubble_style.BREATH_BAND_LEFT,
+                bubble_style.BREATH_BAND_Y,
+                bubble_style.BREATH_BAND_RIGHT,
+                bubble_style.BREATH_BAND_Y,
+            )
+        band = bubble_style.TAIL_BAND
+        return band, band, band, band
+
+    def _apply_styles(self) -> None:
+        style = self._style_id
+        scale = self._text_scale
+        self.label.setStyleSheet(
+            bubble_style.text_qss(style, scale, _TEXT_FONT_PX)
+        )
+        self.subtitle_label.setStyleSheet(
+            bubble_style.subtitle_qss(style, scale, _TEXT_SUBTITLE_FONT_PX)
+        )
+        self.pager.setStyleSheet(
+            bubble_style.pager_qss(style, scale, _TEXT_PAGER_FONT_PX)
+        )
+        self.text_panel.setStyleSheet(bubble_style.panel_qss(style, scale))
+        self.caption_label.setStyleSheet(
+            bubble_style.caption_qss(style, scale, _CAPTION_FONT_PX)
+        )
+        self.image_label.setStyleSheet(bubble_style.image_qss(style, scale))
+        left, top, right, bottom = self._surface_band()
+        self._outer_layout.setContentsMargins(left, top, right, bottom)
+
+    def set_style(self, style_id: str) -> None:
+        """切换气泡风格（配色/圆角/落位偏好），立即重排已显示的气泡。"""
+        value = str(style_id or "").strip().lower()
+        if value not in bubble_style.style_ids():
+            value = DEFAULT_BUBBLE_STYLE
+        if value == self._style_id:
+            return
+        self._style_id = value
+        self._apply_styles()
+        if self._content_kind == "text" and self._full_text:
+            self._render_text()
+            if self._anchor is not None:
+                self.adjustSize()
+                self._place(self._anchor)
+            if self.isVisible():
+                self._schedule_page()
+            self.update()
+            return
+        if self._anchor is None or not self.isVisible():
+            self.update()
+            return
+        self.adjustSize()
+        self._place(self._anchor)
+        self.update()
 
     # ---------------------------------------------------------------- 查询
     def content_kind(self) -> str:
@@ -435,13 +459,9 @@ class SpeechBubble(QWidget):
         if value == self._text_scale:
             return
         self._text_scale = value
-        self.label.setStyleSheet(_text_qss(value))
-        self.subtitle_label.setStyleSheet(_subtitle_qss(value))
-        self.pager.setStyleSheet(_pager_qss(value))
-        self.text_panel.setStyleSheet(_panel_qss(value))
+        self._apply_styles()
         if self.text_panel.layout() is not None:
             self.text_panel.layout().setContentsMargins(*_panel_margins(value))
-        self.caption_label.setStyleSheet(_caption_qss(value))
         if self._content_kind == "text" and self._full_text:
             self._render_text()
             if self._anchor is not None:
@@ -600,6 +620,69 @@ class SpeechBubble(QWidget):
             painter.end()
             return
         super().paintEvent(event)
+        if self._content_kind != "text":
+            return
+        self._paint_surface()
+
+    def _paint_surface(self) -> None:
+        """文本气泡的自绘表面：柔和阴影 + 预设底色/描边 + 朝向角色的尾巴。
+
+        ``text_panel`` 的 QSS 已是透明，背景只在这里画一次（画在子控件之前，
+        Qt 先画父再画子，label 透明所以不会盖住）。plain 风格由 QSS 画圆角矩形，
+        这里不画尾巴/阴影/描边，窗口尺寸就等于可见卡片。
+        """
+        body = QRectF(self.text_panel.geometry()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if body.width() <= 1 or body.height() <= 1:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        preset = style_preset(self._style_id)
+        background = QColor(preset["background"])
+        border = QColor(preset["border"])
+        if bubble_style.is_plain(self._style_id):
+            # 重写版：纯圆角矩形，没有尾巴/阴影；窗口就是卡片。
+            radius = float(self.style_radius())
+            path = QPainterPath()
+            path.addRoundedRect(body, radius, radius)
+        elif bubble_style.is_breath(self._style_id):
+            left, top, right, bottom = self._surface_band()
+            canvas = body.adjusted(-left, -top, right, bottom)
+            path = bubble_style.breath_main_bubble_path(canvas.size().toSize())
+            path = path.translated(canvas.topLeft())
+        else:
+            radius = self.style_radius()
+            half = bubble_style.TAIL_HALF * self._text_scale
+            geo = self.geometry()
+            anchor_local = (
+                QRect(self._anchor).translated(-geo.x(), -geo.y())
+                if self._anchor is not None
+                else QRect()
+            )
+            side, tail_at = bubble_style.tail_origin(
+                anchor_local,
+                QRect(0, 0, geo.width(), geo.height()),
+                radius=radius,
+                tail_half=half,
+            )
+            path = bubble_style.surface_path(
+                body,
+                radius,
+                tail_side=side,
+                tail_depth=bubble_style.TAIL_DEPTH * self._text_scale,
+                tail_half=half,
+                tail_at=tail_at,
+            )
+        for color, width, offset_y in bubble_style.shadow_pen_layers(self._style_id):
+            painter.setBrush(color)
+            painter.setPen(bubble_style.pen_for(color, width))
+            painter.drawPath(bubble_style.shadow_path(path, offset_y))
+        painter.setBrush(background)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPath(path)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(bubble_style.pen_for(border, 1.0))
+        painter.drawPath(path)
+        painter.end()
 
     # ---------------------------------------------------------------- 文本
     def show_text(
@@ -614,6 +697,7 @@ class SpeechBubble(QWidget):
         if not text:
             return
         self._content_kind = "text"
+        self._apply_styles()
         self.caption_label.hide()
         self.caption_label.clear()
         self.image_label.hide()
@@ -640,7 +724,12 @@ class SpeechBubble(QWidget):
             screen = QGuiApplication.screenAt(anchor.center()) or QGuiApplication.primaryScreen()
             if screen is not None:
                 area = screen.availableGeometry()
-                padding = 2 * _px(_TEXT_PADDING[1] * self._text_scale)
+                band = self._surface_band()
+                padding = (
+                    2 * _px(_TEXT_PADDING[1] * self._text_scale)
+                    + band[0]
+                    + band[2]
+                )
                 column = min(column, max(80, area.width() - 2 * SCREEN_MARGIN - padding))
         return column
 
@@ -799,6 +888,7 @@ class SpeechBubble(QWidget):
                 return False
             width, height = logical_size(pixmap)
         self._content_kind = "image"
+        self._apply_styles()
         self._full_text = ""
         self._subtitle = ""
         self._pages = []
@@ -943,6 +1033,12 @@ class SpeechBubble(QWidget):
             (left_x, below),
             (right_x, below),
         ]
+        placement = str(style_preset(self._style_id).get("placement") or "top")
+        if placement == "top_left":
+            # 预设的落位偏好只调候选顺序；屏幕内 / 不压住角色的判据不变。
+            candidates = [candidates[1], candidates[0], candidates[2], *candidates[3:]]
+        elif placement == "top_right":
+            candidates = [candidates[2], candidates[0], candidates[1], *candidates[3:]]
         screen = QGuiApplication.screenAt(anchor.center()) or QGuiApplication.primaryScreen()
         area = screen.availableGeometry() if screen is not None else None
         if area is None:

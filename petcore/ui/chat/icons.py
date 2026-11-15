@@ -139,6 +139,70 @@ def _draw(name: str, painter: QPainter, color: QColor) -> None:
         painter.drawPath(path)
         painter.drawLine(QPointF(8.0, 12.3), QPointF(8.0, 14.2))
         painter.drawLine(QPointF(6.0, 14.2), QPointF(10.0, 14.2))
+    elif name == "gear":
+        painter.drawEllipse(QPointF(8.0, 8.0), 3.2, 3.2)
+        painter.drawEllipse(QPointF(8.0, 8.0), 1.1, 1.1)
+        for dx, dy in (
+            (0.0, -1.0),
+            (0.7, -0.7),
+            (1.0, 0.0),
+            (0.7, 0.7),
+            (0.0, 1.0),
+            (-0.7, 0.7),
+            (-1.0, 0.0),
+            (-0.7, -0.7),
+        ):
+            painter.drawLine(
+                QPointF(8.0 + dx * 4.2, 8.0 + dy * 4.2),
+                QPointF(8.0 + dx * 6.1, 8.0 + dy * 6.1),
+            )
+    elif name == "phone":
+        painter.drawRoundedRect(QRectF(4.2, 1.6, 7.6, 12.8), 1.8, 1.8)
+        painter.drawLine(QPointF(6.6, 12.2), QPointF(9.4, 12.2))
+    elif name == "desktop":
+        painter.drawRoundedRect(QRectF(2.0, 2.8, 12.0, 8.2), 1.3, 1.3)
+        painter.drawLine(QPointF(8.0, 11.0), QPointF(8.0, 13.5))
+        painter.drawLine(QPointF(5.3, 13.5), QPointF(10.7, 13.5))
+    elif name == "speaker":
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(3.0, 6.0),
+                    QPointF(6.0, 6.0),
+                    QPointF(9.5, 3.0),
+                    QPointF(9.5, 13.0),
+                    QPointF(6.0, 10.0),
+                    QPointF(3.0, 10.0),
+                ]
+            )
+        )
+        painter.drawArc(QRectF(8.5, 4.3, 5.0, 7.4), -60 * 16, 120 * 16)
+        painter.drawArc(QRectF(9.5, 2.6, 7.0, 10.8), -55 * 16, 110 * 16)
+    elif name == "speaker_off":
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(2.0, 6.0),
+                    QPointF(5.0, 6.0),
+                    QPointF(8.0, 3.0),
+                    QPointF(8.0, 13.0),
+                    QPointF(5.0, 10.0),
+                    QPointF(2.0, 10.0),
+                ]
+            )
+        )
+        painter.drawLine(QPointF(10.5, 6.0), QPointF(14.0, 10.0))
+        painter.drawLine(QPointF(14.0, 6.0), QPointF(10.5, 10.0))
+    elif name == "trash":
+        painter.drawLine(QPointF(2.8, 4.2), QPointF(13.2, 4.2))
+        painter.drawLine(QPointF(6.0, 2.4), QPointF(10.0, 2.4))
+        painter.drawRoundedRect(QRectF(4.0, 4.2, 8.0, 9.4), 1.2, 1.2)
+        painter.drawLine(QPointF(6.4, 6.3), QPointF(6.4, 11.4))
+        painter.drawLine(QPointF(9.6, 6.3), QPointF(9.6, 11.4))
+    elif name == "restore":
+        painter.drawArc(QRectF(2.6, 2.8, 10.8, 10.8), 40 * 16, 280 * 16)
+        painter.drawLine(QPointF(2.6, 6.4), QPointF(2.6, 2.8))
+        painter.drawLine(QPointF(2.6, 2.8), QPointF(6.2, 2.8))
     else:
         painter.drawEllipse(QPointF(8.0, 8.0), 5.5, 5.5)
 

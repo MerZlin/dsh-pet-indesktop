@@ -30,8 +30,19 @@ class FakeCommunity:
                 "repo": "MerZlin/dsh-pet-indesktop",
                 "fetched_at": "2026-10-27T12:00:00+08:00",
                 "author_accounts": [
-                    {"platform": "BiliBili", "handle": "@張墨林"},
-                    {"platform": "抖音", "handle": "@張墨林"},
+                    {"platform": "BiliBili", "handle": "@張墨林", "role": "桌宠独立端作者"},
+                    {"platform": "抖音", "handle": "@張墨林", "role": "桌宠独立端作者"},
+                    {
+                        "platform": "BiliBili",
+                        "handle": "@浩瀚星空2005",
+                        "url": "",
+                        "role": "初始动画素材作者",
+                    },
+                    {
+                        "platform": "GitHub",
+                        "handle": "@MerZlin",
+                        "url": "https://github.com/MerZlin",
+                    },
                 ],
                 "special_thanks": [
                     {"kind": "project", "name": "PC2005-cloud/dsh-pet", "note": "素材来源"}
@@ -160,6 +171,19 @@ def _panel(tmp_path: Path, names) -> ThanksPanel:
     return panel
 
 
+def test_summary_shows_the_live_bilibili_total(app, tmp_path: Path, names) -> None:
+    panel = _panel(tmp_path, names)
+    try:
+        panel.community.live_fan_total = lambda: (4783, "2026-11-13T12:00:00+08:00")
+        panel.reload()
+        summary = panel.summary()
+        assert "4783" in summary
+        assert "实时" in summary
+    finally:
+        panel.dispose()
+        panel.deleteLater()
+
+
 def test_sections_exist_and_default_expansion(app, tmp_path: Path, names) -> None:
     panel = _panel(tmp_path, names)
     try:
@@ -171,6 +195,32 @@ def test_sections_exist_and_default_expansion(app, tmp_path: Path, names) -> Non
         assert panel.fans_section.is_expanded() is False
         assert "共 200 位粉丝" in panel.fans_count_label.text()
         assert "作者账号" in panel.authors_section.header.text()
+    finally:
+        panel.dispose()
+        panel.deleteLater()
+
+
+def test_author_rows_put_the_role_next_to_the_handle(app, tmp_path: Path, names) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    panel = _panel(tmp_path, names)
+    try:
+        labels = panel.authors_section.card().findChildren(QLabel)
+        titles = [
+            label.text() for label in labels
+            if label.objectName() == "settingLabel" and label.text()
+        ]
+        assert "@張墨林 · 桌宠独立端作者" in titles
+        assert "@浩瀚星空2005 · 初始动画素材作者" in titles
+        assert "@MerZlin" in titles, "没有 role 的作者只显示 handle"
+
+        hints = [
+            label.text() for label in labels
+            if label.objectName() == "settingHint" and label.text()
+        ]
+        assert "BiliBili" in hints, "平台作为小字副行"
+        assert "抖音" in hints
+        assert not any("桌宠软件框架" in label.text() for label in labels), "旧注释整段删除"
     finally:
         panel.dispose()
         panel.deleteLater()
@@ -325,7 +375,14 @@ def test_name_only_signature_is_saved_as_meta(app, tmp_path: Path, names) -> Non
         panel.deleteLater()
 
 
-def test_clear_removes_the_saved_signature(app, tmp_path: Path, names) -> None:
+def test_clear_removes_the_saved_signature(app, tmp_path: Path, names, monkeypatch) -> None:
+    from petcore.ui.settings import signature_pad
+
+    monkeypatch.setattr(
+        signature_pad.QMessageBox,
+        "question",
+        lambda *args, **kwargs: signature_pad.QMessageBox.StandardButton.Yes,
+    )
     panel = _panel(tmp_path, names)
     try:
         panel.community.save_signature(b"\x89PNG\r\n\x1a\n" + b"x", "墨林")

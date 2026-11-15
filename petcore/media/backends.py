@@ -17,8 +17,15 @@ def _gif(path: Path):
     return GifClip(path)
 
 
+def _webp(path: Path):
+    from .webp_clip import WebPClip
+
+    return WebPClip(path)
+
+
 register_backend("webm", _webm)
 register_backend("gif", _gif)
+register_backend("webp", _webp)
 
 
 def create(path: Path, name: str):

@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Iterable
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from ..platform import fullscreen
 
@@ -54,6 +54,10 @@ def _unpack(result) -> tuple[bool, str]:
 class FullscreenHideController(QObject):
     """全屏命中 → 隐藏所有桌宠；离开 → 只恢复自己隐藏的那些。"""
 
+    #: 全屏状态翻转（已过连拍确认）。宿主用它同步灵动岛等**非桌宠**窗口；
+    #: 只发翻转，不在信号里做任何隐藏动作，避免两套状态机互相抢所有权。
+    fullscreen_changed = Signal(bool)
+
     def __init__(
         self,
         pets: Callable[[], Iterable],
@@ -71,6 +75,8 @@ class FullscreenHideController(QObject):
             bool(fullscreen.supported()) if supported is None else bool(supported)
         )
         self._enabled = False
+        #: 隐藏桌宠被单独关掉时（只管灵动岛），探测仍在跑但不碰宠物窗。
+        self._hide_pets = True
         # 连拍确认数；1 = 单拍即翻（旧语义，测试与诊断用），0/负数按 1 处理。
         self._confirm_polls = max(1, int(confirm_polls))
         # 已生效（应用）的探测结果；候选结果要先攒够 ``_confirm_polls`` 拍才覆盖它。
@@ -184,7 +190,23 @@ class FullscreenHideController(QObject):
         self._pending_polls = 0
 
     # ---------------------------------------------------------------- 状态机
+    def set_hide_pets(self, enabled: bool) -> None:
+        """宠物隐藏的独立门：关掉时探测仍跑（供灵动岛用），但不碰宠物窗。
+
+        关掉的那一刻若正处在「我们藏了宠」的状态，立刻恢复它们——否则关开关
+        会把桌宠永远留在隐藏态（开关只写配置，没有别的事件来救）。
+        """
+        value = bool(enabled)
+        if value == self._hide_pets:
+            return
+        self._hide_pets = value
+        if not value and self._auto_hidden:
+            self._restore_pets()
+
     def _enter_fullscreen(self) -> None:
+        self.fullscreen_changed.emit(True)
+        if not self._hide_pets:
+            return
         windows = self._windows()
         self._auto_hidden.clear()
         self._overridden.clear()
@@ -197,6 +219,8 @@ class FullscreenHideController(QObject):
 
     def _reconcile(self) -> None:
         """全屏期间的对账：让位给用户手动操作，补隐藏全屏期间新出现的宠。"""
+        if not self._hide_pets:
+            return
         windows = self._windows()
         current = {self._key(window): window for window in windows}
         for key in list(self._auto_hidden):
@@ -221,7 +245,7 @@ class FullscreenHideController(QObject):
             self._auto_hidden[key] = window
             self._set_visible(window, False)
 
-    def _leave_fullscreen(self) -> None:
+    def _restore_pets(self) -> None:
         windows = self._windows()
         current = {self._key(window): window for window in windows}
         restored = 0
@@ -240,6 +264,10 @@ class FullscreenHideController(QObject):
         self._auto_hidden.clear()
         self._overridden.clear()
         self._known.clear()
+
+    def _leave_fullscreen(self) -> None:
+        self._restore_pets()
+        self.fullscreen_changed.emit(False)
 
     # ---------------------------------------------------------------- 工具
     def _windows(self) -> list:

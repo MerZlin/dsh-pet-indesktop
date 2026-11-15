@@ -119,6 +119,19 @@ class CommunityService:
             self._fans = model.merge_fans(bundle, cached)
         return self._fans
 
+    def live_fan_total(self) -> tuple[int, str] | None:
+        """最近一次免登录总数读数（total, fetched_at）；没有读数返回 None。"""
+        payload = store.load_fans_count(self.root)
+        if not isinstance(payload, dict):
+            return None
+        try:
+            total = int(payload.get("total") or 0)
+        except (TypeError, ValueError):
+            return None
+        if total < 0:
+            return None
+        return total, str(payload.get("fetched_at") or "")
+
     def known_total(self) -> int:
         """已记录名单的 B 站口径人数（含同名占位），用于判断有没有新粉丝。
 
@@ -172,6 +185,7 @@ class CommunityService:
             report("正在查询粉丝总数…")
             try:
                 fan_total = max(0, int(self.fetcher.fan_count(self.vmid)))
+                store.save_fans_count(self.root, self.vmid, fan_total, moment)
             except Exception as exc:  # noqa: BLE001 - 总数失败不阻断完整名单策略
                 errors["fan_count"] = reason_of(exc)
                 fan_total = None
@@ -256,9 +270,9 @@ class CommunityService:
         current = len(current_names)
         cookie = self._cookie()
         if not cookie:
-            errors["fans"] = "auth"
-            report("未配置 B 站登录凭据，继续显示现有名单")
-            return False, False, None, current
+            # 没有登录态时只更新免登录总数；不再把「未登录」当错误反复弹。
+            report("未配置 B 站登录凭据，只更新粉丝总数")
+            return False, False, stat_total, current
 
         def on_page(page: int, total_pages: int) -> None:
             report(f"正在读取粉丝第 {page}/{total_pages} 页…")

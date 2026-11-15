@@ -535,6 +535,9 @@ class ExtensionsPage(SettingsPage):
     def current_key(self) -> str:
         return self._current_key
 
+    def has_tab(self, key: str) -> bool:
+        return str(key) in set(self._row_keys.values())
+
     def select_tab(self, key: str) -> None:
         key = str(key)
         self._expand_group_of(key)

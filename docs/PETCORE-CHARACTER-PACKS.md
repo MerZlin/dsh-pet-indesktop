@@ -13,7 +13,7 @@ mods/character.shenshen/
     manifest.json          可选：name / body_box / head_box
     move_strides.json      可选：每段移动动画的地面位移
     text_clips.json        可选：{"no_mirror": [动画名]}
-    idle/    *.webm|*.gif
+    idle/    *.webm|*.gif|*.webp
     turn/
     move/
     click/
@@ -59,10 +59,21 @@ mods/character.shenshen/
 ## 4. move_strides.json
 
 ```json
-{"run": 240, "walk": {"stride": 120, "curve": [0, 0.5, 1]}}
+{
+  "run": 240,
+  "walk": {
+    "stride": 120,
+    "curve": [0, 0.5, 1],
+    "segments": {"start": 0, "loop_start": 1, "loop_end": 4, "end": 9}
+  }
+}
 ```
 
-整数或 `{"stride": 正整数}` 生效；缺省 120px。首版只读取 `stride`，`curve` 保留给后续。
+- 整数或对象都生效；缺省 120px。
+- `stride` 是整条 `curve` 0→1 的水平位移（px，scale=1.0）；`curve` 用于逐帧位置插值。
+- `segments` 可选，帧号闭区间；声明「真正可循环的中间段」。素材把绊倒/趴地烤进
+  clip 时，把 `loop_end` 放在绊倒前，键盘移动按住只循环中间段，松手从
+  `loop_end + 1` 播收尾。缺省时按 curve 自动推导（前导 0 = 前摇，尾部 1 = 收尾）。
 
 ## 5. text_clips.json
 
@@ -78,6 +89,23 @@ mods/character.shenshen/
 - 采纳条件：目录戳可读、meta 戳一致、meta 帧数等于磁盘帧数、`encoder == unblend-white-v5`（当前档）。
 - 任一条件不成立 → 该段回退 WebM，绝不播放旧档或无身份产物。
 - 首版只消费帧序列；WebM→WebP 转换与世代退役/GC 仍在旧应用或 `tools/convert_frameseq.py`，P1 再移植。
+
+## 6a. WebP 单文件与精灵表（2026-11-13）
+
+- 单文件 `.webp` 与 `.webm/.gif` 同级：`media/backends` 注册 `webp`，由 `WebPClip`
+  用 QMovie 播放；帧延时按 `nextFrameDelay()` 累计，不再套 GIF 的固定 42ms。
+- 精灵表推荐写 `videos/manifest.json` 的 `clips`：
+  `{"clips": {"走路": {"sheet": "move/走路.webp", "frame_w": 640, "frame_h": 360,
+  "columns": 8, "rows": 15, "frame_count": 120, "fps": 12, "folder": "move"}}}`
+- 也支持 aboutme-pets 的同名 `.json` 边车（`FrameWidth/FrameHeight/Columns/Rows/
+  FrameCount/SampleFps`）；没有边车的 `.webp` 当单文件动画。
+- `SheetClip` 一次解码整张图（超过 16M 像素等比缩小），按网格切帧 + 4 帧缓存；
+  **不要**用 `QImageReader.jumpToImage`（WebP handler 返回 False）。
+- aboutme-pets 单角色目录可用 `petcore/content/sprite_pack.py` 导入；应用内下载索引
+  在 `petcore/content/data/aboutme_packs.json`，只含许可文件齐全的 `dsh`/`dsh1`，
+  逐文件 sha256 校验，不随安装包分发。设置 → 角色素材包另有「素材来源」按钮打开
+  `https://github.com/hunmer/aboutme-pets`；也支持在「扩展管理 → 从链接安装」直接
+  粘贴该仓库角色目录的 zip 直链（`petcore/mods/url_install.py`）。
 
 ## 7. 制作新角色包
 

@@ -801,3 +801,20 @@ def test_click_talk_voice_off_keeps_silence(app, tmp_path: Path) -> None:
     assert presentation.said == [("我在呢。", 3200, True)]
     assert speech.spoken == []
     runtime.stop()
+
+
+
+def test_legacy_self_talk_line_typo_is_normalized_on_load(tmp_path: Path) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "self_talk_texts": ["欧金金", "保留我自己的句子"],
+                "self_talk_daily_texts": ["欧金金"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = Config.load(tmp_path)
+    assert config.get("self_talk_texts") == ["欧鲸鲸……", "保留我自己的句子"]
+    assert config.get("self_talk_daily_texts") == ["欧鲸鲸……"]

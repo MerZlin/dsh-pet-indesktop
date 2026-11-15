@@ -78,7 +78,12 @@ def update_github(out_dir: Path, repo: str) -> int:
         "repo": repo,
         "fetched_at": stamp_now(),
         "author_accounts": [
-            {"platform": item.platform, "handle": item.handle, "url": item.url}
+            {
+                "platform": item.platform,
+                "handle": item.handle,
+                "url": item.url,
+                **({"role": item.role} if item.role else {}),
+            }
             for item in (bundle.author_accounts or model.DEFAULT_AUTHOR_ACCOUNTS)
         ],
         "special_thanks": [

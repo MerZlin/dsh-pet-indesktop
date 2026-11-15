@@ -6,7 +6,8 @@
     {
       "platform": "BiliBili",
       "handle": "@張墨林",
-      "url": ""
+      "url": "",
+      "role": "桌宠独立端作者"
     },
     {
       "platform": "BiliBili",
@@ -16,7 +17,8 @@
     {
       "platform": "抖音",
       "handle": "@張墨林",
-      "url": ""
+      "url": "",
+      "role": "桌宠独立端作者"
     },
     {
       "platform": "GitHub",
@@ -27,6 +29,12 @@
       "platform": "BiliBili",
       "handle": "@炎圣人但丁",
       "url": ""
+    },
+    {
+      "platform": "BiliBili",
+      "handle": "@浩瀚星空2005",
+      "url": "",
+      "role": "初始动画素材作者"
     }
   ],
   "special_thanks": [
@@ -53,12 +61,6 @@
       "name": "@ZipZipPipe",
       "url": "",
       "note": "桌宠形象来源"
-    },
-    {
-      "kind": "bilibili",
-      "name": "@浩瀚星空2005",
-      "url": "",
-      "note": "参考项目作者、初始动画素材来源"
     },
     {
       "kind": "bilibili",
@@ -113,6 +115,24 @@
       "name": "@貓事液體這件事",
       "url": "",
       "note": "Codex联动作者"
+    },
+    {
+      "kind": "project",
+      "name": "MerZlin/Animations",
+      "url": "https://github.com/MerZlin/Animations",
+      "note": "动画素材仓库（应用内下载源）"
+    },
+    {
+      "kind": "project",
+      "name": "LorisYounger/VPet",
+      "url": "https://github.com/LorisYounger/VPet",
+      "note": "桌宠动画分类、事件动画与多宠设计参考；Apache License 2.0"
+    },
+    {
+      "kind": "assets",
+      "name": "hunmer/aboutme-pets",
+      "url": "https://github.com/hunmer/aboutme-pets",
+      "note": "WebP 精灵表角色素材来源；CC BY-NC-SA 4.0 / 禁止商用，详见包内 NOTICE"
     },
     {
       "kind": "company",

@@ -143,9 +143,10 @@ class ThanksPanel(QWidget):
         card = self.authors_section.card()
         credits = self._load_credits()
         for account in credits.author_accounts:
+            title = f"{account.handle} · {account.role}" if account.role else account.handle
             row = self._text_row(
+                title,
                 account.platform,
-                account.handle,
                 copy_text=account.handle,
                 url=account.url,
             )
@@ -153,9 +154,40 @@ class ThanksPanel(QWidget):
 
     def _build_special_rows(self) -> None:
         credits = self._load_credits()
-        for item in credits.special_thanks:
-            row = self._text_row(item.name, item.note, url=item.url)
-            self.special_layout.addWidget(row)
+        groups = (
+            ("project", "项目与工具"),
+            ("assets", "素材与角色"),
+            ("bilibili", "B 站创作者"),
+            ("company", "公司与服务"),
+        )
+        known = {kind for kind, _title in groups}
+        first = True
+
+        def add_group(title: str, items) -> None:
+            nonlocal first
+            if not items:
+                return
+            if not first:
+                self.special_layout.addSpacing(6)
+            first = False
+            heading = QLabel(title, self.special_host)
+            heading.setObjectName("settingHint")
+            heading.setStyleSheet("font-weight: 600;")
+            self.special_layout.addWidget(heading)
+            for item in items:
+                row = self._text_row(item.name, item.note, url=item.url)
+                self.special_layout.addWidget(row)
+
+        for kind, title in groups:
+            add_group(
+                title,
+                [item for item in credits.special_thanks if item.kind == kind],
+            )
+        # 远端刷新可能带来新 kind；未知条目归「其他」，不许无声消失。
+        add_group(
+            "其他",
+            [item for item in credits.special_thanks if item.kind not in known],
+        )
 
     def _build_fans(self) -> None:
         card = self.fans_section.card()
@@ -213,6 +245,9 @@ class ThanksPanel(QWidget):
         self.fan_refresh = make_button("刷新名单", pager)
         self.fan_refresh.clicked.connect(self.request_refresh)
         pager_layout.addWidget(self.fan_refresh)
+        self.fan_page_button = make_button("打开粉丝页", pager)
+        self.fan_page_button.clicked.connect(self._open_fans_page)
+        pager_layout.addWidget(self.fan_page_button)
         card.add_widget(pager)
 
         cookie_row = QWidget(card)
@@ -292,13 +327,37 @@ class ThanksPanel(QWidget):
         fans = self._fans or model.parse_fans({})
         stamp = str(fans.fetched_at or "")
         suffix = f" · 名单 {stamp[:10]}" if stamp else ""
-        fans_text = f"粉丝 {len(fans.names)} 位"
-        if int(fans.total) > len(fans.names):
-            fans_text += f"（B 站 {int(fans.total)} 位，含同名占位）"
+        live = None
+        getter = getattr(self.community, "live_fan_total", None)
+        if callable(getter):
+            try:
+                live = getter()
+            except Exception:  # noqa: BLE001
+                live = None
+        if live:
+            total, live_stamp = live
+            fans_text = f"粉丝 {int(total)} 位（B 站实时）"
+            if fans.names:
+                fans_text += f" · 名单收录 {len(fans.names)} 位"
+            if live_stamp:
+                fans_text += f" · 总数 {live_stamp[:10]}"
+            fans_text += suffix
+        else:
+            fans_text = f"粉丝 {len(fans.names)} 位"
+            if int(fans.total) > len(fans.names):
+                total_stamp = str(fans.total_fetched_at or "")
+                if total_stamp and total_stamp[:10] != str(fans.fetched_at or "")[:10]:
+                    fans_text += (
+                        f"（B 站总数 {int(fans.total)}，更新于 {total_stamp[:10]}；"
+                        f"名单更新于 {str(fans.fetched_at or '')[:10]}）"
+                    )
+                else:
+                    fans_text += f"（B 站显示 {int(fans.total)} 位）"
+            fans_text += suffix
         return (
             f"贡献者 {len(credits.contributors)} 位 · "
             f"issue/PR 协作者 {len(credits.authors)} 位 · "
-            f"{fans_text}{suffix}"
+            f"{fans_text}"
         )
 
     def _fill_contributors(self) -> None:
@@ -402,7 +461,7 @@ class ThanksPanel(QWidget):
         if len(self._fans_filtered) != len(self._fans_all):
             text += f"（筛选后 {len(self._fans_filtered)} 位）"
         if total > len(self._fans_all):
-            text += f" · B 站显示 {total} 位（含同名占位）"
+            text += f" · B 站显示 {total} 位"
         return text
 
     def _apply_fan_filter(self) -> None:
@@ -565,6 +624,10 @@ class ThanksPanel(QWidget):
     def _copy(self, text: str) -> None:
         QApplication.clipboard().setText(str(text))
         self._set_status(f"已复制 {text}")
+
+    def _open_fans_page(self) -> None:
+        vmid = int(getattr(self.community, "vmid", model.DEFAULT_VMID) or model.DEFAULT_VMID)
+        self._open_url(f"https://space.bilibili.com/{vmid}/relation/fans")
 
     def _open_url(self, url: str) -> None:
         QDesktopServices.openUrl(QUrl(str(url)))

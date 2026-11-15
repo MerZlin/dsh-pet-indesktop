@@ -12,6 +12,19 @@ from ..platform import screens as screen_mod
 
 _CONTACT_EPS = 1.0
 
+#: 拖动倾斜（被牵引感）：目标角按水平拖速换算，弹簧积分；松手后回零。
+#: 100% 强度 = 24°；默认 30% ≈ 7.2°，与旧手感一致。再大整只会被拖到窗口外，
+#: 见 AGENTS 的旋转命中口径。
+LEAN_FULL_DEG = 24.0
+LEAN_MAX_DEG = LEAN_FULL_DEG * 0.30
+LEAN_SPEED_REF = 1000.0
+LEAN_STIFFNESS = 120.0
+LEAN_DAMPING = 10.0
+#: 松手后的回正预算：弹簧本身 ~0.4s 收敛，这里留一点余量再停表。
+LEAN_SETTLE_SECONDS = 0.6
+LEAN_STOP_DEG = 0.05
+LEAN_STOP_SPEED = 0.5
+
 
 class MotionController(QObject):
     def __init__(self, window, *, clock=None) -> None:
@@ -34,6 +47,11 @@ class MotionController(QObject):
         self._trail: list[tuple[float, float, float]] = []
         self._throw_touching: tuple[bool, bool, bool, bool] = (False, False, False, False)
         self._island_touching = False
+        #: 拖动倾斜的当前角/角速度（度），以及松手回正的剩余预算。
+        self._lean = 0.0
+        self._lean_vel = 0.0
+        self._settling = False
+        self._settle_left = 0.0
 
     # ---------------------------------------------------------------- 查询
     @property
@@ -43,6 +61,10 @@ class MotionController(QObject):
     @property
     def thrown(self) -> bool:
         return self.mode == "thrown"
+
+    def lean_angle(self) -> float:
+        """拖动倾斜角（度）：正 = 顺时针。渲染/命中都只读这一个值。"""
+        return self._lean
 
     def velocity(self) -> tuple[float, float]:
         return self._vx, self._vy
@@ -70,6 +92,8 @@ class MotionController(QObject):
         self._target_x, self._target_y = self._x, self._y
         self._vx = self._vy = 0.0
         self._trail = [(self._clock(), self._x, self._y)]
+        self._settling = False
+        self._settle_left = 0.0
         self._last_tick = self._clock()
         self._ensure_timer()
 
@@ -95,8 +119,30 @@ class MotionController(QObject):
         if (physics_on and speed >= physics.DEAD_ZONE_SPEED) or drop_gravity:
             self.begin_throw(vx, vy)
         else:
-            self.stop()
+            self._begin_settle()
         return vx, vy
+
+    def _begin_settle(self) -> None:
+        """松手不甩出：收掉拖拽态但让倾角弹簧跑完（画面不瞬移回正）。"""
+        was_active = self.mode != "normal"
+        self.mode = "normal"
+        self._vx = self._vy = 0.0
+        self._island_touching = False
+        self._trail.clear()
+        effects = self._effects()
+        if effects is not None:
+            end = getattr(effects, "end_throw_egg", None)
+            if callable(end):
+                end()
+        if was_active:
+            self.window._on_motion_stopped()
+        if abs(self._lean) <= LEAN_STOP_DEG and abs(self._lean_vel) <= LEAN_STOP_SPEED:
+            self._clear_lean()
+            self._timer.stop()
+            return
+        self._settling = True
+        self._settle_left = LEAN_SETTLE_SECONDS
+        self._ensure_timer()
 
     # ---------------------------------------------------------------- 抛掷
     def begin_throw(self, vx: float, vy: float) -> None:
@@ -105,6 +151,9 @@ class MotionController(QObject):
         self._x, self._y = float(self.window.x()), float(self.window.y())
         self._throw_touching = (False, False, False, False)
         self._island_touching = False
+        # 甩飞由击飞角度接管：倾角立刻回正，别把两套旋转叠在一起。
+        self._settling = False
+        self._clear_lean()
         if bool(getattr(self.window, "probe_active", False)):
             effects = self._effects()
             if effects is not None:
@@ -125,6 +174,9 @@ class MotionController(QObject):
         self._vx = self._vy = 0.0
         self._island_touching = False
         self._trail.clear()
+        self._settling = False
+        self._settle_left = 0.0
+        self._clear_lean()
         self._timer.stop()
         # 落地/停稳都无条件回正（幂等）；探头击飞彩蛋不设飞行时间上限，
         # 但稳定态必须是直立。
@@ -146,6 +198,7 @@ class MotionController(QObject):
         now = self._clock()
         dt = max(0.001, min(0.05, now - self._last_tick))
         self._last_tick = now
+        self._tick_lean(dt)
         if self.mode == "drag":
             self._tick_drag(dt)
         elif self.mode == "thrown":
@@ -162,6 +215,88 @@ class MotionController(QObject):
         self._x, self._y = float(x), float(y)
         self.window.move(x, y)
         self._record_trail()
+
+    # ---------------------------------------------------------------- 拖动倾斜
+    def _clear_lean(self) -> None:
+        changed = abs(self._lean) > 1e-9
+        self._lean = 0.0
+        self._lean_vel = 0.0
+        if changed:
+            self._notify_paint()
+
+    def _notify_paint(self) -> None:
+        update = getattr(self.window, "update", None)
+        if callable(update):
+            update()
+
+    def _horizontal_speed(self) -> float:
+        """最近 ~120ms 的水平漂移速度（px/s）：直接跟手拖动时没有弹簧滞后，
+        只能从带时间戳的轨迹里取。"""
+        samples = self._trail
+        if len(samples) < 2:
+            return 0.0
+        now = self._clock()
+        latest = samples[-1]
+        cutoff = now - physics.TRAIL_KEEP_SEC
+        oldest = None
+        for item in reversed(samples):
+            if item[0] < cutoff:
+                break
+            oldest = item
+        if oldest is None or latest[0] - oldest[0] < 0.016:
+            return 0.0
+        return (latest[1] - oldest[1]) / max(1e-6, latest[0] - oldest[0])
+
+    def _lean_limit(self) -> float:
+        """当前允许的最大倾角：0% / 关闭 = 0，100% = 24°。"""
+        if not bool(self.window.config.get("drag_lean_enabled", True)):
+            return 0.0
+        try:
+            strength = float(self.window.config.get("drag_lean_strength", 30) or 0.0)
+        except (TypeError, ValueError):
+            strength = 30.0
+        strength = max(0.0, min(100.0, strength))
+        return LEAN_FULL_DEG * strength / 100.0
+
+    def _lean_target(self) -> float:
+        limit = self._lean_limit()
+        if limit <= 0.0 or self.mode != "drag":
+            return 0.0
+        speed = self._horizontal_speed()
+        # 往右拖 → 顺时针倾（正角），跟着拖动方向走；实机反馈反向会像被拖在地上。
+        target = speed / LEAN_SPEED_REF * limit
+        return max(-limit, min(limit, target))
+
+    def _tick_lean(self, dt: float) -> None:
+        limit = self._lean_limit()
+        if self.mode == "drag":
+            target = self._lean_target()
+            self._lean_vel += (
+                (target - self._lean) * LEAN_STIFFNESS - self._lean_vel * LEAN_DAMPING
+            ) * dt
+            self._lean += self._lean_vel * dt
+            self._lean = max(-limit, min(limit, self._lean))
+            self._notify_paint()
+            return
+        if not self._settling:
+            return
+        self._settle_left = max(0.0, self._settle_left - dt)
+        self._lean_vel += (
+            (0.0 - self._lean) * LEAN_STIFFNESS - self._lean_vel * LEAN_DAMPING
+        ) * dt
+        self._lean += self._lean_vel * dt
+        self._lean = max(-limit, min(limit, self._lean))
+        self._notify_paint()
+        if (
+            self._settle_left <= 0.0
+            or (
+                abs(self._lean) <= LEAN_STOP_DEG
+                and abs(self._lean_vel) <= LEAN_STOP_SPEED
+            )
+        ):
+            self._settling = False
+            self._clear_lean()
+            self._timer.stop()
 
     def _tick_throw(self, dt: float, now: float) -> None:
         left, top, right, bottom = self._throw_bounds()

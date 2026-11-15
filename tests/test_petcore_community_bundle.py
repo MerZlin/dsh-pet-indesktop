@@ -30,9 +30,28 @@ def test_bundled_credits_snapshot_is_complete() -> None:
     handles = [item.handle for item in credits.author_accounts]
     assert "@張墨林" in handles
     assert any(item.platform == "抖音" and item.handle == "@張墨林" for item in credits.author_accounts)
+    roles = {(item.platform, item.handle): item.role for item in credits.author_accounts}
+    assert roles[("BiliBili", "@張墨林")] == "桌宠独立端作者"
+    assert roles[("抖音", "@張墨林")] == "桌宠独立端作者"
+    assert roles[("BiliBili", "@浩瀚星空2005")] == "初始动画素材作者"
+    assert "@浩瀚星空2005" not in [
+        item.name for item in credits.special_thanks
+    ], "动画素材作者只出现在作者区"
     assert len(credits.contributors) >= 5, "贡献者区不应退化成空"
     assert len(credits.authors) >= 5, "issue/PR 协作者区不应退化成空"
     assert all(item.total > 0 for item in credits.authors)
+
+
+def test_bundled_static_entries_match_the_fallback_constants() -> None:
+    """随包 JSON 与 ``model.DEFAULT_*`` 必须逐字一致（含顺序）。
+
+    断网或 JSON 缺失时 UI 退回 ``DEFAULT_*``；两份数据一旦漂移，用户看到的两套
+    名单就会不同（作者身份、鸣谢分组都会跟着变）。
+    """
+    credits = model.parse_credits(_load(store.CREDITS_FILE))
+
+    assert credits.author_accounts == model.DEFAULT_AUTHOR_ACCOUNTS
+    assert credits.special_thanks == model.DEFAULT_SPECIAL_THANKS
 
 
 def test_bundled_special_thanks_name_the_upstream_project_and_artists() -> None:
@@ -68,8 +87,13 @@ def test_bundled_fans_snapshot_is_a_real_list() -> None:
     assert all(0 < len(name) <= 64 for name in fans.names)
     assert fans.total >= len(fans.names), "total 是 B 站口径人数，不能小于去重后的名字数"
     assert fans.total > 0, "缺 total 会让每次刷新都误判「有新粉丝」并重拉 79 页"
-    # total 与名字数只该差「账号已注销」这类同名占位；差太多说明快照被截断或 total 写错
-    assert 0 <= fans.total - len(fans.names) <= 20, "total 与名单长度差距不合理"
+    # total 与名字数只该差「账号已注销」这类同名占位；差太多说明快照被截断或 total 写错。
+    # 例外：`total_fetched_at` 表示「只更新了总数、名单仍是旧快照」，此时两个时间点的
+    # 粉丝数本来就可以差很多；UI 会同时显示两个日期，不再把它说成同名占位。
+    if payload.get("total_fetched_at"):
+        assert str(payload["total_fetched_at"])[:10] >= fans.fetched_at[:10]
+    else:
+        assert 0 <= fans.total - len(fans.names) <= 20, "total 与名单长度差距不合理"
     assert path.stat().st_size <= MAX_FANS_BYTES, "粉丝快照过大，会拖慢随包体积"
 
 

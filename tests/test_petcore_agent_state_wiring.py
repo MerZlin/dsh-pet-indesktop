@@ -44,6 +44,35 @@ def test_host_forwards_the_source_to_the_island() -> None:
     assert host.island.calls == [("working", "chat"), ("idle", "screen")]
 
 
+class _Pets:
+    def __init__(self, windows) -> None:
+        self._windows = list(windows)
+
+    def each(self):
+        return list(self._windows)
+
+
+class _WorkWindow:
+    def __init__(self) -> None:
+        self.states: list[str] = []
+
+    def set_work_state(self, state: str) -> None:
+        self.states.append(state)
+
+
+def test_host_forwards_work_state_to_every_pet() -> None:
+    host = CoreHost.__new__(CoreHost)
+    host.island = _Island()
+    windows = [_WorkWindow(), _WorkWindow()]
+    host.pets = _Pets(windows)
+    CoreHost.notify_agent_state(host, "working", source="chat")
+    CoreHost.notify_agent_state(host, "idle", source="chat")
+    assert [window.states for window in windows] == [
+        ["working", "idle"],
+        ["working", "idle"],
+    ]
+
+
 def test_host_degrades_for_legacy_island_signatures() -> None:
     host = CoreHost.__new__(CoreHost)
     host.island = _LegacyIsland()

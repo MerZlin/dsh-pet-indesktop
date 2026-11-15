@@ -8,6 +8,19 @@ from .enums import AnimatType, GraphType, ModeType
 
 
 @dataclass(frozen=True, slots=True)
+class SheetSpec:
+    """一张精灵表：按网格切帧，不生成逐帧文件。"""
+
+    path: Path
+    frame_width: int
+    frame_height: int
+    columns: int
+    rows: int
+    frame_count: int
+    fps: float = 24.0
+
+
+@dataclass(frozen=True, slots=True)
 class AnimationSpec:
     name: str
     graph: GraphType
@@ -15,6 +28,7 @@ class AnimationSpec:
     mode: ModeType = ModeType.NOMAL
     path: Path | None = None
     frameseq_dir: Path | None = None
+    sheet: SheetSpec | None = None
     locate: str = "ground"
     loop: bool = False
     event_group: str = ""
@@ -33,6 +47,9 @@ class CharacterSpec:
     head_box: tuple[int, int, int, int] | None = None
     move_strides: dict[str, int] | None = None
     move_curves: dict[str, tuple[float, ...]] | None = None
+    #: 每个移动 clip 可选的显式分段（start/loop_start/loop_end/end）。
+    #: 缺省时 `engine.keyboard_drive.move_segments` 仍按曲线自动推导。
+    move_segments: dict[str, dict] | None = None
     text_clips: frozenset[str] = frozenset()
     phrases_path: Path | None = None
     owner: str = "core"

@@ -246,6 +246,10 @@ class ChatTitleBar(QFrame):
 class MessageBubble(QFrame):
     """一条消息：assistant 走 Markdown，user 保持纯文本；复制按钮给原始文本。"""
 
+    #: 逐条朗读：正文（markdown 源码）与停止请求。窗口负责接语音端口。
+    speak_requested = Signal(str)
+    speak_stop_requested = Signal()
+
     STATE_STREAMING = "streaming"
     STATE_ERROR = "error"
     STATE_STOPPED = "stopped"
@@ -256,6 +260,8 @@ class MessageBubble(QFrame):
         self.role = role
         self.character_id = character_id
         self.state = self.STATE_NORMAL
+        self._speaking = False
+        self._dark = False
         self.setObjectName("message-bubble")
         self.setProperty("role", role)
         self.setProperty("state", self.state)
@@ -352,7 +358,9 @@ class MessageBubble(QFrame):
         self._image_widgets: list[QWidget] = []
         #: 只有最新一条回复起播 GIF；历史消息画首帧，避免整条时间线同时解码。
         self._animate_images = False
-        self.body.setMinimumWidth(360 if role == "assistant" else 0)
+        # 正文最小宽由窗口的 _update_bubble_widths() 按真实视口统一算：构造时钉
+        # 360 会让窄窗里的气泡被硬撑出右缘。
+        self.body.setMinimumWidth(0)
         surface_layout.addWidget(self.body)
         self.image_host = QWidget(self.surface)
         self.image_layout = QVBoxLayout(self.image_host)
@@ -376,11 +384,27 @@ class MessageBubble(QFrame):
         self.copy_button = tool_button(self.tools, "message-copy-button", "copy", "复制")
         self.copy_button.clicked.connect(self._copy_content)
         tools.addWidget(self.copy_button)
+        self.speak_button = None
+        if role == "assistant":
+            self.speak_button = tool_button(
+                self.tools,
+                "message-speak-button",
+                "speaker",
+                "朗读这条回复",
+            )
+            self.speak_button.clicked.connect(self._toggle_speak)
+            tools.addWidget(self.speak_button)
         if role == "user":
             tools.insertStretch(0, 1)
         else:
             tools.addStretch(1)
         panel.addWidget(self.tools)
+
+        self.speech_status = QLabel(self)
+        self.speech_status.setObjectName("bubble-speech-status")
+        self.speech_status.setWordWrap(True)
+        self.speech_status.hide()
+        panel.addWidget(self.speech_status)
 
         self.error_actions = QFrame(self.surface)
         self.error_actions.setObjectName("error-actions")
@@ -407,6 +431,49 @@ class MessageBubble(QFrame):
         clipboard = QApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(self._raw_text)
+
+    # ---- 逐条朗读 ----
+    @property
+    def speaking(self) -> bool:
+        return bool(self._speaking)
+
+    def _toggle_speak(self) -> None:
+        if self._speaking:
+            self.speak_stop_requested.emit()
+            self.set_speaking(False)
+            self.set_speech_status("")
+            return
+        self.set_speaking(True)
+        self.speak_requested.emit(self._raw_text)
+
+    def set_speaking(self, speaking: bool) -> None:
+        self._speaking = bool(speaking)
+        button = getattr(self, "speak_button", None)
+        if button is None:
+            return
+        button.blockSignals(True)
+        button.setIcon(
+            tool_icon(
+                button,
+                "speaker_off" if self._speaking else "speaker",
+                16,
+                dark=self._dark,
+            )
+        )
+        text = "停止朗读" if self._speaking else "朗读这条回复"
+        button.setToolTip(text)
+        button.setAccessibleName(text)
+        button.blockSignals(False)
+
+    def set_dark(self, dark: bool) -> None:
+        """主题切换时重画喇叭图标：默认墨色在深色面板上看不见。"""
+        self._dark = bool(dark)
+        self.set_speaking(self._speaking)
+
+    def set_speech_status(self, text: str) -> None:
+        value = str(text or "").strip()
+        self.speech_status.setText(value)
+        self.speech_status.setVisible(bool(value))
 
     def set_content(self, text: str, *, markdown: bool | None = None) -> None:
         self._raw_text = str(text)

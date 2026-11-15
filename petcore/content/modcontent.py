@@ -7,7 +7,9 @@ from ..contracts.content import CharacterSpec
 from .legacy import (
     build_animations,
     _clean_curve,
+    _clean_segments,
     _read_move_curves,
+    _read_move_segments,
     _read_move_strides,
     _read_text_clips,
     _valid_box,
@@ -46,6 +48,7 @@ def build_character(
     strides_path = _declared_path(pack, character.get("move_strides"))
     strides = _read_move_strides(media_root)
     curves = _read_move_curves(media_root)
+    segments = _read_move_segments(media_root)
     if strides_path is not None and strides_path.suffix.lower() == ".json":
         try:
             raw = json.loads(strides_path.read_text(encoding="utf-8"))
@@ -63,6 +66,9 @@ def build_character(
                     curve = _clean_curve(value.get("curve"))
                     if curve is not None:
                         curves[str(key)] = curve
+                    cleaned = _clean_segments(value.get("segments"))
+                    if cleaned is not None:
+                        segments[str(key)] = cleaned
 
     text_clips = _read_text_clips(media_root)
     text_path = _declared_path(pack, character.get("text_clips"))
@@ -86,6 +92,7 @@ def build_character(
         head_box=_valid_box(character.get("head_box")),
         move_strides=strides,
         move_curves=curves,
+        move_segments=segments,
         text_clips=text_clips,
         phrases_path=_declared_path(pack, character.get("phrases")),
         owner=owner,

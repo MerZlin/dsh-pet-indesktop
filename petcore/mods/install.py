@@ -217,6 +217,36 @@ def _archive_root(dest: Path) -> Path:
 
 
 @contextmanager
+def open_archive(
+    source: Path,
+    work_root: Path | None = None,
+    *,
+    limits: ArchiveLimits | None = None,
+) -> Iterator[Path]:
+    """解包任意 zip（不要求 ``mod.json``），返回解包根目录。
+
+    给「从链接安装」识别 aboutme 角色包用；安全校验与 ``open_pack`` 共用
+    :func:`_extract_zip`，只是不把根目录限定成带 manifest 的 mod。
+    """
+    source = Path(source)
+    if source.is_dir():
+        yield source
+        return
+    if not source.is_file():
+        raise InstallError(f"source not found: {source}")
+    if source.suffix.lower() != ".zip":
+        raise InstallError(f"unsupported source: {source} (expected directory or .zip)")
+    if work_root is not None:
+        Path(work_root).mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".unpack-", dir=str(work_root) if work_root is not None else None
+    ) as tmp:
+        dest = Path(tmp)
+        _extract_zip(source, dest, limits=limits)
+        yield dest
+
+
+@contextmanager
 def _source_pack(
     source: Path,
     work_root: Path | None = None,

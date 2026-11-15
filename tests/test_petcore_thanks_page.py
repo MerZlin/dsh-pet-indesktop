@@ -17,7 +17,6 @@ from petcore.ui.settings.page_thanks import ThanksPage
 from tests.test_petcore_about_page import FakeHost
 
 NEW_THANKS = (
-    "@浩瀚星空2005",
     "@邦多利素世",
     "@炎圣人但丁",
     "@玄秋沐雨",
@@ -59,6 +58,7 @@ def test_settings_search_finds_the_panel_rows(app, tmp_path: Path) -> None:
         texts = page_search_texts(page)
         for needle in ("特别鸣谢", "粉丝", "签名"):
             assert any(needle in text for text in texts), f"搜索口径缺「{needle}」"
+        assert any("浩瀚星空2005" in text for text in texts), "作者行仍要能被搜到"
     finally:
         page.dispose()
         page.deleteLater()
@@ -71,6 +71,9 @@ def test_bundled_credits_carry_the_new_thanks(app) -> None:
         assert name in names, f"随包特别鸣谢缺 {name}"
     handles = [item.handle for item in credits.author_accounts]
     assert "@炎圣人但丁" in handles
+    roles = {item.handle: item.role for item in credits.author_accounts}
+    assert roles["@浩瀚星空2005"] == "初始动画素材作者", "动画素材作者归作者区，不再进鸣谢区"
+    assert "@浩瀚星空2005" not in names, "同一个人不许在两个区重复出现"
 
 
 def test_dispose_is_safe(app, tmp_path: Path) -> None:

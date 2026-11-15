@@ -148,6 +148,14 @@
 
 ## PR 报告存档
 
+- [petcore 反馈批次 7：移动收尾 / 播放速度 / 朋友的酒 BPM / 致谢 / 手机版（2026-11-15）](PR-REPORT-PETCORE-FEEDBACK-BATCH4-2026-11-15.md)：键盘移动显式分段与摔倒收尾、2x 播放速度与闲置降帧后端语义、朋友的酒 BPM、致谢作者角色、手机版 440 宽与 `[⋯][✕]`；**改键盘移动状态机、闲置降帧、音乐 Q 弹、致谢数据或手机版标题栏前必读**。
+
+- [petcore 反馈批次 6：手机版窄窗 / 模式返回 / 朗读 / 抛掷探头 / 键盘成本 / 朋友的酒 / 致谢 / URL 安装（2026-11-14）](PR-REPORT-PETCORE-FEEDBACK-BATCH3-2026-11-14.md)：手机版 380 宽与常驻模式栏、逐条朗读、抛掷探头守卫、键盘轮询成本、朋友的酒模式、B 站总数与从链接安装；**改手机版对话窗、`PresentationPort`、探头门控、音乐扩展或扩展安装入口前必读**。
+
+- [petcore 反馈批次 5：气泡回退 / 手机版 / 回收站 / 工作动画 / 键盘 / WebP / 设置公开接口（2026-11-13）](PR-REPORT-PETCORE-FEEDBACK-BATCH2-2026-11-13.md)：十条反馈的实现、性能实测与源码实机记录；**改对话窗布局/删除语义、工作动画选择、键盘控制、WebP 精灵表、设置 schema/CLI 或使用手册前必读**。
+
+
+- [petcore 反馈批次 4：朝向 / 岛按钮 / 气泡风格 / 岛全屏 / 拖动倾斜 / 静息成本（2026-11-13）](PR-REPORT-PETCORE-FEEDBACK-BATCH-2026-11-13.md)：六项用户反馈的实现与证据；**改动画朝向判定、岛卡片按钮、气泡绘制、全屏隐藏或闲置降帧门控前必读**。现场诊断：0.5.0 安装版贴边探头时单核 40%+ 不下降的根因是降帧门控把探头当满速条件。
 - [petcore 开发者 README 重写（2026-11-09）](PR-REPORT-PETCORE-README-2026-11-09.md)：根 README 改为分支开发者入口，同步 petcore 上手文档，解释两端适配及证据限制；删除只约束旧版用户教程的四项文字断言。**调整 README 受众或引用当前分支状态前必读**；无运行行为变化。
 
 - [petcore macOS 适配与原生验收记录（2026-11-08）](PR-REPORT-PETCORE-MACOS-2026-11-08.md)：Linux 推送后的截图/字体/时区/权限/GIF/托盘修复，Intel Cocoa、人工穿透恢复、登录自启、24 组性能及未过门禁；继续 macOS 验收或构建 arm64 包前必读。
@@ -441,6 +449,7 @@
 |---|---|---|
 | [`PETCORE-ARCHITECTURE.md`](PETCORE-ARCHITECTURE.md) | `petcore` 的分层、契约、启动路径、数据目录与 VPet 对应关系。 | 改 `petcore/` 任何模块、判断 core 与 mod 边界前必读；**先看架构图** [`PETCORE-ARCHITECTURE-MAP.html`](PETCORE-ARCHITECTURE-MAP.html) 可快速建立全局印象。 |
 | [`PETCORE-ARCHITECTURE-MAP.html`](PETCORE-ARCHITECTURE-MAP.html) | **单页架构地图（离线 HTML）**：分层总图、启动路径、插件流水线、10 个贡献类型的真实消费点、27 个 `HostPorts` 的注入状态、线程模型，以及「小游戏 mod 加新 UI/功能/数据」的可行性、三条 UI 路线、骨架与已知坑。 | 第一次向协作者/新同事解释 core-mod 边界、评估一个新 mod 该用哪种 UI 与数据方案、或需要一张能点开的全局图时打开；字段细节仍以 `PETCORE-MOD-FORMAT.md` 为准。 |
+| [`PETCORE-ARCHITECTURE-MAP.md`](PETCORE-ARCHITECTURE-MAP.md) | **架构说明的 Markdown 版**（与离线 HTML 同名同内容）：仓库结构、两条运行时对照、扩展与打包位置、线程模型与 10 个贡献类型的消费点。 | 需要把架构地图贴进 Issue/PR/文档、或在纯文本环境阅读时；在 core-mod 边界上评审新 mod 的 UI/数据方案时与 `.html` 版并列使用，改图后两份同步。 |
 | [`INTEROP-ARCHITECTURE.md`](INTEROP-ARCHITECTURE.md) | 桌宠 × DSH × QQ 互通的进程拓扑、通道契约、会话 schema 2、分层人格记忆（相关度渲染/可见性矩阵/外部只读镜像）、插件边界与未验证项（2026-11-02 基线）。 | 改 DSH 桥接/通道、QQ 互通、会话存储、记忆服务或 WebhookPort 前必读。 |
 | [`PETCORE-MOD-FORMAT.md`](PETCORE-MOD-FORMAT.md) | `mod.json` 字段、校验、发现/启停、安装与能力模型（**字段级参考**）。 | 新增/修改 mod 包、改加载器或安装流程前必读；**动手写一个 mod 先看 [PETCORE-MOD-DEVELOPMENT.md](PETCORE-MOD-DEVELOPMENT.md)**（建包、接线、安装、排错的完整流程）。 |
 | [`PETCORE-MOD-DEVELOPMENT.md`](PETCORE-MOD-DEVELOPMENT.md) | **从零做一个 mod 的动手指南（0.5.0 基线）**：三类产物与今天做不到的事、数据目录/扫描顺序/授信闸门、最小可运行骨架（manifest+factory+runtime+设置页）、真正生效的三个接线点（menu / settings_page / chat_view）及其精确生命周期、22 个已注入端口与 5 个恒为 `None`、线程铁律、配置/数据/原子写、自建窗口与小游戏、本地安装/重载/排错闭环、ZIP 分发与角色包、提交 checklist。 | **第一次写 petcore 扩展、判断「这个功能该做成什么」、排查「装了为什么没生效 / 改代码为什么没更新」时先读这篇**；字段级细节再查 `PETCORE-MOD-FORMAT.md`，角色包规格查 `PETCORE-CHARACTER-PACKS.md`。 |

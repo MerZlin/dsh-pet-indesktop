@@ -32,6 +32,7 @@
       "children": [
         {"type": "action", "id": "drag_physics", "visible": true},
         {"type": "action", "id": "no_move", "visible": true},
+        {"type": "action", "id": "keyboard_move", "visible": true},
         {"type": "action", "id": "on_top", "visible": true},
         {"type": "action", "id": "edge_probe", "visible": true},
         {"type": "action", "id": "dynamic_island", "visible": true},

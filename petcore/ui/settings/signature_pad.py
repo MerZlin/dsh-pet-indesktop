@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
@@ -307,6 +308,15 @@ class SignaturePanel(QWidget):
         self.status_label.setText("画布已清空；已保存的签名不受影响。")
 
     def _remove_saved(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "删除签名",
+            "确定删除本机签名？删除后不可恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         try:
             if self.service is not None:
                 self.service.clear_signature()

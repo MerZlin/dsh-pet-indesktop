@@ -94,6 +94,19 @@ class PresentationPort(Protocol):
         ...
     def play_animation(self, name: str, *, loop: bool = False) -> bool: ...
     def release_loop(self) -> bool: ...
+    def squash(
+        self,
+        duration_ms: int = 0,
+        bounces: int = 0,
+        strength: float = 0.0,
+    ) -> bool:
+        """触发一次压缩回弹（「朋友的酒模式」这类持续节奏用）。
+
+        只改渲染形变，不改动画名与位置；``0`` = 沿用 ``click_squash_ms`` /
+        ``click_squash_bounces`` / ``click_squash_strength``。拖拽/抛掷/探头/
+        击飞接管时返回 ``False`` 且不叠加第二套形变。
+        """
+        ...
     def play_event(self, group: str, variant: str | int | None = None) -> bool: ...
     def notify(self, title: str, message: str, *, force: bool = False,
                on_click: Callable[[], None] | None = None) -> bool: ...

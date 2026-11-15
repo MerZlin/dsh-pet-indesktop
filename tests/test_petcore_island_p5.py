@@ -75,6 +75,34 @@ def test_island_signals_expose_balance_and_settings_actions():
     assert settings == [True]
     island.deleteLater()
 
+
+def test_island_card_toggle_button_defaults_on_and_follows_pet_visibility():
+    """卡片「隐藏/显示桌宠」：默认加、文案跟随显隐、点击只发信号（宿主接线）。"""
+    _app()
+    island = DynamicIsland(_Config())
+    fired = []
+    island.toggle_pet_requested.connect(lambda: fired.append(True))
+    button = island.card._toggle_button
+    assert not button.isHidden()
+    assert button.text() == "隐藏桌宠"
+    island.set_pet_visible(False)
+    assert button.text() == "显示桌宠"
+    button.click()
+    assert fired == [True]
+    island.deleteLater()
+
+
+def test_island_card_toggle_button_respects_the_setting():
+    """设置关掉后按钮真的收起（不是只写配置不生效的活开关）。"""
+    _app()
+    config = _Config()
+    config.data["island_show_toggle_button"] = False
+    island = DynamicIsland(config)
+    island._rebuild_card()
+    assert island.card._toggle_button.isHidden()
+    island.deleteLater()
+
+
 def test_island_accepts_optional_gpu_probe_snapshot_without_starting_a_sampler():
     _app()
     island = DynamicIsland(_Config())

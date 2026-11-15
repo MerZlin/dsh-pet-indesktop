@@ -614,6 +614,17 @@ def test_settings_page_exposes_chat_appearance_and_previews(qt_app, tmp_path: Pa
         assert "builtin:whale" in values
         assert "__custom__" in values
 
+        layout_values = [
+            page.layout_combo.itemData(index)
+            for index in range(page.layout_combo.count())
+        ]
+        assert layout_values == ["desktop", "phone"]
+        page.layout_combo.setCurrentIndex(page.layout_combo.findData("phone"))
+        assert host.config.get("chat_layout") == "phone"
+        assert page.trash_days.value() == 30
+        page.trash_days.setValue(7)
+        assert host.config.get("chat_trash_retention_days") == 7
+
         index = page.background_combo.findData("builtin:whale")
         page.background_combo.setCurrentIndex(index)
         assert host.config.get("chat_background") == "builtin:whale"

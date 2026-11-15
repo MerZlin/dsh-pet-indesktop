@@ -19,6 +19,7 @@ logger = logging.getLogger("petcore.community.store")
 BUNDLE_DIR = Path(__file__).resolve().parent / "data"
 CREDITS_FILE = "credits.json"
 FANS_FILE = "fans.json"
+FANS_COUNT_FILE = "fans-count.json"
 CACHE_DIR = "community"
 SIGNATURE_FILE = "signature.png"
 SIGNATURE_META_FILE = "signature.json"
@@ -49,6 +50,10 @@ def credits_cache_path(root: Path | str) -> Path:
 
 def fans_cache_path(root: Path | str) -> Path:
     return data_dir(root) / "fans-cache.json"
+
+
+def fans_count_path(root: Path | str) -> Path:
+    return data_dir(root) / FANS_COUNT_FILE
 
 
 def signature_path(root: Path | str) -> Path:
@@ -120,6 +125,25 @@ def save_cached_credits(root: Path | str, credits: Credits) -> None:
                 {"login": item.login, "issues": item.issues, "prs": item.prs}
                 for item in credits.authors
             ],
+        },
+    )
+
+
+def load_fans_count(root: Path | str) -> dict | None:
+    payload = _read_json(fans_count_path(root))
+    return payload if isinstance(payload, dict) else None
+
+
+def save_fans_count(
+    root: Path | str, vmid: int, total: int, fetched_at: str
+) -> None:
+    _write_json(
+        fans_count_path(root),
+        {
+            "schema": 1,
+            "vmid": int(vmid),
+            "total": max(0, int(total)),
+            "fetched_at": str(fetched_at or ""),
         },
     )
 

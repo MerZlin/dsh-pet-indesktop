@@ -71,19 +71,43 @@ def _sessdata() -> str:
     return str(value or "").strip()
 
 
-def refresh_fans(path: Path) -> int:
+def refresh_fans(path: Path, *, total_only: bool = False) -> int:
     from petcore.net import bilibili
-
-    cookie = _sessdata()
-    if not cookie:
-        print(NO_COOKIE_MESSAGE, file=sys.stderr)
-        return 2
 
     existing = _load(path)
     try:
         vmid = int(existing.get("vmid") or DEFAULT_VMID)
     except (TypeError, ValueError):
         vmid = DEFAULT_VMID
+
+    if total_only:
+        try:
+            total = int(bilibili.fetch_fan_count(vmid))
+        except Exception as exc:  # noqa: BLE001 - 免登录总数失败不动文件
+            print(f"粉丝总数查询失败：{reason_of(exc)}，fans.json 未改动", file=sys.stderr)
+            return 1
+        payload = dict(existing)
+        payload.update(
+            {
+                "schema": existing.get("schema", 1),
+                "vmid": vmid,
+                "total": total,
+                "total_fetched_at": stamp_now(),
+            }
+        )
+        _write(path, payload)
+        print(
+            f"fans.json: 只更新总数 {total}（名单仍为 {len(existing.get('names') or [])} 位，"
+            "需 SESSDATA 才能重读名单）",
+            file=sys.stderr,
+        )
+        return 0
+
+    cookie = _sessdata()
+    if not cookie:
+        print(NO_COOKIE_MESSAGE, file=sys.stderr)
+        print("只更新总数：加 --total-only", file=sys.stderr)
+        return 2
 
     started = time.monotonic()
     total = 0
@@ -184,6 +208,11 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--credits", action="store_true", help="刷新贡献者与 issue/PR 作者")
+    parser.add_argument(
+        "--total-only",
+        action="store_true",
+        help="只更新粉丝总数（免登录），不动名单；名单需要 SESSDATA",
+    )
     parser.add_argument("--repo", default=DEFAULT_REPO, help="GitHub 仓库（owner/name）")
     parser.add_argument("--out-dir", default=str(DATA_DIR), help="输出目录")
     args = parser.parse_args(argv)
@@ -192,7 +221,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.credits:
         # 贡献者走 GitHub，与 B 站凭据无关：先做，缺凭据也不白跑一趟。
         status = refresh_credits(out_dir / "credits.json", args.repo)
-    status = max(status, refresh_fans(out_dir / "fans.json"))
+    status = max(
+        status,
+        refresh_fans(out_dir / "fans.json", total_only=bool(args.total_only)),
+    )
     return status
 
 

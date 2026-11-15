@@ -57,6 +57,24 @@ SOFTWARE.
 
 ---
 
+## 2a. aboutme-pets（WebP 精灵表角色包，可选下载，不随安装包分发）
+
+- **Files**: 用户在应用内下载的 `pets/<id>/spritesheet/*.webp` 及其清单
+- **Origin / Source Repository**: [hunmer/aboutme-pets](https://github.com/hunmer/aboutme-pets)
+- **License**: 角色素材按 CC BY-NC-SA 4.0 / 上游 NOTICE 发布，**禁止商用**；
+  二创在公开渠道须署名上游仓库。转换/切片不授予额外授权。
+- **Distribution**: 本仓库**不收录**这些素材；应用只提供按清单逐文件下载，
+  每个角色包保留其 `NOTICE.txt` / `LICENSE-*.txt`。
+
+## 2b. 设计参考（不包含代码或素材）
+
+- [LorisYounger/VPet](https://github.com/LorisYounger/VPet)：桌宠动画分类、
+  事件动画与多宠设计参考；Apache License 2.0。
+- [MerZlin/Animations](https://github.com/MerZlin/Animations)：本项目动画素材包
+  仓库（应用内下载源）。
+
+---
+
 ## 3. lunar-python（农历与 24 节气换算）
 
 - **Package**: [`lunar-python`](https://pypi.org/project/lunar-python/)（import 名 `lunar_python`）

@@ -146,3 +146,115 @@ def test_idle_low_fps_applies_to_self_play_but_not_dragging(app, tmp_path) -> No
         assert window._idle_low_fps_allowed() is False
     finally:
         window.shutdown()
+
+
+def test_idle_low_fps_still_applies_while_peeking_at_the_edge(app, tmp_path) -> None:
+    """贴边探头是静息态：它只锁动画选择，不许把「闲置降帧」永久挡在门外。
+
+    现场（2026-11-13，0.5.0 安装版）：宠物停在左缘 PEEKING，单核 40%+ 不下降；
+    根因是 `_idle_low_fps_allowed()` 把 `_effects_lock_active()`（含探头）当成
+    满速条件，探头一停几小时就一直是 48fps 解码。
+    """
+    window = _window(tmp_path)
+    window._clip = _SpyClip()
+    window._action_kind = "idle"
+    window._last_activity -= 31.0
+    window._edge_probe._mode = "PEEKING"  # noqa: SLF001 - 探头会话的静息态
+    try:
+        assert window.probe_active is True
+        assert window._idle_low_fps_allowed() is True
+        window.dragging = True
+        assert window._idle_low_fps_allowed() is False, "拖拽仍然必须满速"
+    finally:
+        window._edge_probe._mode = "OFF"  # noqa: SLF001
+        window.shutdown()
+
+
+
+class _ThrottleOnlyClip:
+    """WebM 式后端：只有 set_decode_throttle，没有真正的隔帧接口。"""
+
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    def set_decode_throttle(self, divisor: int) -> None:
+        self.calls.append(int(divisor))
+
+    def stop(self) -> None:
+        return None
+
+    def clear_callbacks(self) -> None:
+        return None
+
+
+class _SpeedClip:
+    def __init__(self) -> None:
+        self.speeds: list[float] = []
+
+    def set_playback_speed(self, speed: float) -> None:
+        self.speeds.append(float(speed))
+
+    def stop(self) -> None:
+        return None
+
+    def clear_callbacks(self) -> None:
+        return None
+
+
+def test_webm_like_clip_is_not_treated_as_frame_throttling(app, tmp_path) -> None:
+    window = _window(tmp_path)
+    clip = _ThrottleOnlyClip()
+    window._clip = clip
+    window._action_kind = "idle"
+    window._last_activity -= 31.0
+    try:
+        window._tick_idle_fps()
+        assert clip.calls == [], "decode_throttle 会把时长拉长 2 倍，不许用于闲置降帧"
+        assert window._idle_low_fps_active is False
+    finally:
+        window.shutdown()
+
+
+def test_active_drive_loop_and_move_are_never_throttled(app, tmp_path) -> None:
+    window = _window(tmp_path)
+    window._clip = _SpyClip()
+    window._last_activity -= 31.0
+    try:
+        window._drive_active = True
+        assert window._idle_low_fps_allowed() is False
+        window._drive_active = False
+        window._loop_active = True
+        assert window._idle_low_fps_allowed() is False
+        window._loop_active = False
+        window._move_plan = {"loops": 1}
+        assert window._idle_low_fps_allowed() is False
+        window._move_plan = None
+        assert window._idle_low_fps_allowed() is True
+    finally:
+        window.shutdown()
+
+
+def test_stopping_a_clip_resets_the_divisor_before_cache_reuse(app, tmp_path) -> None:
+    window = _window(tmp_path)
+    clip = _SpyClip()
+    window._clip = clip
+    window._action_kind = "idle"
+    window._last_activity -= 31.0
+    try:
+        window._tick_idle_fps()
+        assert clip.divisors == [2]
+        window._stop_clip()
+        assert clip.divisors == [2, 1], "LRU 复用的 clip 不许带着 divisor=2 离场"
+    finally:
+        window.shutdown()
+
+
+def test_apply_playback_speed_reaches_the_current_clip(app, tmp_path) -> None:
+    window = _window(tmp_path)
+    clip = _SpeedClip()
+    window._clip = clip
+    try:
+        window.apply_playback_speed(2.0)
+        assert clip.speeds == [2.0]
+    finally:
+        window.shutdown()

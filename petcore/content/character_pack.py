@@ -8,9 +8,9 @@ import shutil
 from pathlib import Path
 
 from ..mods.manifest import is_valid_id
-from .legacy import _read_manifest, _valid_box
+from .legacy import _canvas_from_manifest, _read_manifest, _valid_box
 
-MEDIA_SUFFIXES = (".webm", ".gif")
+MEDIA_SUFFIXES = (".webm", ".gif", ".webp")
 
 
 def _media_root(source: Path) -> Path:
@@ -34,12 +34,13 @@ def validate_character_source(source: Path) -> list[str]:
         return ["source already contains mod.json; use petcore mods validate instead"]
     media_root = _media_root(source)
     if not _media_files(media_root):
-        return [f"no webm/gif media found under {media_root}"]
+        return [f"no webm/gif/webp media found under {media_root}"]
     manifest = _read_manifest(source)
+    canvas = _canvas_from_manifest(manifest)
     for key in ("body_box", "head_box"):
         value = manifest.get(key)
-        if value is not None and _valid_box(value) is None:
-            return [f"invalid {key}: {value!r}"]
+        if value is not None and _valid_box(value, canvas) is None:
+            return [f"invalid {key}: {value!r} (canvas {canvas[0]}x{canvas[1]})"]
     return []
 
 
@@ -86,14 +87,19 @@ def build_character_pack(
     media_root = _media_root(source)
     manifest = _read_manifest(source)
     display_name = str(name or manifest.get("name") or character_id)
-    body_box = _valid_box(manifest.get("body_box"))
-    head_box = _valid_box(manifest.get("head_box"))
+    canvas = _canvas_from_manifest(manifest)
+    body_box = _valid_box(manifest.get("body_box"), canvas)
+    head_box = _valid_box(manifest.get("head_box"), canvas)
+    try:
+        feet_y = int(manifest.get("feet_y") or max(0, canvas[1] - 30))
+    except (TypeError, ValueError):
+        feet_y = max(0, canvas[1] - 30)
 
     character = {
         "media": "videos",
         "name": display_name,
-        "canvas": [640, 360],
-        "feet_y": 330,
+        "canvas": [canvas[0], canvas[1]],
+        "feet_y": feet_y,
     }
     if body_box is not None:
         character["body_box"] = list(body_box)

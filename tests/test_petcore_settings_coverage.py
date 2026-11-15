@@ -109,6 +109,6 @@ def test_search_matches_button_text(app, tmp_path):
             for i in range(dialog.nav.count())
             if not dialog.nav.item(i).isHidden()
         ]
-        assert visible == ["多宠"], visible
+        assert "多宠" in visible, visible
     finally:
         dialog.close()

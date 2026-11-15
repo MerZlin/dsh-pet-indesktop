@@ -188,7 +188,7 @@ def test_set_text_scale_enlarges_the_text_style(app) -> None:
         bubble.show_text("放大一点", QRect(200, 400, 80, 80))
         before = bubble.label.styleSheet()
         assert "font-size:13px" in before
-        assert "border-radius:12px" in bubble.text_panel.styleSheet()
+        assert bubble.style_radius() == 12, "默认风格（经典白）圆角 12"
         assert bubble.text_panel.layout().contentsMargins().left() == 14
         height_before = bubble.height()
 
@@ -197,7 +197,7 @@ def test_set_text_scale_enlarges_the_text_style(app) -> None:
         assert bubble.text_scale() == pytest.approx(2.0)
         after = bubble.label.styleSheet()
         assert "font-size:26px" in after
-        assert "border-radius:24px" in bubble.text_panel.styleSheet()
+        assert bubble.style_radius() == 24
         assert bubble.text_panel.layout().contentsMargins().left() == 28
         assert "font-size:22px" in bubble.subtitle_label.styleSheet()
         assert "font-size:24px" in bubble.caption_label.styleSheet()

@@ -31,6 +31,7 @@ from .page_about import AboutPage
 from .page_api import ApiSettingsPage
 from .page_extensions import ExtensionsPage
 from .page_interaction import InteractionPage
+from .page_manual import ManualPage
 from .page_pets import PetsPage
 from .page_thanks import ThanksPage
 from .page_voice import VoicePage
@@ -49,6 +50,7 @@ _PAGE_ICONS = {
     "扩展管理": "application",
     "API 与账户": "network",
     "关于与诊断": "info",
+    "使用手册": "web",
     "致谢": "sparkles",
 }
 
@@ -62,6 +64,7 @@ _PAGE_KEYS = {
     "扩展管理": "mods",
     "API 与账户": "api",
     "关于与诊断": "about",
+    "使用手册": "manual",
     "致谢": "thanks",
 }
 
@@ -291,6 +294,7 @@ class SettingsDialog(QDialog):
             MenuPage(self.host),
             ExtensionsPage(self.host),
             ApiSettingsPage(self.host),
+            ManualPage(self.host),
             AboutPage(self.host),
             ThanksPage(self.host),
         ):
@@ -373,26 +377,52 @@ class SettingsDialog(QDialog):
         if 0 <= row < len(self._pages):
             self.stack.setCurrentWidget(self._pages[row].page)
 
-    def select_page(self, key: str) -> None:
-        needle = str(key or "").strip().lower()
+    def select_page(self, key: str) -> bool:
+        """选中页面（可选 ``页键#行文案``）；命中返回 True。
+
+        ``#`` 后面交给 ``reveal_text``：切换页内分页、展开折叠区并滚到该行，
+        供对话窗等外部入口深链到具体设置段。
+        """
+        raw = str(key or "").strip()
+        if not raw:
+            return False
+        needle, _, target_text = raw.partition("#")
+        needle = needle.strip().lower()
+        target_text = target_text.strip()
         if not needle:
-            return
+            return False
+
+        def activate(index: int) -> bool:
+            self.nav.setCurrentRow(index)
+            if target_text:
+                reveal_text(self._pages[index].page, target_text)
+            return True
+
         if needle.startswith("extension:"):
             for index, entry in enumerate(self._pages):
+                if entry.key != "mods":
+                    continue
                 selector = getattr(entry.page, "select_tab", None)
                 if callable(selector):
+                    has_tab = getattr(entry.page, "has_tab", None)
+                    if callable(has_tab) and not has_tab(needle):
+                        return False
                     self.nav.setCurrentRow(index)
                     selector(needle)
-                    return
+                    current = getattr(entry.page, "current_key", None)
+                    if callable(current) and current() and current() != needle:
+                        return False
+                    if target_text:
+                        reveal_text(entry.page, target_text)
+                    return True
         for index, entry in enumerate(self._pages):
             names = (entry.key, entry.title, *entry.keywords)
             if any(needle == str(name).lower() for name in names):
-                self.nav.setCurrentRow(index)
-                return
+                return activate(index)
         for index, entry in enumerate(self._pages):
             if needle in entry.key.lower() or needle in entry.title.lower():
-                self.nav.setCurrentRow(index)
-                return
+                return activate(index)
+        return False
 
     def page_for_key(self, key: str):
         """Return a loaded page by its stable settings key for host callbacks."""

@@ -126,10 +126,27 @@ ROUND_END_FRACTION = 0.75
 ROUND_TAIL_SECONDS = 6.0
 #: 不上报进度时把"尾部暂停→又播放"当新一圈的容差（秒）。
 ROUND_PAUSE_SLACK = 5.0
+#: 「朋友的酒模式」的默认 Q 弹节奏：土味 DJ 常见的 132 BPM（约 0.455 秒一次）。
+BUDDY_WINE_BPM_DEFAULT = 132
+BUDDY_WINE_BPM_MIN = 60
+BUDDY_WINE_BPM_MAX = 200
+
+
+def buddy_wine_interval_seconds(bpm: float) -> float:
+    """BPM → 两次 Q 弹之间的秒数；非法/越界值按 60–200 钳制。"""
+    try:
+        value = float(bpm)
+    except (TypeError, ValueError):
+        value = float(BUDDY_WINE_BPM_DEFAULT)
+    value = max(float(BUDDY_WINE_BPM_MIN), min(float(BUDDY_WINE_BPM_MAX), value))
+    return 60.0 / value
+
 
 DEFAULTS = {
     "music_enabled": True,
     "music_sing_enabled": True,
+    "music_buddy_wine_mode": False,
+    "music_buddy_wine_bpm": BUDDY_WINE_BPM_DEFAULT,
     "music_sing_grace_seconds": 5.0,
     "music_lyric_enabled": True,
     "music_lyric_lead_seconds": 0.3,
@@ -438,6 +455,11 @@ class MusicRuntime:
         self._rearm_pending = False
         self._rearm_attempts = 0
         self._next_rearm = 0.0
+        #: 「朋友的酒模式」上一拍 Q 弹时刻（None = 本段音乐还没弹过）。
+        self._buddy_last_at: float | None = None
+        #: BPM 节拍器（独立于 1Hz 识别采样；60–200 BPM 需要 1.0–0.3s 的节拍）。
+        self._buddy_timer: str | None = None
+        self._buddy_beat_interval = 0
         #: 展示会话（歌词占着气泡）：``_scene_wanted`` 是这一拍该不该占，
         #: ``_scene_held`` 是 Core 真的给了我们，``_sing_ok`` 是"这首曲目唱起来过"
         #: （补播的空档里别把气泡会话放掉，否则自言自语会在两拍之间插进来）。
@@ -833,6 +855,7 @@ class MusicRuntime:
 
         self._scene_wanted = True
         self._silent_since = None
+        self._tick_buddy_wine(now)
         resumed = self._paused_at is not None
         if resumed:
             # 本地时钟模式下暂停过：把基准顺延，恢复后歌词不跳句。
@@ -1024,6 +1047,7 @@ class MusicRuntime:
         self._lyric_wait_ticks = 0
 
     def _on_silence(self, now: float, status: str) -> None:
+        self._stop_buddy_beat()
         if self._silent_since is None:
             self._silent_since = now
         if self._leases and (now - self._silent_since) >= self._silence_limit(status):
@@ -1086,6 +1110,86 @@ class MusicRuntime:
         if self._lines or self._instrumental or self._track_key is None:
             return False
         return self._fetch_key == self._track_key and self._fetch_attempts > 0
+
+    def _buddy_bpm(self) -> float:
+        return self._number(
+            "music_buddy_wine_bpm",
+            float(BUDDY_WINE_BPM_DEFAULT),
+            low=float(BUDDY_WINE_BPM_MIN),
+            high=float(BUDDY_WINE_BPM_MAX),
+        )
+
+    def _buddy_interval_ms(self) -> int:
+        return max(100, int(round(60000.0 / self._buddy_bpm())))
+
+    def _tick_buddy_wine(self, now: float) -> None:
+        """识别到音乐时持续压缩回弹（「朋友的酒模式」）。
+
+        节拍不能挂在 1Hz 的判定拍上：132 BPM 需要 0.455s 一次，1Hz 采样最多只能
+        弹 1 次/秒，60–200 全区间都会退化成 60 BPM。这里单独挂 BPM 定时器，
+        ``poll`` 只负责启停与首拍。
+        """
+        if not self._flag("music_buddy_wine_mode", False):
+            self._stop_buddy_beat()
+            return
+        interval = self._buddy_interval_ms()
+        if self._buddy_timer is not None and interval == self._buddy_beat_interval:
+            if self._buddy_last_at is None:
+                self._buddy_squash(now)  # 刚起播/刚恢复：首拍不额外等一个间隔
+            return
+        self._stop_buddy_beat()
+        scheduler = getattr(self.context.ports, "scheduler", None)
+        if scheduler is None:
+            # 没有调度器（无 GUI 的嵌入场景）退回判定拍上限，至少不会完全失效。
+            self._buddy_squash(now)
+            return
+        try:
+            self._buddy_timer = scheduler.call_every(interval, self._buddy_beat)
+            self._buddy_beat_interval = interval
+        except Exception:  # noqa: BLE001 - 调度器失败不影响音乐链路
+            self._buddy_timer = None
+            self._buddy_beat_interval = 0
+            self._buddy_squash(now)
+            return
+        if self._buddy_last_at is None:
+            self._buddy_squash(now)
+
+    def _stop_buddy_beat(self) -> None:
+        timer, self._buddy_timer = self._buddy_timer, None
+        self._buddy_beat_interval = 0
+        self._buddy_last_at = None
+        if not timer:
+            return
+        scheduler = getattr(self.context.ports, "scheduler", None)
+        if scheduler is None:
+            return
+        try:
+            scheduler.cancel(timer)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _buddy_beat(self) -> None:
+        if not self._flag("music_buddy_wine_mode", False) or not self._playing_now:
+            self._stop_buddy_beat()
+            return
+        self._buddy_squash(self.clock())
+
+    def _buddy_squash(self, now: float) -> None:
+        last = self._buddy_last_at
+        if last is not None and now - last < buddy_wine_interval_seconds(self._buddy_bpm()):
+            return
+        targets = self._targets_for_pets()
+        if not targets:
+            return
+        self._buddy_last_at = now
+        for _slot, port in targets:
+            squash = getattr(port, "squash", None)
+            if not callable(squash):
+                continue
+            try:
+                squash()
+            except Exception:  # noqa: BLE001 - 视觉反馈失败不影响音乐链路
+                log.debug("buddy wine squash failed", exc_info=True)
 
     def _tick_singing(self, now: float, *, playing: bool) -> None:
         if not playing:
@@ -1628,6 +1732,7 @@ class MusicRuntime:
         self._stopped = True
         self._generation += 1
         timer, self._timer = self._timer, None
+        self._stop_buddy_beat()
         self._release()
         self._forget_track()
         scheduler = getattr(self.context.ports, "scheduler", None)

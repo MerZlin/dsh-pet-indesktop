@@ -37,6 +37,7 @@ def _get_json(
     params: tuple[tuple[str, str], ...],
     headers: tuple[tuple[str, str], ...] = (),
     timeout: float,
+    prefer_direct: bool = True,
 ) -> dict:
     try:
         _status, _headers, body = fetch_url(
@@ -44,6 +45,7 @@ def _get_json(
             headers=(("User-Agent", USER_AGENT), ("Referer", "https://space.bilibili.com/")) + headers,
             params=params,
             timeout=timeout,
+            prefer_direct=prefer_direct,
             max_bytes=MAX_BYTES,
         )
     except NetworkError:

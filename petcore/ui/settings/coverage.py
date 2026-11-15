@@ -29,6 +29,7 @@ CORE_MENU_SETTINGS_COVERAGE: dict[str, tuple[str, str]] = {
     "extensions_hub": ("mods", "扩展管理"),
     "drag_physics": ("interaction", "拖动物理"),
     "no_move": ("interaction", "不自动移动"),
+    "keyboard_move": ("appearance", "键盘控制快捷键"),
     "golden_spin": ("interaction", "黄金回旋"),
     "spawn_pet": ("pets", "生成子宠"),
     "clear_spawned_pets": ("pets", "收回所有子宠"),

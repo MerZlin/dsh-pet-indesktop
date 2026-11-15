@@ -114,6 +114,7 @@ class _Presentation:
         self.animations: list[tuple[str, bool]] = []
         self.released = 0
         self.hidden: list[str] = []
+        self.squashes: list[tuple[int, int, float]] = []
         self.start = start
 
     def say(self, text, *, duration_ms=4000, force=False):
@@ -128,6 +129,10 @@ class _Presentation:
 
     def release_loop(self):
         self.released += 1
+        return True
+
+    def squash(self, duration_ms=0, bounces=0, strength=0.0):
+        self.squashes.append((int(duration_ms), int(bounces), float(strength)))
         return True
 
     def play_event(self, group, variant=None):
@@ -167,6 +172,38 @@ def _playback(
     )
 
 
+class _Scheduler:
+    """最小调度器替身：记录 call_every，测试用 fire() 推进 BPM 节拍。"""
+
+    def __init__(self) -> None:
+        self.every: list[list] = []
+        self.cancelled: list[str] = []
+        self._next = 0
+
+    def call_every(self, interval_ms: int, callback):
+        self._next += 1
+        handle = f"every-{self._next}"
+        self.every.append([handle, int(interval_ms), callback])
+        return handle
+
+    def call_later(self, delay_ms: int, callback):
+        # 测试里同步执行：生产由 QtScheduler 排队回 GUI 线程。
+        callback()
+        self._next += 1
+        return f"later-{self._next}"
+
+    def cancel(self, handle: str) -> None:
+        self.cancelled.append(handle)
+
+    def cancel_owner(self, owner: str) -> None:
+        del owner
+
+    def fire(self) -> None:
+        for handle, _interval, callback in list(self.every):
+            if handle not in self.cancelled:
+                callback()
+
+
 class _Harness:
     """运行时 + 可推进的时钟 + 可替换的采样/网络。"""
 
@@ -180,10 +217,12 @@ class _Harness:
         threaded_fetch: bool = False,
     ):
         self.presentation = presentation or _Presentation()
+        self.scheduler = _Scheduler()
         self.ports = HostPorts(
             presentation=self.presentation,
             config=_Config(config or {}),
             http=http,
+            scheduler=self.scheduler,
         )
         self.runtime = runtime_mod.MusicRuntime(SimpleNamespace(ports=self.ports))
         self.now = 100.0
@@ -703,7 +742,7 @@ def test_manifest_and_contributions_load():
     assert manifest.id == "media.music"
     assert manifest.kind == "feature"
     assert manifest.execution == "host-only"
-    assert manifest.version == "1.2.0"
+    assert manifest.version == "1.4.0"
 
     manager = feature_mod.FeatureManager(HostPorts())
     diagnostics = manager.load(

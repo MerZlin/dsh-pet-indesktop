@@ -29,6 +29,8 @@ class AuthorAccount:
     platform: str
     handle: str
     url: str = ""
+    #: 该账号的贡献身份（如「桌宠独立端作者」）；空串 = 不显示身份。
+    role: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,15 +76,18 @@ class Fans:
     #: B 站口径的总人数（含重名占位）。``names`` 去重后可能比它小，
     #: 用它判断「有没有新粉丝」，不要拿唯一名字数去比。
     total: int = 0
+    #: 只更新总数时的时间（名单仍是 ``fetched_at`` 的旧快照）；空串 = 同一时刻。
+    total_fetched_at: str = ""
 
 
 #: 随包兜底：即使 JSON 缺失也保证作者与鸣谢区不为空。
 DEFAULT_AUTHOR_ACCOUNTS: tuple[AuthorAccount, ...] = (
-    AuthorAccount("BiliBili", "@張墨林"),
+    AuthorAccount("BiliBili", "@張墨林", role="桌宠独立端作者"),
     AuthorAccount("BiliBili", "@快乐小咸鱼a"),
-    AuthorAccount("抖音", "@張墨林"),
+    AuthorAccount("抖音", "@張墨林", role="桌宠独立端作者"),
     AuthorAccount("GitHub", "@MerZlin", "https://github.com/MerZlin"),
     AuthorAccount("BiliBili", "@炎圣人但丁"),
+    AuthorAccount("BiliBili", "@浩瀚星空2005", role="初始动画素材作者"),
 )
 
 DEFAULT_SPECIAL_THANKS: tuple[SpecialThanks, ...] = (
@@ -95,7 +100,6 @@ DEFAULT_SPECIAL_THANKS: tuple[SpecialThanks, ...] = (
     SpecialThanks("bilibili", "@这个刀子真甜", "", "桌宠形象来源"),
     SpecialThanks("bilibili", "@上善无形", "", "桌宠形象来源"),
     SpecialThanks("bilibili", "@ZipZipPipe", "", "桌宠形象来源"),
-    SpecialThanks("bilibili", "@浩瀚星空2005", "", "参考项目作者、初始动画素材来源"),
     SpecialThanks("bilibili", "@邦多利素世", "", "冬装大肥鱼形象作者"),
     SpecialThanks("bilibili", "@炎圣人但丁", "", "新动画素材制作者"),
     SpecialThanks("bilibili", "@玄秋沐雨", "", "手机版大肥鱼作者"),
@@ -105,6 +109,24 @@ DEFAULT_SPECIAL_THANKS: tuple[SpecialThanks, ...] = (
     SpecialThanks("bilibili", "@小透明到处逛", "", "桌宠素材制作"),
     SpecialThanks("bilibili", "@苏辞SuTzu", "", "QQ、DSH与桌宠联动贡献者"),
     SpecialThanks("bilibili", "@貓事液體這件事", "", "Codex联动作者"),
+    SpecialThanks(
+        "project",
+        "MerZlin/Animations",
+        "https://github.com/MerZlin/Animations",
+        "动画素材仓库（应用内下载源）",
+    ),
+    SpecialThanks(
+        "project",
+        "LorisYounger/VPet",
+        "https://github.com/LorisYounger/VPet",
+        "桌宠动画分类、事件动画与多宠设计参考；Apache License 2.0",
+    ),
+    SpecialThanks(
+        "assets",
+        "hunmer/aboutme-pets",
+        "https://github.com/hunmer/aboutme-pets",
+        "WebP 精灵表角色素材来源；CC BY-NC-SA 4.0 / 禁止商用，详见包内 NOTICE",
+    ),
     SpecialThanks(
         "company",
         "深度求索 DeepSeek",
@@ -178,7 +200,14 @@ def _parse_accounts(items: Any) -> tuple[AuthorAccount, ...]:
         if key in seen:
             continue
         seen.add(key)
-        accounts.append(AuthorAccount(platform, handle, clean_text(item.get("url"), 300)))
+        accounts.append(
+            AuthorAccount(
+                platform,
+                handle,
+                clean_text(item.get("url"), 300),
+                clean_text(item.get("role"), 80),
+            )
+        )
     return tuple(accounts) or DEFAULT_AUTHOR_ACCOUNTS
 
 
@@ -307,6 +336,7 @@ def parse_fans(payload: Any) -> Fans:
         fetched_at=clean_text(payload.get("fetched_at"), 40),
         names=tuple(names),
         total=max(0, total, len(names)),
+        total_fetched_at=clean_text(payload.get("total_fetched_at"), 40),
     )
 
 

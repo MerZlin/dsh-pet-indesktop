@@ -1030,3 +1030,59 @@ C 盘剩余空间显示选项（性能占用要低）」。
 | 实时性 | 下拉即写配置 + `changed`；「取消」按快照回滚（同本页其它开关） |
 | 搜索 | 行内文案 + `search_keys`（下载镜像/镜像/mirror/jsdelivr/加速/源）自动进索引 |
 | 测试 | `tests/test_petcore_pack_download.py`（`policy=mirror` 先分片、`policy=github` 不碰分片、未知值按 auto）、`tests/test_petcore_settings_assets_links.py`（写入/回滚/搜索）、`tests/test_petcore_config_scope.py`（归一化与全局作用域） |
+
+
+### 2026-11-13 — petcore 反馈批次 4：新增 6 个键（朝向 / 岛按钮 / 气泡风格 / 岛全屏 / 拖动倾斜）
+
+| 键 | 默认 | 作用域 | 归属行 | 披露 | 依赖 / 失败路径 | 搜索别名 |
+|---|---|---|---|---|---|---|
+| `anim_facing_default` | `"left"` | 本宠 | 外观与交互 → 大小与外观 →「动画朝向 → 素材默认朝向」 | primary | 生成出来就朝右的自定义角色改成 `right`；只影响镜像，不改移动/转向数学。非法值归一为 `left`。新增键，老配置取默认。 | 动画朝向 / 左右反了 / 镜像 / facing |
+| `anim_facing_groups` | `{}` | 本宠 | 同上「分组朝向」（待机/移动/转向/点击/拖拽/其他动作） | advanced（同一卡内六个下拉，全默认时无副作用） | 组覆盖优先于默认；「跟随默认」= 不写键；未知组/非法值归一化丢弃。 | 分组朝向 / 待机朝向 / 拖拽朝向 |
+| `island_show_toggle_button` | `True` | 全局 | 外观与交互 → 灵动岛 →「显隐桌宠按钮」 | primary | 关掉后卡片只留刷新余额/设置/清除消息；点击走 `CoreHost._toggle_pet_visible`。写配置即 `changed`，取消按快照回滚。 | 灵动岛 / 显隐桌宠 / 隐藏按钮 |
+| `self_talk_bubble_style` | `"classic_top"` | 本宠 | 互动与物理 → 点击台词/自言自语 →「气泡」卡 | primary | 五条预设白名单；下一句气泡生效（`PetWindow.say` 每次都同步）。旧壳同名键已补进迁移别名，升级保留用户选择。 | 气泡类型 / 气泡样式 / 水泡 / 玻璃 / 纸感 / 暖黄 |
+| `island_hide_fullscreen` | `False` | 全局 | 外观与交互 → 灵动岛 →「全屏时隐藏」 | primary | 与 `auto_hide_fullscreen` 共用探测器：任一开着就起表；宠物隐藏由 `set_hide_pets(auto)` 单独门控。默认不勾 = 保持升级前行为；非 Windows 置灰。 | 灵动岛 / 全屏 / 自动隐藏 |
+| `drag_lean_enabled` | `True` | 本宠 | 互动与物理 → 拖拽与投掷 →「拖动倾斜」 | primary | 关掉后 `MotionController` 不积分倾角；只影响渲染，不改拖拽/抛掷位置。 | 拖动倾斜 / 牵引 / 旋转 / lean |
+
+准出对应：每个键都有默认值 + 归一化 + 持久化 round trip（`tests/test_petcore_anim_facing.py`、`tests/test_petcore_settings.py`、`tests/test_petcore_isle*`、`tests/test_petcore_fullscreen_hide.py`、`tests/test_petcore_drag_lean.py`、`tests/test_petcore_bubble_styles.py`）；取消/关闭按打开时快照回滚（`discard_changes`）；新增键都不改变既有键的默认值与迁移。全局/本宠归属由 `GLOBAL_CONFIG_KEYS` 与现有 `ScopedConfig` 路由决定，没有第二份真值。
+
+
+### 2026-11-13 — petcore 反馈批次 5：新增 5 个键（气泡回退 / 倾斜强度 / 工作锁 / 手机版 / 键盘控制 / 回收站）
+
+| 键 | 默认 | 作用域 | 归属行 | 披露 | 依赖 / 失败路径 | 搜索别名 |
+|---|---|---|---|---|---|---|
+| `drag_lean_strength` | `30` | 本宠 | 互动与物理 → 拖拽与投掷 →「倾斜强度」 | primary | 0–100；0 关闭，100% = 24°，默认 30% ≈ 7.2°。只影响渲染倾角，不改拖拽/抛掷位置。 | 拖动倾斜 / 倾斜强度 / 牵引 / lean |
+| `work_animations_only` | `True` | 本宠 | 互动与物理 → 动画 →「工作时只播工作动画」 | primary | `notify_agent_state("working")` 时只选 `GraphType.WORK` 的 `B_LOOP`；当前角色没有 work 素材时保持 idle，不伪造；拖拽/探头/甩飞/锁屏不锁。 | 工作动画 / 工作时 / 只播工作 / work |
+| `chat_layout` | `"desktop"` | 全局 | AI 对话 → 对话窗外观 →「窗口布局」 | primary | `desktop|phone`；手机版是单栏 + 会话抽屉 + 底部视图 chips。下次打开对话窗生效；标题栏手机图标可立即重建窗口。 | 对话窗布局 / 手机版 / phone / chat layout |
+| `chat_trash_retention_days` | `30` | 全局 | AI 对话 → 对话窗外观 →「回收站保留天数」 | primary | 0–365；0 = 不自动清理。删除会话先进回收站；`_ensure`/建窗时 `purge()` 一次，不新增常驻定时器。 | 回收站 / 删除恢复 / 保留天数 / trash |
+| `hotkey_keyboard_move` | `"Ctrl+Alt+M"` | 全局 | 外观与交互 → 交互 →「键盘控制快捷键」 | primary | 至少一个修饰键；注册失败必须设置行/气泡可见（本行已回填 `(ok, message)`）。控制模式本身是会话态，不落盘。 | 键盘控制 / WASD / 方向键 / 控制移动 / hotkey |
+
+准出对应：`test_petcore_settings.py`（倾斜强度/工作锁/键盘快捷键行）、
+`tests/test_petcore_chat_phone.py`（布局切换/手机骨架/对比度）、
+`tests/test_petcore_chat_trash.py`（回收站/保留天数）、
+`tests/test_petcore_work_animations.py`、`tests/test_petcore_keyboard_drive.py`、
+`tests/test_petcore_settings_cli.py`（schema 集合与写入校验）。取消/关闭仍按打开时快照回滚；
+`chat_layout`/`chat_trash_retention_days` 在 AI 对话扩展页内，扩展未安装时仍可通过
+`petcore settings set` 写入。
+
+
+### 2026-11-14 — petcore 反馈批次 6：新增 1 个键（朋友的酒模式）
+
+| 键 | 默认 | 作用域 | 归属行 | 披露 | 依赖 / 失败路径 | 搜索别名 |
+|---|---|---|---|---|---|---|
+| `music_buddy_wine_mode` | `False` | 全局 | 音乐 → 播放与唱歌 →「朋友的酒模式」 | primary | 识别到音乐时每秒压缩回弹一次；暂停/停止即停；强度/次数沿用 `click_squash_*`。拖拽/抛掷/探头/击飞不叠加第二套形变。只影响渲染，不改动画与位置。 | 朋友的酒 / Q弹 / 压缩 / 回弹 / 音乐 / music |
+
+准出对应：`tests/test_petcore_buddy_wine.py`（playing 每秒一次、关闭不发、暂停不发、
+接管态 no-op）、`tests/test_petcore_settings_cli.py`（schema/CLI 可见）、
+`tests/test_petcore_settings.py`（音乐设置页复选框）。扩展未安装时仍可用
+`petcore settings set music_buddy_wine_mode true` 写入全局配置。
+
+
+### 2026-11-15 — petcore 反馈批次 7：新增 1 个键（朋友的酒 BPM）
+
+| 键 | 默认 | 作用域 | 归属行 | 披露 | 依赖 / 失败路径 | 搜索别名 |
+|---|---|---|---|---|---|---|
+| `music_buddy_wine_bpm` | `132` | 全局 | 音乐 → 播放与唱歌 →「弹跳节奏」 | primary | Q 弹节流间隔 = `60 / bpm` 秒，范围 60–200，越界/非法值钳制；只在「朋友的酒模式」开启且识别到在播时生效。只改节奏，不改动画/位置；暂停/停止不发。 | 朋友的酒 / BPM / 弹跳频率 / Q弹 / 压缩 / 回弹 / 音乐 / music |
+
+准出对应：`tests/test_petcore_buddy_wine.py`（132 BPM 默认、60/200 边界、暂停不发、接管态 no-op）、
+`tests/test_petcore_music_mod.py`（manifest 1.4.0）、`tests/test_petcore_settings_cli.py`（schema 集合/类型/范围）。
+扩展未安装时仍可用 `petcore settings set music_buddy_wine_bpm 140` 写入全局配置。

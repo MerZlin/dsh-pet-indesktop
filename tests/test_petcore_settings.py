@@ -40,6 +40,7 @@ CORE_TITLES = [
     "菜单",
     "扩展管理",
     "API 与账户",
+    "使用手册",
     "关于与诊断",
     "致谢",
 ]
@@ -253,6 +254,11 @@ def test_edge_probe_and_hotkey_settings_are_live(app, tmp_path):
     assert host.hotkey == "Ctrl+Alt+P"
     assert host.config.get("hotkey_toggle_pet") == "Ctrl+Alt+P"
 
+    appearance.keyboard_hotkey_edit.setText("ctrl+alt+m")
+    appearance.keyboard_hotkey_edit.editingFinished.emit()
+    assert appearance.keyboard_hotkey_edit.text() == "Ctrl+Alt+M"
+    assert host.config.get("hotkey_keyboard_move") == "Ctrl+Alt+M"
+
     dialog.cancel_button.click()
     assert host.window.edge_probe is False
     assert host.config.get("edge_probe_enabled") is False
@@ -371,8 +377,10 @@ def test_close_button_saves_live_changes(app, tmp_path):
 def test_initial_page_and_select_page(app, tmp_path):
     dialog = SettingsDialog(_host(tmp_path), initial_page="appearance")
     assert dialog.stack.currentWidget().title == "外观与交互"
-    dialog.select_page("about")
+    assert dialog.select_page("about") is True
     assert dialog.stack.currentWidget().title == "关于与诊断"
+    assert dialog.select_page("no-such-page") is False
+    assert dialog.select_page("extension:no-such-extension") is False
     dialog.close()
 
 
@@ -380,8 +388,8 @@ def test_search_filters_by_title_and_keywords(app, tmp_path):
     dialog = SettingsDialog(_host(tmp_path))
     dialog.search.setText("外观")
     assert dialog.nav.item(0).isHidden() is True
-    assert dialog.nav.item(1).isHidden() is False
-    assert dialog.search_status.text() == "匹配 1 个页面"
+    assert dialog.nav.item(CORE_TITLES.index("外观与交互")).isHidden() is False
+    assert "匹配" in dialog.search_status.text(), "使用手册也会命中「外观」"
 
     dialog.search.clear()
     assert all(not dialog.nav.item(row).isHidden() for row in range(dialog.nav.count()))
@@ -594,6 +602,73 @@ def test_island_page_swaps_the_header_dot_for_a_message_toggle(app, tmp_path):
     appearance.island_messages_check.setChecked(False)
     app.processEvents()
     assert host.config.get("island_show_messages") is False
+    dialog.close()
+
+
+def test_island_page_offers_fullscreen_hide_off_by_default(app, tmp_path):
+    """「全屏时隐藏灵动岛」默认不勾；勾上立刻写配置（探测共用）。"""
+    host = _host(tmp_path)
+    dialog = SettingsDialog(host)
+    appearance = _page(dialog, "外观与交互")
+    box = appearance.island_fullscreen_check
+    assert box.isChecked() is False
+    box.setChecked(True)
+    app.processEvents()
+    assert host.config.get("island_hide_fullscreen") is True
+    dialog.close()
+
+
+def test_self_talk_page_exposes_bubble_style(app, tmp_path):
+    """气泡风格下拉：5 种预设、写配置、取消回滚。"""
+    host = _host(tmp_path)
+    dialog = SettingsDialog(host)
+    page = _page(dialog, "互动与物理")
+    self_talk = _embedded(page, "自言自语")
+    assert self_talk.bubble_style.count() == 5
+    assert self_talk.bubble_style.currentData() == "classic_top"
+    self_talk.bubble_style.setCurrentIndex(
+        self_talk.bubble_style.findData("glass_right")
+    )
+    app.processEvents()
+    assert host.config.get("self_talk_bubble_style") == "glass_right"
+    self_talk.discard_changes()
+    assert host.config.get("self_talk_bubble_style") == "classic_top"
+    dialog.close()
+
+
+def test_island_page_toggles_the_card_pet_button(app, tmp_path):
+    """「显隐桌宠按钮」默认开，关掉立刻写配置（岛按配置重建卡片）。"""
+    host = _host(tmp_path)
+    dialog = SettingsDialog(host)
+    appearance = _page(dialog, "外观与交互")
+    assert appearance.island_toggle_button_check.isChecked() is True
+    appearance.island_toggle_button_check.setChecked(False)
+    app.processEvents()
+    assert host.config.get("island_show_toggle_button") is False
+    dialog.close()
+
+
+def test_appearance_page_exposes_anim_facing_rows(app, tmp_path):
+    """动画朝向：默认朝左；主开关与分组下拉即时写配置，取消回滚。"""
+    host = _host(tmp_path)
+    dialog = SettingsDialog(host)
+    appearance = _page(dialog, "外观与交互")
+    assert appearance.facing_default_combo.currentData() == "left"
+    appearance.facing_default_combo.setCurrentIndex(
+        appearance.facing_default_combo.findData("right")
+    )
+    app.processEvents()
+    assert host.config.get("anim_facing_default") == "right"
+    combo = appearance.facing_group_combos["drag"]
+    combo.setCurrentIndex(combo.findData("right"))
+    app.processEvents()
+    assert host.config.get("anim_facing_groups") == {"drag": "right"}
+    assert appearance.dirty() is True
+    appearance.discard_changes()
+    assert host.config.get("anim_facing_default") == "left"
+    assert host.config.get("anim_facing_groups") == {}
+    assert appearance.facing_default_combo.currentData() == "left"
+    assert appearance.facing_group_combos["drag"].currentData() == ""
     dialog.close()
 
 
@@ -1076,6 +1151,39 @@ def test_interaction_page_exposes_squash_elasticity(app, tmp_path: Path) -> None
     assert page.squash_bounces.value() == 1
     assert page.squash_strength.value() == 100
     assert page.squash_ms.value() == 220
+    dialog.deleteLater()
+
+
+def test_interaction_page_exposes_drag_lean_strength(app, tmp_path: Path) -> None:
+    host = _host(tmp_path)
+    dialog = SettingsDialog(host)
+    page = _page(dialog, "互动与物理")
+    assert page.lean_strength.value() == 30
+    assert host.config.get("drag_lean_strength") == 30
+
+    page.lean_strength.setValue(80)
+    assert host.config.get("drag_lean_strength") == 80
+
+    page.discard_changes()
+    assert page.lean_strength.value() == 30
+    assert host.config.get("drag_lean_strength") == 30
+    dialog.deleteLater()
+
+
+def test_interaction_page_exposes_work_animation_lock(app, tmp_path: Path) -> None:
+    host = _host(tmp_path)
+    dialog = SettingsDialog(host)
+    page = _page(dialog, "互动与物理")
+    box = page._checks["work_animations_only"]
+    assert box.isChecked() is True
+    assert host.config.get("work_animations_only") is True
+
+    box.setChecked(False)
+    assert host.config.get("work_animations_only") is False
+
+    page.discard_changes()
+    assert box.isChecked() is True
+    assert host.config.get("work_animations_only") is True
     dialog.deleteLater()
 
 

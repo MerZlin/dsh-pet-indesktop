@@ -20,7 +20,9 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from ...chat.session_store import ChatSession, SessionStore
+from ...contracts.speech import SpeechError, SpeechRequest
 from .dsh_controller import DshHub
+from .speech_text import clean_for_speech
 from .styles import safe_accent
 from .window import ChatWindow
 
@@ -110,6 +112,8 @@ class ChatController(QObject):
         self._channel_submit: dict[str, Callable[[str, int, str], None]] = {}
         self._channel_stop: dict[str, Callable[[int, str], None]] = {}
         self._recording_key: tuple[str, int] | None = None
+        #: 逐条朗读的代数（按窗口）：新请求/停止只作废本窗口的旧回调。
+        self._speech_seq: dict[tuple[str, int], int] = {}
         self._dsh_hub: DshHub | None = None
         self._asr = getattr(host, "asr", None)
         if self._asr is not None:
@@ -784,6 +788,52 @@ class ChatController(QObject):
                 return None
         return window
 
+    def _on_layout_requested(self, state: _ChatState, layout: str) -> None:
+        """切换桌面/手机版：落盘后重建同一 (owner, slot) 的窗口。"""
+        if state.active:
+            window = state.window
+            shower = getattr(window, "show_error", None)
+            if callable(shower):
+                shower("busy", "回答中不能切换布局，等这次回答结束再试。")
+            return
+        target = "phone" if str(layout or "").strip().lower() == "phone" else "desktop"
+        config = self._config()
+        if config is not None:
+            try:
+                config.set("chat_layout", target)
+                config.save()
+            except OSError:
+                logger.warning("chat layout save failed", exc_info=True)
+        window = state.window
+        state.window = None
+        if window is not None:
+            window.close()
+            window.deleteLater()
+        self._create_window(state)
+        if state.window is not None:
+            state.window.show()
+
+    def _open_chat_settings(self, state: _ChatState) -> None:
+        """标题栏齿轮：打开设置窗并跳到 AI 对话的外观段。
+
+        扩展没装时 ``extension:chat`` 选不中，退回「API 与账户」——那里是用户
+        最常需要先配的服务/Key，比停在第一页有用。
+        """
+        opener = getattr(self.host, "open_settings", None)
+        if not callable(opener):
+            return
+        page = "extension:chat#对话窗外观"
+        window = self._pet_window(state.slot)
+        try:
+            selected = opener(page, window=window)
+        except TypeError:
+            selected = opener(page)
+        if selected is False:
+            try:
+                opener("api", window=window)
+            except TypeError:
+                opener("api")
+
     def _character_for(self, slot: int) -> str:
         pets = getattr(self.host, "pets", None)
         if pets is not None:
@@ -796,6 +846,13 @@ class ChatController(QObject):
             return str(config.get("character") or "default")
         return "default"
 
+    def _trash_retention_days(self) -> int:
+        """回收站保留天数；0 = 不自动清理。"""
+        try:
+            return max(0, int(self._config_get("chat_trash_retention_days", 30) or 0))
+        except (TypeError, ValueError):
+            return 30
+
     def _ensure(
         self, owner: str, pet_slot: int | None, *, with_window: bool = True
     ) -> _ChatState:
@@ -805,6 +862,12 @@ class ChatController(QObject):
         state = self._states.get(key)
         if state is None:
             store = SessionStore(self.root, slot=slot, character_id=self._character_for(slot))
+            days = self._trash_retention_days()
+            if days > 0:
+                try:
+                    store.purge(days)
+                except OSError:
+                    logger.warning("chat trash purge failed", exc_info=True)
             sessions = store.list_sessions(channel="ai")
             session = sessions[0] if sessions else store.new_session()
             state = _ChatState(
@@ -830,7 +893,14 @@ class ChatController(QObject):
             # 审批是全局事件：只在创建 Hub 时接一次，别按窗口重复接（否则每开
             # 一个聊天窗就会把同一条审批通知多次）。
             self._dsh_hub.approval_pending.connect(self._on_dsh_approval)
-        window = ChatWindow(
+        from .phone_window import PhoneChatWindow
+
+        window_cls = (
+            PhoneChatWindow
+            if str(self._config_get("chat_layout", "desktop") or "desktop") == "phone"
+            else ChatWindow
+        )
+        window = window_cls(
             title=self._title(state.owner, state.slot),
             font_size=self._font_size(),
             font_family=self._font_family(),
@@ -857,8 +927,20 @@ class ChatController(QObject):
         window.closed.connect(lambda s=key: self._on_closed(s))
         window.pin_toggled.connect(self._on_pin_toggled)
         window.dark_toggled.connect(self._on_dark_toggled)
+        window.settings_requested.connect(
+            lambda s=state: self._open_chat_settings(s)
+        )
+        window.layout_requested.connect(
+            lambda layout, s=state: self._on_layout_requested(s, layout)
+        )
         window.record_requested.connect(lambda key=key: self._start_recording(key))
         window.record_stopped.connect(lambda key=key: self._stop_recording(key))
+        window.speech_requested.connect(
+            lambda text, s=key: self._speak_reply(s, text)
+        )
+        window.speech_stop_requested.connect(
+            lambda s=key: self._stop_speech(s)
+        )
         window.session_archive_requested.connect(
             lambda session_id, archived, s=state: self._on_archive(
                 s, session_id, archived
@@ -867,6 +949,7 @@ class ChatController(QObject):
         window.session_delete_requested.connect(
             lambda session_id, s=state: self._on_delete(s, session_id)
         )
+        window.trash_requested.connect(lambda s=state: self._open_trash(s))
         window.archived_toggled.connect(
             lambda _checked=False, s=state: self._refresh_history(s)
         )
@@ -892,6 +975,10 @@ class ChatController(QObject):
         except OSError:
             sessions = []
         window.set_history(sessions, state.session.session_id)
+        try:
+            window.set_trash_count(len(state.store.list_trashed()))
+        except OSError:
+            pass
         window.load_messages(state.session.messages)
         state.window = window
         return window
@@ -1247,24 +1334,43 @@ class ChatController(QObject):
             self._load_fallback(state)
         self._refresh_history(state)
 
+    def _open_trash(self, state: _ChatState) -> None:
+        from .trash_dialog import TrashDialog
+
+        dialog = TrashDialog(
+            state.store,
+            retention_days=self._trash_retention_days(),
+            parent=state.window,
+        )
+        dialog.changed.connect(lambda s=state: self._refresh_history(s))
+        dialog.exec()
+
     def _on_delete(self, state: _ChatState, session_id: str) -> None:
         session_id = str(session_id or "")
         if not session_id:
             return
-        title = state.window._session_titles.get(session_id, "这个会话") if state.window else "这个会话"
+        title = "这个会话"
+        if state.window is not None:
+            getter = getattr(state.window, "session_title", None)
+            if callable(getter):
+                title = str(getter(session_id) or title)
+            else:
+                title = state.window._session_titles.get(session_id, title)
+        days = self._trash_retention_days()
+        keep = f"保留 {days} 天，可在回收站恢复" if days else "可在回收站恢复"
         answer = QMessageBox.question(
             state.window,
             "删除会话",
-            f"确定删除「{title}」？删除后无法恢复。",
+            f"确定删除「{title}」？会话会移入回收站，{keep}。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
-            state.store.delete(session_id)
+            state.store.trash(session_id)
         except OSError:
-            logger.warning("chat session delete failed", exc_info=True)
+            logger.warning("chat session trash failed", exc_info=True)
             return
         if state.session.session_id == session_id:
             self._load_fallback(state)
@@ -1369,9 +1475,109 @@ class ChatController(QObject):
         window.set_partial_transcript("")
         window.set_recording(False, asr_reason_text(reason))
 
+    # ---------------------------------------------------------------- 逐条朗读
+    def _speech_port(self):
+        ports = getattr(self.host, "ports", None)
+        return getattr(ports, "speech", None) if ports is not None else None
+
+    @staticmethod
+    def _speech_error_text(error) -> str:
+        reason = str(getattr(error, "reason", "") or "")
+        return {
+            "auth": "语音服务鉴权失败：检查设置 → 语音里的密钥",
+            "network": "语音服务网络不可达，稍后再试",
+            "timeout": "语音合成超时，稍后再试",
+            "rate_limit": "语音请求过于频繁，稍后再试",
+            "cache": "语音缓存不可用",
+            "protocol": "语音服务返回了无法识别的响应",
+        }.get(
+            reason,
+            "语音不可用：检查免打扰/静音时段或设置 → 语音后端",
+        )
+
+    @staticmethod
+    def _speech_owner(key: tuple[str, int]) -> str:
+        """每个对话窗独立 owner：两个窗口同时朗读时互不 cancel。"""
+        return f"chat:{key[0]}:{key[1]}"
+
+    def _speak_reply(self, key: tuple[str, int], text: str) -> None:
+        state = self._states.get(key)
+        window = state.window if state is not None else None
+        if window is None:
+            return
+        clean = clean_for_speech(text)
+        if not clean:
+            window.speech_failed("这条回复没有可朗读的文字")
+            return
+        port = self._speech_port()
+        if port is None:
+            window.speech_failed("语音不可用：请到设置 → 语音配置后端")
+            return
+        seq = self._speech_seq.get(key, 0) + 1
+        self._speech_seq[key] = seq
+        owner = self._speech_owner(key)
+
+        def current() -> bool:
+            return self._speech_seq.get(key, 0) == seq
+
+        def live() -> bool:
+            return (
+                current()
+                and state.window is not None
+                and state.window.isVisible()
+            )
+
+        def call(method, *args) -> None:
+            if not current():
+                return
+            try:
+                method(*args)
+            except RuntimeError:
+                pass
+
+        try:
+            cancel = getattr(port, "cancel_owner", None)
+            if callable(cancel):
+                cancel(owner)
+            port.speak(
+                SpeechRequest(text=clean),
+                owner=owner,
+                slot=state.slot,
+                guard=live,
+                on_done=lambda _result: call(window.speech_started),
+                on_finished=lambda _result: call(window.speech_finished),
+                on_error=lambda error: call(
+                    window.speech_failed, self._speech_error_text(error)
+                ),
+            )
+        except SpeechError as exc:
+            window.speech_failed(self._speech_error_text(exc))
+        except Exception:  # noqa: BLE001 - 语音失败不能影响文字回答
+            logger.debug("chat speech failed", exc_info=True)
+            window.speech_failed("语音不可用：请到设置 → 语音配置后端")
+
+    def _stop_speech(self, key: tuple[str, int] | None = None) -> None:
+        if key is None:
+            return
+        self._speech_seq[key] = self._speech_seq.get(key, 0) + 1
+        state = self._states.get(key)
+        if state is not None and state.window is not None:
+            try:
+                state.window.speech_finished()
+            except RuntimeError:
+                pass
+        port = self._speech_port()
+        cancel = getattr(port, "cancel_owner", None) if port is not None else None
+        if callable(cancel):
+            try:
+                cancel(self._speech_owner(key))
+            except Exception:  # noqa: BLE001 - 停止失败不该挡住关窗
+                logger.debug("chat speech cancel failed", exc_info=True)
+
     def _on_closed(self, key: tuple[str, int]) -> None:
         state = self._states.get(key)
         if state is not None:
+            self._stop_speech(key)
             self._flush_dsh(state)
             self._save(state)
 
@@ -1407,3 +1613,7 @@ class ChatController(QObject):
         except OSError:
             sessions = []
         state.window.set_history(sessions, state.session.session_id)
+        try:
+            state.window.set_trash_count(len(state.store.list_trashed()))
+        except OSError:
+            pass

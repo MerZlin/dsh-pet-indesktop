@@ -334,8 +334,10 @@ def test_refresh_without_cookie_keeps_snapshot(tmp_path: Path, monkeypatch) -> N
     report = service.refresh()
 
     assert report.fans_ok is False
-    assert report.errors["fans"] == "auth"
+    assert "fans" not in report.errors, "没有凭据不是错误，只更新免登录总数"
+    assert report.fan_total == 9
     assert "fans" not in fetcher.calls, "没有凭据时不该发起需要登录的请求"
+    assert service.live_fan_total()[0] == 9
 
 
 def test_credits_refresh_writes_cache_and_counts(tmp_path: Path, monkeypatch) -> None:
