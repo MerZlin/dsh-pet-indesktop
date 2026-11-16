@@ -214,8 +214,9 @@ def test_statutory_holiday_name_reports_free_days_only():
     assert statutory_holiday_name(date(2026, 2, 16)) == "春节"
     # 调休补班的周六（2026-10-10）是上班日，不属于放假日
     assert statutory_holiday_name(date(2026, 10, 10)) is None
-    # 内嵌安排表之外（2026-10-11 起）降级为 None = 「未知」，不是「确认上班」
-    assert statutory_holiday_name(date(2027, 1, 1)) is None
+    # 内嵌安排表之外降级为 None = 「未知」，不是「确认上班」。取远期年份：
+    # 安排表随 lunar-python 升级逐年延长（1.4.9 已收 2027 年），写「明年」即过期。
+    assert statutory_holiday_name(date(2099, 1, 1)) is None
 
 
 def test_statutory_holidays_are_idle_all_day():
@@ -276,16 +277,20 @@ def test_format_switch_time_same_iso_week_uses_bare_weekday():
 
 
 def test_pricing_degrades_without_holiday_calendar_data():
-    """2027 起 HolidayUtil 无内嵌数据：不抛异常，退回星期规则。"""
-    # 2027-01-01 是周五，表外日期按工作日高峰判
-    assert balance.deepseek_pricing_tier(_bj(10, day=1, month=1, year=2027)) == "peak"
-    assert balance.deepseek_pricing_tier(_bj(13, day=1, month=1, year=2027)) == "idle"
-    # 周末规则与表无关
-    assert balance.deepseek_pricing_tier(_bj(10, day=2, month=1, year=2027)) == "idle"
+    """HolidayUtil 内嵌表之外的日期：不抛异常，退回星期规则。
+
+    用 2099 年而不是「下一个未发布年」：表的截止年跟着 lunar-python 版本走
+    （requirements 无上限），拿相邻年份当表外日期，库一升级用例就红。
+    """
+    # 2099-01-01 是周四，表外日期按工作日高峰判
+    assert balance.deepseek_pricing_tier(_bj(10, day=1, month=1, year=2099)) == "peak"
+    assert balance.deepseek_pricing_tier(_bj(13, day=1, month=1, year=2099)) == "idle"
+    # 周末规则与表无关（2099-01-03 是周六）
+    assert balance.deepseek_pricing_tier(_bj(10, day=3, month=1, year=2099)) == "idle"
     # 切换扫描同样可用（不因表耗尽而抛错）
-    tier, when = balance._next_pricing_switch(_bj(10, day=1, month=1, year=2027))
+    tier, when = balance._next_pricing_switch(_bj(10, day=1, month=1, year=2099))
     assert tier == "idle"
-    assert when.date() == date(2027, 1, 1)
+    assert when.date() == date(2099, 1, 1)
 
 
 def test_chat_session_title_roundtrip():

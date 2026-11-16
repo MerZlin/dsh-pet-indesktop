@@ -678,7 +678,10 @@ def test_add_accepts_full_remember_command_text(tmp_path):
 def test_manual_pin_remember_topic_unarchives(tmp_path):
     """D：手动钉「记住话题：」是允许解除归档的入口（自动来源不允许）。"""
     path = tmp_path / "memory.json"
-    mem = ChatMemory(path, clock=lambda: NOW)
+    # 时钟必须是真实「现在」而不是固定的 NOW：load() 的读副本按墙上时钟判
+    # 「topic 超 14 天未命中即归档」，用固定 NOW 写条目，NOW 过去 14 天后
+    # （2026-11-04 起）刚解除归档的条目会在读回时又被标成 archived。
+    mem = ChatMemory(path, clock=lambda: datetime.now(timezone.utc))
     entry, _ = mem.add("记住话题：那个 Bug")
     assert mem.set_archived(entry["id"], True) is True
     assert mem.load()[0]["archived"] is True
