@@ -23,6 +23,7 @@ from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from ... import paths
 from ...net import packs
+from ...net.github_mirrors import expand_github_urls, read_mirror_config
 from ..download_progress import DownloadPanel
 from .base import make_button
 
@@ -120,6 +121,8 @@ def fetch_first_index(
     *,
     attempts: int = 2,
     use_cache: bool = True,
+    policy: str = "auto",
+    custom_mirror_prefix: str = "",
 ) -> packs.PackIndex:
     """按顺序试每个索引源（每个最多试 ``attempts`` 次）；成功就落缓存。
 
@@ -134,8 +137,11 @@ def fetch_first_index(
         cached = load_cached_index(cache_file)
         if cached is not None:
             return cached
+    effective_urls = expand_github_urls(
+        urls, policy, custom_prefix=custom_mirror_prefix
+    )
     problems: list[str] = []
-    for url in urls:
+    for url in effective_urls:
         host = packs.host_of(url) or "-"
         for _attempt in range(max(1, int(attempts))):
             try:
@@ -168,6 +174,7 @@ class PackJob(QObject):
         cache_file: Path,
         connections: int = DOWNLOAD_CONNECTIONS,
         policy: str = "auto",
+        custom_mirror_prefix: str = "",
     ) -> None:
         super().__init__()
         self._target = target
@@ -175,6 +182,7 @@ class PackJob(QObject):
         self._cache_file = Path(cache_file)
         self._connections = int(connections)
         self._policy = str(policy or "auto")
+        self._custom_mirror_prefix = str(custom_mirror_prefix or "")
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
         #: 索引里的那条记录（`done` 之后 UI 需要它的 `character` 才能装成对的角色 id）。
@@ -207,7 +215,12 @@ class PackJob(QObject):
     def _run(self) -> None:
         try:
             self._say("正在读取素材包索引…")
-            index = fetch_first_index(self._target.index_urls(), self._cache_file)
+            index = fetch_first_index(
+                self._target.index_urls(),
+                self._cache_file,
+                policy=self._policy,
+                custom_mirror_prefix=self._custom_mirror_prefix,
+            )
             entry = index.by_id(self._target.pack_id)
             if entry is None:
                 raise ValueError(f"索引里没有素材包 {self._target.pack_id}")
@@ -220,6 +233,7 @@ class PackJob(QObject):
                 self._dest_dir,
                 connections=self._connections,
                 policy=self._policy,
+                custom_mirror_prefix=self._custom_mirror_prefix,
                 progress=self.progress.emit,
                 cancel=self._cancel.is_set,
                 max_bytes=MAX_PACK_BYTES,
@@ -365,18 +379,16 @@ class PackRow(QWidget):
         self.download_button.setEnabled(False)
         self.panel.begin(0, connections=DOWNLOAD_CONNECTIONS)
         self._set_status("正在准备…")
-        policy = "auto"
         config = getattr(self._page, "config", None)
-        if callable(config):
-            try:
-                policy = str(config().get("pack_mirror_policy") or "auto")
-            except Exception:  # noqa: BLE001 - 配置读不出来就用默认
-                policy = "auto"
+        policy, custom_prefix = read_mirror_config(
+            config() if callable(config) else None
+        )
         job = PackJob(
             target=self._target,
             dest_dir=self.dest_dir(),
             cache_file=cache_path(self._page.host.root),
             policy=policy,
+            custom_mirror_prefix=custom_prefix,
         )
         job.progress.connect(self.panel.update_progress)
         job.status.connect(self._set_status)
@@ -429,7 +441,7 @@ class PackRow(QWidget):
         self._finish()
         hint = ""
         if "github.com" in message or "Timeout" in message or "timeout" in message:
-            hint = "；GitHub 直连不可达时可先开代理再试，或点「打开 GitHub」手动下载"
+            hint = "；可在上方「下载镜像」切换公益加速镜像 / jsDelivr 分片，或点「打开 GitHub」手动下载"
         self.panel.fail(f"下载失败：{message}{hint}")
 
     # ------------------------------------------------------------ 导入

@@ -215,6 +215,8 @@ def install_package(
     index_origin: str = "",
     connections: int = 1,
     mirror_policy: str = "auto",
+    github_mirror: str = "auto",
+    custom_mirror_prefix: str = "",
 ) -> InstallOutcome:
     root = Path(root)
     platform = platform or model.normalize_platform(sys.platform)
@@ -277,6 +279,8 @@ def install_package(
             allow_local_file=allow_local_file,
             connections=connections,
             mirror_policy=mirror_policy,
+            github_mirror=github_mirror,
+            custom_mirror_prefix=custom_mirror_prefix,
         )
     except MarketError as exc:
         return InstallOutcome(False, str(exc), mod_id=package.id, previous_version=previous)

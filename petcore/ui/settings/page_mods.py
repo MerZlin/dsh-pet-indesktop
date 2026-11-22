@@ -2,19 +2,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtCore import QThread, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ...mods.feature import CORE_FEATURE_IDS
+from ...net import aboutme_repo
+from ...net.github_mirrors import read_mirror_config
 from .base import SettingsPage, make_button, make_checkbox
 
 #: 下载/安装线程不能挂在页面上：用户关窗时线程可能还在跑。
@@ -24,19 +30,41 @@ _ACTIVE_URL_JOBS: set = set()
 class _UrlPreviewJob(QThread):
     ready = Signal(object, str)
     failed = Signal(str, str)
+    progress = Signal(int, int, str)
 
-    def __init__(self, url: str, root: Path) -> None:
+    def __init__(
+        self,
+        url: str,
+        root: Path,
+        all_actions: bool = False,
+        *,
+        mirror_policy: str = "auto",
+        custom_mirror_prefix: str = "",
+    ) -> None:
         super().__init__()
         self.url = str(url)
         self.root = Path(root)
+        self.all_actions = bool(all_actions)
+        self.mirror_policy = str(mirror_policy or "auto")
+        self.custom_mirror_prefix = str(custom_mirror_prefix or "")
 
     def run(self) -> None:
         from ...mods import url_install
 
         path = None
         try:
-            path = url_install.fetch_zip(self.url, root=self.root)
-            preview = url_install.preview_zip(path, source=self.url)
+            if url_install.is_tree_url(self.url):
+                path, preview = url_install.fetch_tree(
+                    self.url,
+                    root=self.root,
+                    progress=self.progress.emit,
+                    all_actions=self.all_actions,
+                    mirror_policy=self.mirror_policy,
+                    custom_mirror_prefix=self.custom_mirror_prefix,
+                )
+            else:
+                path = url_install.fetch_zip(self.url, root=self.root)
+                preview = url_install.preview_zip(path, source=self.url)
         except url_install.UrlInstallError as exc:
             url_install.discard(path)
             self.failed.emit(exc.reason, str(exc))
@@ -62,12 +90,18 @@ class _UrlInstallJob(QThread):
         from ...mods import url_install
 
         try:
-            ok, message = url_install.install_zip(
-                Path(self.path),
-                root=self.root,
-                preview=self.preview,
-                allow_feature=self.allow_feature,
-            )
+            source = Path(self.path)
+            if source.is_dir():
+                ok, message = url_install.install_tree(
+                    source, root=self.root, preview=self.preview
+                )
+            else:
+                ok, message = url_install.install_zip(
+                    source,
+                    root=self.root,
+                    preview=self.preview,
+                    allow_feature=self.allow_feature,
+                )
         except Exception as exc:  # noqa: BLE001 - 线程里不能把异常抛给 Qt
             ok, message = False, f"{type(exc).__name__}: {exc}"
         self.done.emit(bool(ok), str(message))
@@ -164,15 +198,60 @@ class ModsPage(SettingsPage):
         card.add_widget(self.detail_label)
 
         url_card = self.section("从链接安装")
+        self.aboutme_combo = QComboBox(self)
+        self.aboutme_combo.setMinimumWidth(150)
+        for folder, name in aboutme_repo.PACKS:
+            self.aboutme_combo.addItem(name, folder)
+        self.aboutme_url = QLineEdit(self)
+        self.aboutme_url.setReadOnly(True)
+        self.aboutme_url.setObjectName("aboutmePackUrl")
+        self.aboutme_url.setAccessibleName("aboutme 角色包目录链接")
+        self.aboutme_open_button = make_button("打开", self)
+        self.aboutme_open_button.setToolTip("在浏览器打开该角色包的 GitHub 素材目录")
+        self.aboutme_open_button.clicked.connect(self._open_aboutme_url)
+        self.aboutme_fill_button = make_button("填入输入框", self)
+        self.aboutme_fill_button.setToolTip("把目录链接填进下面的输入框，再点「下载并安装」")
+        self.aboutme_fill_button.clicked.connect(self._fill_aboutme_url)
+        aboutme_row = QWidget(self)
+        aboutme_layout = QVBoxLayout(aboutme_row)
+        aboutme_layout.setContentsMargins(0, 0, 0, 0)
+        aboutme_layout.setSpacing(6)
+        aboutme_layout.addWidget(self.aboutme_combo)
+        aboutme_actions = QWidget(aboutme_row)
+        actions_layout = QHBoxLayout(aboutme_actions)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(8)
+        actions_layout.addWidget(self.aboutme_url, 1)
+        actions_layout.addWidget(self.aboutme_open_button)
+        actions_layout.addWidget(self.aboutme_fill_button)
+        aboutme_layout.addWidget(aboutme_actions)
+        url_card.add_row(
+            "aboutme 角色包",
+            aboutme_row,
+            "选一个角色包，把它的 GitHub 目录链接填进输入框；安装器按 manifest/actions "
+            "逐个取回 WebP 精灵表，不需要单包 zip。素材许可 CC BY-NC-SA 4.0，二创须署名。",
+            expand=True,
+        )
+        self.aboutme_all = make_checkbox(self)
+        url_card.add_row(
+            "下载全部动作",
+            self.aboutme_all,
+            "默认只取待机/移动/点击/拖拽/工作 + 2 个随机动作（≤8 张精灵表）；"
+            "勾选后整包下载，可能上百张、上百 MB。",
+            expand=True,
+        )
+        self.aboutme_combo.currentIndexChanged.connect(self._sync_aboutme_url)
+        self._sync_aboutme_url()
+
         self.url_input = QLineEdit(self)
         self.url_input.setObjectName("modsUrlInput")
-        self.url_input.setAccessibleName("扩展包或角色包 zip 链接")
-        self.url_input.setPlaceholderText("https://…/pack.zip")
+        self.url_input.setAccessibleName("扩展包或角色包链接")
+        self.url_input.setPlaceholderText("https://…/pack.zip 或 …/tree/main/pets/gpt")
         url_card.add_row(
-            "zip 链接",
+            "zip / 目录链接",
             self.url_input,
-            "支持功能扩展、内容扩展与 aboutme 单角色包；只接受 http/https，"
-            "下载后先预览再确认安装。",
+            "支持功能扩展、内容扩展、aboutme 单角色包（zip）与 GitHub 角色目录；"
+            "只接受 http/https，下载后先预览再确认安装。",
             expand=True,
         )
         self.url_install_button = make_button("下载并安装", self)
@@ -466,6 +545,29 @@ class ModsPage(SettingsPage):
     def _set_url_status(self, text: str) -> None:
         self.url_status.setText(str(text or ""))
 
+    def _current_aboutme_url(self) -> str:
+        folder = str(self.aboutme_combo.currentData() or "")
+        return aboutme_repo.tree_url(folder) if folder else aboutme_repo.REPO_URL
+
+    def _sync_aboutme_url(self, *_args) -> None:
+        if hasattr(self, "aboutme_url"):
+            self.aboutme_url.setText(self._current_aboutme_url())
+
+    def _open_aboutme_url(self) -> None:
+        QDesktopServices.openUrl(QUrl(self._current_aboutme_url()))
+
+    def _fill_aboutme_url(self) -> None:
+        url = self._current_aboutme_url()
+        self.url_input.setText(url)
+        self.url_input.setFocus()
+        self._set_url_status("已填入角色目录链接；点「下载并安装」开始逐个取回精灵表。")
+
+    def _on_url_progress(self, done: int, total: int, label: str) -> None:
+        if self._disposed:
+            return
+        total = max(1, int(total or 1))
+        self._set_url_status(f"正在下载素材 {int(done)}/{total}：{label}")
+
     def _install_from_url(self) -> None:
         from ...mods.url_install import UrlInstallError, normalize_url
 
@@ -480,12 +582,20 @@ class ModsPage(SettingsPage):
             return
         self.url_install_button.setEnabled(False)
         self._set_url_status("正在下载…")
-        job = _UrlPreviewJob(url, self._root())
+        policy, custom_prefix = read_mirror_config(getattr(self.host, "config", None))
+        job = _UrlPreviewJob(
+            url,
+            self._root(),
+            self.aboutme_all.isChecked(),
+            mirror_policy=policy,
+            custom_mirror_prefix=custom_prefix,
+        )
         _ACTIVE_URL_JOBS.add(job)
         job.finished.connect(lambda: _ACTIVE_URL_JOBS.discard(job))
         job.finished.connect(job.deleteLater)
         job.ready.connect(self._on_url_preview)
         job.failed.connect(self._on_url_failed)
+        job.progress.connect(self._on_url_progress)
         self._url_job = job
         job.start()
 

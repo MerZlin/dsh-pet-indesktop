@@ -336,3 +336,65 @@ def test_download_does_not_clear_a_cancel_that_arrived_before_it_started(tmp_pat
     service.cancel()
     with pytest.raises(InterruptedError):
         service.download(asset)
+
+
+def test_update_download_supports_proxy_mirror_and_falls_back_on_bad_digest(
+    tmp_path: Path,
+) -> None:
+    body = b"real-installer-payload"
+    digest = hashlib.sha256(body).hexdigest()
+    release_url = "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.3.4/petcore-setup.exe"
+    asset = UpdateAsset("petcore-setup.exe", release_url, len(body), digest)
+    calls: list[str] = []
+
+    def fetch(request):
+        calls.append(request.full_url)
+        if request.full_url.startswith("https://gh-proxy.com/"):
+            return _Response(b"bad!" + body[4:], url=request.full_url)
+        return _Response(body, url=request.full_url)
+
+    service = UpdateService(tmp_path, fetcher=fetch)
+    path = service.download(asset, mirror_policy="gh-proxy")
+    assert path.read_bytes() == body
+    assert calls == [f"https://gh-proxy.com/{release_url}", release_url]
+
+
+def test_update_download_blocks_untrusted_proxy_redirect_and_check_never_uses_proxy(
+    tmp_path: Path,
+) -> None:
+    body = b"custom-installer"
+    digest = hashlib.sha256(body).hexdigest()
+    release_url = "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.3.4/petcore-setup.exe"
+    asset = UpdateAsset("petcore-setup.exe", release_url, len(body), digest)
+    calls: list[str] = []
+
+    def fetch(request):
+        calls.append(request.full_url)
+        if request.full_url.startswith("https://custom.mirror/"):
+            # 模拟跳转到不在白名单的第三方域，必须被拒绝并回退原地址。
+            return _Response(body, url="https://evil.example.net/payload.exe")
+        return _Response(body, url=request.full_url)
+
+    service = UpdateService(tmp_path, fetcher=fetch)
+    path = service.download(
+        asset, mirror_policy="custom", custom_mirror_prefix="https://custom.mirror"
+    )
+    assert path.read_bytes() == body
+    assert calls == [f"https://custom.mirror/{release_url}", release_url]
+
+    check_urls: list[str] = []
+    manifest_payload = json.dumps(
+        {
+            "version": "9.0.0",
+            "release_url": "https://github.com/MerZlin/dsh-pet-indesktop/releases/tag/v9.0.0",
+            "assets": [],
+        }
+    ).encode()
+
+    def check_fetch(request):
+        check_urls.append(request.full_url)
+        return _Response(manifest_payload, url=request.full_url)
+
+    check_service = UpdateService(tmp_path / "chk", current_version="1.0.0", fetcher=check_fetch)
+    assert check_service.check(force=True).state == "available"
+    assert all("gh-proxy" not in u and "custom.mirror" not in u for u in check_urls)

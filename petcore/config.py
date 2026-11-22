@@ -13,6 +13,7 @@ from typing import Any
 
 from . import paths
 from .engine.geometry import SCALE_MAX, SCALE_MIN
+from .net.github_mirrors import normalize_custom_prefix, normalize_policy
 from .platform import hotkey_spec
 
 logger = logging.getLogger("petcore.config")
@@ -68,6 +69,7 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "market_download_connections",
         "market_download_sources",
         "pack_mirror_policy",
+        "pack_mirror_custom_url",
         # 音频输出是进程级硬件事实：所有桌宠共用一只设备。
         "audio_output_device",
         "audio_output_device_name",
@@ -213,6 +215,10 @@ GLOBAL_CONFIG_KEYS = frozenset(
         "speech_local_voice",
         "speech_local_format",
         "speech_local_timeout",
+        "speech_local_ref_audio",
+        "speech_local_prompt_text",
+        "speech_local_prompt_lang",
+        "speech_local_text_lang",
         "speech_sapi_voice",
         "asr_enabled",
         "asr_engine",
@@ -278,9 +284,11 @@ DEFAULTS: dict[str, Any] = {
     # 素材/mod 下载：连接数 1 = 旧单流；源策略 auto/ordered/race。
     "market_download_connections": 4,
     "market_download_sources": "auto",
-    #: 素材包下载用哪套源：auto=索引顺序（GitHub 单文件优先，失败换分片镜像）、
-    #: mirror=优先国内镜像分片、github=只用 GitHub 单文件。
+    #: 素材包及 GitHub 下载镜像策略：auto/gh-proxy/ghfast/ghproxy-net/ghproxy-cc/
+    #: ghproxy-auto/custom/mirror/github（具体定义见 net.github_mirrors）。
     "pack_mirror_policy": "auto",
+    #: 用户自定义的 HTTPS GitHub 加速前缀（只在 pack_mirror_policy=="custom" 时使用）。
+    "pack_mirror_custom_url": "",
     # 联网检索：多引擎扇出、来源数、单页正文上限。
     "ai_web_search_engines": ["baidu", "duckduckgo"],
     "ai_web_search_max_sources": 4,
@@ -573,6 +581,10 @@ DEFAULTS: dict[str, Any] = {
     "speech_local_voice": "",
     "speech_local_format": "mp3",
     "speech_local_timeout": 30.0,
+    "speech_local_ref_audio": "",
+    "speech_local_prompt_text": "",
+    "speech_local_prompt_lang": "zh",
+    "speech_local_text_lang": "zh",
     "speech_sapi_voice": "",
     "asr_enabled": True,
     "asr_engine": "sapi",
@@ -975,8 +987,20 @@ _CLICK_SOUND_PATH_MAX = 500
 #: 语音合成的可选后端（与 ``petcore.net.tts.PROVIDER_SPECS`` 的 id 对应；这里不
 #: import 那个模块，配置层不该把网络实现拖进启动路径）。
 _SPEECH_BACKENDS = frozenset({"edge", "sapi", "doubao", "mimo", "local"})
-_LOCAL_PROTOCOLS = frozenset({"openai", "simple"})
+_LOCAL_PROTOCOLS = frozenset({"openai", "simple", "gpt_sovits"})
 _LOCAL_FORMATS = frozenset({"mp3", "wav"})
+
+
+def _speech_lang(value: Any, default: str) -> str:
+    """GPT-SoVITS 的语言码：短 token（``zh`` / ``en`` / ``all_zh``…），非法回默认。
+
+    各版本支持的语言集合不同，这里不做白名单：让服务端按自己的版本拒绝并给出
+    可见错误，比在客户端写死更稳。
+    """
+    text = str(value or "").strip().lower()
+    if not text or len(text) > 12:
+        return default
+    return text if all(char.isalnum() or char == "_" for char in text) else default
 
 
 def _speech_backend(value: Any) -> str:
@@ -1391,9 +1415,11 @@ class Config:
         normalized["market_download_sources"] = (
             sources if sources in {"auto", "ordered", "race"} else "auto"
         )
-        policy = str(normalized.get("pack_mirror_policy") or "auto").strip().lower()
-        normalized["pack_mirror_policy"] = (
-            policy if policy in {"auto", "mirror", "github"} else "auto"
+        normalized["pack_mirror_policy"] = normalize_policy(
+            normalized.get("pack_mirror_policy")
+        )
+        normalized["pack_mirror_custom_url"] = normalize_custom_prefix(
+            normalized.get("pack_mirror_custom_url")
         )
         normalized["ui_font_size"] = int(
             round(_number(normalized.get("ui_font_size"), 13.0, 10.0, 18.0))
@@ -1767,6 +1793,18 @@ class Config:
         )
         normalized["speech_local_timeout"] = _number(
             normalized.get("speech_local_timeout"), 30.0, 5.0, 120.0
+        )
+        normalized["speech_local_ref_audio"] = (
+            str(normalized.get("speech_local_ref_audio") or "").strip()[:512]
+        )
+        normalized["speech_local_prompt_text"] = (
+            str(normalized.get("speech_local_prompt_text") or "").strip()[:500]
+        )
+        normalized["speech_local_prompt_lang"] = _speech_lang(
+            normalized.get("speech_local_prompt_lang"), "zh"
+        )
+        normalized["speech_local_text_lang"] = _speech_lang(
+            normalized.get("speech_local_text_lang"), "zh"
         )
         normalized["speech_sapi_voice"] = (
             str(normalized.get("speech_sapi_voice") or "").strip()[:64]

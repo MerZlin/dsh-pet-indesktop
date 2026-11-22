@@ -94,6 +94,7 @@
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
 | [`CHAT-BACKGROUND-DISPLAY-2026-08-27.md`](CHAT-BACKGROUND-DISPLAY-2026-08-27.md) | AI 对话背景显示调整记录：两套窗口各自的背景图片/不透明度/填充模式，以及消息卡片可读性方案。 | 改对话窗口背景、`cover`/`contain`/`stretch` 语义、或消息区 QSS（`message-bubble` vs `message-surface`、`QScrollArea` 调色板）时。 |
+| [`LOCAL-MODELS.md`](LOCAL-MODELS.md) | 本地模型接入：llama.cpp 启动参数（`--reasoning off` 必加）、桌宠设置映射与本机实测；GPT-SoVITS api_v2 语音协议、参考音频配置与能力缺口。 | **接本地 GGUF / 自训 GPT-SoVITS、排查「本地服务明明起着却报网络不可达」或改 `gpt_sovits`/`select+read1` 读取器前必读**；无 CUDA 机器的数字只作参考。 |
 | [`ISSUE-EDGE-TTS-VOICE-DEPRECATION-2026-09-22.md`](ISSUE-EDGE-TTS-VOICE-DEPRECATION-2026-09-22.md) | 事故档案：edge 合成「没声音」的两条根因（微软下架音色 + 连发偶发空音频）与对策（音色表兜底、重试、非空缓存判定）。 | **改语音报时的合成/缓存路径、或再遇到「配置了却没声音」时必读**；它记录了 `NoAudioReceived` 为什么不等于网络问题的判断链。 |
 | [`ADDING-A-TTS-PROVIDER.md`](ADDING-A-TTS-PROVIDER.md) | 语音报时的 TTS **provider 接入指南**：`pet/tts` 的注册表/接口契约、四步接入流程、字段类型与红线。 | **新增、替换或修改任何合成后端（`pet/tts/*.py`）、或调整 `voice_chime_tts_*` 配置前必读**；改设置页的「合成后端」区之前也先看它，那里是 provider 声明驱动、不该写死后端。 |
 | [`grill-2026-08-21-ai-chat.md`](grill-2026-08-21-ai-chat.md) | AI 对话功能的需求对齐记录：多 Provider、流式、多轮上下文、JSON 会话、system prompt 优先级等已确认决策。 | 质疑"聊天窗口为什么这样设计/为什么用标准库 HTTP 而不是某个 SDK"时；这是原始决策依据。 |
@@ -147,6 +148,12 @@
 ---
 
 ## PR 报告存档
+
+- [API 页新增「本地模型指南」只读子页（2026-11-21）](PR-REPORT-API-LOCAL-MODEL-GUIDE-2026-11-21.md)：「API 与账户」新增可一键复制给 AI 的本地对话/语音模型启动与配置指南分页，含动态路径替换、搜索跳转与 720 px 窄窗分页宽度隔离；**修改 `ApiSettingsPage` 分页结构或本地模型指南文案前必读**。
+
+- [GitHub 公益加速镜像与自定义前缀选项（2026-11-20）](PR-REPORT-GITHUB-MIRROR-OPTIONS-2026-11-20.md)：`pack_mirror_policy` 新增 `gh-proxy.com` / `ghfast.top` / `ghproxy.net` / `ghproxy.cc` / 轮询与 `pack_mirror_custom_url` 自定义 HTTPS 前缀，覆盖素材包、aboutme 角色包、Core 更新包、市场包体与树目录安装五条链路（自动回退 + 清单不经第三方代理红线）；**修改 GitHub 下载源策略、镜像白名单或设置页「下载镜像」前必读**。
+
+- [本地 GGUF 对话 / GPT-SoVITS 语音协议 / aboutme 目录 URL（2026-11-15）](PR-REPORT-LOCAL-MODEL-VOICE-URL-2026-11-15.md)：Gemma-4-E4B 在 llama.cpp 上的实测（7.4–8.5 tok/s、冷首轮 8.6–22.4 s、2.44–2.93 GB RSS）、慢首字触发 `cannot read from timed out object` 的 SSE 读缓冲修复、`gpt_sovits` 协议与 4 个新键、GitHub 角色目录 URL 安装 + 打开/填入按钮；**接本地模型/自训语音或改 `petcore/api/chat.py` 读取器前必读**。
 
 - [petcore 反馈批次 7：移动收尾 / 播放速度 / 朋友的酒 BPM / 致谢 / 手机版（2026-11-15）](PR-REPORT-PETCORE-FEEDBACK-BATCH4-2026-11-15.md)：键盘移动显式分段与摔倒收尾、2x 播放速度与闲置降帧后端语义、朋友的酒 BPM、致谢作者角色、手机版 440 宽与 `[⋯][✕]`；**改键盘移动状态机、闲置降帧、音乐 Q 弹、致谢数据或手机版标题栏前必读**。
 

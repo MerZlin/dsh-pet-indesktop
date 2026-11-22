@@ -46,6 +46,7 @@ from .. import __version__
 from ..contracts.archive import BudgetExceeded
 from ..market.errors import TransferCancelled
 from . import errors, http, market, ranged
+from .github_mirrors import expand_github_urls, normalize_policy
 from .stream_download import download_stream, file_sha256
 
 logger = logging.getLogger("petcore.net.packs")
@@ -239,6 +240,7 @@ def download_pack(
     cancel: CancelCallback | None = None,
     max_bytes: int | None = None,
     policy: str = "auto",
+    custom_mirror_prefix: str = "",
 ) -> PackDownload:
     """下载到 ``<dest_dir>/<filename>``。
 
@@ -246,7 +248,9 @@ def download_pack(
     ``policy`` 决定先走哪一套（失败总能换另一套）：
 
     - ``auto``：按索引意图（``prefer_parts``），默认 GitHub 单文件优先；
-    - ``mirror``：先分片（国内镜像），再单文件；
+    - 公益镜像 / ``ghproxy-auto`` / ``custom``：先试代理加速的 GitHub 单文件，
+      失败或摘要不符自动回退原 GitHub 单文件与 jsDelivr 分片；
+    - ``mirror``：先分片（jsDelivr 国内镜像），再单文件；
     - ``github``：只用单文件源，完全不走分片。
 
     目标文件已存在且大小/摘要都对 → 直接返回（``from_cache=True``，不发请求）。
@@ -270,11 +274,14 @@ def download_pack(
     report = _monotonic(progress)
     failures: list[str] = []
 
-    chosen = str(policy or "auto").strip().lower()
-    if chosen not in {"auto", "mirror", "github"}:
-        chosen = "auto"
+    chosen = normalize_policy(policy)
+    single_urls = (
+        expand_github_urls(singles, chosen, custom_prefix=custom_mirror_prefix)
+        if singles
+        else ()
+    )
     plan: list[str] = []
-    if singles:
+    if single_urls:
         plan.append("single")
     if entry.parts and chosen != "github":
         plan.append("parts")
@@ -287,7 +294,7 @@ def download_pack(
         try:
             if kind == "single":
                 used, resumed, host = _download_source(
-                    _Source(singles, int(entry.size), expected_sha),
+                    _Source(single_urls, int(entry.size), expected_sha),
                     final_path,
                     connections=connections,
                     timeout=timeout,
@@ -401,6 +408,7 @@ def _download_source(
             continue
         if source.sha256 and digest != source.sha256:
             _unlink(part_path)
+            ranged.clear_state(part_path)
             logger.info("素材包摘要不符：host=%s", host or "-")
             failures.append(f"{host or '-'}: DigestMismatch")
             continue

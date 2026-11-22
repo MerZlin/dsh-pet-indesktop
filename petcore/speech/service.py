@@ -47,6 +47,18 @@ CREDENTIAL_OWNER = "speech.{provider}"
 Synthesizer = Callable[[str, SpeechRequest, Path], None]
 
 
+def _short_lang(value: Any, default: str) -> str:
+    """语言码：只留短 token（``zh`` / ``en`` / ``ja`` / ``all_zh``…），非法回默认。
+
+    GPT-SoVITS 各版本支持的语言集合不一样，这里不做白名单——交给服务端按版本
+    拒绝并给出可见错误，比在客户端把可用语言写死更稳。
+    """
+    text = str(value or "").strip().lower()
+    if not text or len(text) > 12:
+        return default
+    return text if all(char.isalnum() or char == "_" for char in text) else default
+
+
 class SpeechService:
     def __init__(
         self,
@@ -325,8 +337,9 @@ class SpeechService:
             volume = 1.0
         flavor = f"{provider}|{voice}|{rate:.3f}|{pitch:.3f}|{volume:.3f}"
         if provider == "local":
-            # 本地服务的地址/协议/路径/模型/格式都会改变声音；不换键就会把
-            # 上一个服务的音频当命中（与兜底音色缓存键同一类审计）。
+            # 本地服务的地址/协议/路径/模型/格式都会改变声音；GPT-SoVITS 还要按
+            # 参考音频与提示文本区分——换了参考音频却不换键，会把上一个音色的
+            # 音频当命中（与兜底音色缓存键同一类审计）。
             local = self._local_settings()
             flavor = "|".join(
                 (
@@ -336,6 +349,10 @@ class SpeechService:
                     str(local["path"]),
                     str(local["model"]),
                     str(local["format"]),
+                    str(local["ref_audio"]),
+                    str(local["prompt_text"]),
+                    str(local["prompt_lang"]),
+                    str(local["text_lang"]),
                 )
             )
         return flavor
@@ -348,6 +365,9 @@ class SpeechService:
         audio_format = str(self._cfg("speech_local_format", "mp3") or "").strip().lower()
         if audio_format not in {"mp3", "wav"}:
             audio_format = "mp3"
+        if protocol == "gpt_sovits":
+            # api_v2 只产出 wav；缓存后缀必须跟真实产物一致。
+            audio_format = "wav"
         route = str(self._cfg("speech_local_path", "") or "").strip()[:120]
         if route and not route.startswith("/"):
             route = "/" + route
@@ -363,11 +383,19 @@ class SpeechService:
             "voice": str(self._cfg("speech_local_voice", "") or "").strip()[:64],
             "format": audio_format,
             "timeout": max(5.0, min(120.0, timeout)),
+            "ref_audio": str(self._cfg("speech_local_ref_audio", "") or "").strip()[:512],
+            "prompt_text": str(self._cfg("speech_local_prompt_text", "") or "").strip()[:500],
+            "prompt_lang": _short_lang(self._cfg("speech_local_prompt_lang", "zh"), "zh"),
+            "text_lang": _short_lang(self._cfg("speech_local_text_lang", "zh"), "zh"),
         }
 
     def _config_gate(self, provider: str) -> tuple[bool, str]:
-        if provider == "local" and not self._local_settings()["endpoint"]:
-            return False, "config"
+        if provider == "local":
+            local = self._local_settings()
+            if not local["endpoint"]:
+                return False, "config"
+            if local["protocol"] == "gpt_sovits" and not local["ref_audio"]:
+                return False, "config"
         return True, ""
 
     def _rate_value(self, value: Any) -> float:

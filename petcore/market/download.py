@@ -13,6 +13,11 @@ from ..contracts.archive import ArchiveLimits
 from ..contracts.http import TransferSpec
 from .. import paths
 from ..net import ranged
+from ..net.github_mirrors import (
+    expand_github_urls,
+    is_proxy_policy,
+    proxy_hosts_for_policy,
+)
 from . import verify
 from .errors import DownloadError, IntegrityError, TransferCancelled
 from .model import MarketPackage, MarketVersion
@@ -197,6 +202,8 @@ def download_artifact(
     allow_local_file: bool = False,
     connections: int = 1,
     mirror_policy: str = "auto",
+    github_mirror: str = "auto",
+    custom_mirror_prefix: str = "",
 ) -> DownloadResult:
     directory = download_dir(root)
     directory.mkdir(parents=True, exist_ok=True)
@@ -229,7 +236,7 @@ def download_artifact(
             pass
 
     _write_state(state, package, version)
-    urls = _ranked_urls(
+    ranked_urls = _ranked_urls(
         fetcher,
         list(version.urls),
         mirror_policy=str(mirror_policy or "auto"),
@@ -238,6 +245,22 @@ def download_artifact(
         cancel=cancel,
         allow_local_file=allow_local_file,
     )
+    if (
+        not allow_local_file
+        and str(version.sha256 or "").strip()
+        and is_proxy_policy(github_mirror)
+    ):
+        urls = list(
+            expand_github_urls(
+                ranked_urls, github_mirror, custom_prefix=custom_mirror_prefix
+            )
+        )
+        extra_hosts = proxy_hosts_for_policy(
+            github_mirror, custom_prefix=custom_mirror_prefix
+        )
+    else:
+        urls = ranked_urls
+        extra_hosts = ()
     for url in urls:
         path: Path | None = None
         try:
@@ -255,6 +278,7 @@ def download_artifact(
                 local_file_root=local_file_root,
                 allow_local_file=allow_local_file,
                 connections=connections,
+                extra_allowed_hosts=extra_hosts,
             )
             size = path.stat().st_size
             if size != version.size:
@@ -315,6 +339,7 @@ def _fetch_one(
     local_file_root: Path | None,
     allow_local_file: bool,
     connections: int,
+    extra_allowed_hosts: tuple[str, ...] = (),
 ) -> tuple[Path, int, int]:
     """返回 ``(落盘路径, 续传字节数, 连接数)``。
 
@@ -329,11 +354,12 @@ def _fetch_one(
         # 传输层把 `<artifact>.part` 当下载中的临时文件；这里给最终名，
         # 它就会直接写我们那个稳定的 `<id>-<version>.zip.part`，不必再复制整包。
         artifact = part.name[: -len(".part")] if part.name.endswith(".part") else part.name
+        allowed_hosts = tuple(dict.fromkeys((*GITHUB_ARTIFACT_HOSTS, *extra_allowed_hosts)))
         spec = TransferSpec(
             urls=(url,),
             expected_size=version.size,
             expected_sha256=version.sha256,
-            allowed_hosts=GITHUB_ARTIFACT_HOSTS,
+            allowed_hosts=allowed_hosts,
             timeout=timeout,
             allowed_schemes=schemes,
             allow_local_file=allow_local_file,

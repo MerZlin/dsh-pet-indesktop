@@ -27,12 +27,19 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QVBoxLayout,
     QWidget,
 )
 
 from ... import paths
 from ...config import ANIM_FACING_GROUPS
 from ...engine.geometry import DEFAULT_SCALE, SCALE_MAX, SCALE_MIN, SCALE_STEPS
+from ...net.github_mirrors import (
+    CUSTOM_MIRROR_POLICY,
+    MIRROR_POLICY_OPTIONS,
+    normalize_custom_prefix,
+    normalize_policy,
+)
 from ...platform import autostart, hotkey_spec, screens
 from ...platform.desktop import capabilities as desktop_capabilities
 from ...storage import roots as storage_roots
@@ -271,10 +278,15 @@ class GeneralPage(SettingsPage):
             parent=self,
         )
         self.mirror_combo = QComboBox(self)
-        self.mirror_combo.addItem("自动（GitHub 优先，失败自动换镜像）", "auto")
-        self.mirror_combo.addItem("优先国内镜像（jsDelivr 分片，慢但更稳）", "mirror")
-        self.mirror_combo.addItem("只用 GitHub（不走镜像）", "github")
-        self._initial_mirror = str(self.config().get("pack_mirror_policy") or "auto")
+        for label, value in MIRROR_POLICY_OPTIONS:
+            self.mirror_combo.addItem(label, value)
+        self.mirror_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.mirror_combo.setMinimumContentsLength(18)
+        self._initial_mirror = normalize_policy(
+            self.config().get("pack_mirror_policy")
+        )
         self.mirror_combo.setCurrentIndex(
             max(0, self.mirror_combo.findData(self._initial_mirror))
         )
@@ -282,10 +294,55 @@ class GeneralPage(SettingsPage):
         data_card.add_row(
             "下载镜像",
             self.mirror_combo,
-            "素材包有两套源：GitHub 单文件（快但会抖）与 jsDelivr 分片镜像（慢但通）。"
-            "自动模式先走 GitHub，失败或超时自动切换到镜像。",
-            search_keys=("下载镜像", "镜像", "mirror", "jsdelivr", "加速", "源"),
+            "作用于 GitHub 下载（素材包、Core 更新包、插件市场、角色包与角色目录）。"
+            "默认「自动」保持 GitHub 签名直链优先 + jsDelivr 分片兜底；"
+            "公益镜像与自定义前缀由第三方提供，下载前校验 SHA-256 并在失败时自动回退官方源。",
+            search_keys=(
+                "下载镜像",
+                "镜像",
+                "mirror",
+                "jsdelivr",
+                "gh-proxy",
+                "ghfast",
+                "ghproxy",
+                "公益镜像",
+                "自定义镜像",
+                "加速",
+                "源",
+            ),
+            expand=True,
         )
+
+        custom_mirror_box = QWidget(self)
+        custom_mirror_layout = QVBoxLayout(custom_mirror_box)
+        custom_mirror_layout.setContentsMargins(0, 0, 0, 0)
+        custom_mirror_layout.setSpacing(4)
+        self.custom_mirror_edit = QLineEdit(custom_mirror_box)
+        self.custom_mirror_edit.setObjectName("customMirrorPrefix")
+        self.custom_mirror_edit.setClearButtonEnabled(True)
+        self.custom_mirror_edit.setPlaceholderText(
+            "例如 https://gh-proxy.com/（仅支持 https://，留空则回退官方源）"
+        )
+        self._initial_custom_mirror = normalize_custom_prefix(
+            self.config().get("pack_mirror_custom_url")
+        )
+        self.custom_mirror_edit.setText(self._initial_custom_mirror)
+        self.custom_mirror_edit.textChanged.connect(self._on_custom_mirror_changed)
+        custom_mirror_layout.addWidget(self.custom_mirror_edit)
+        self.custom_mirror_hint = QLabel("", custom_mirror_box)
+        self.custom_mirror_hint.setObjectName("settingHint")
+        self.custom_mirror_hint.setWordWrap(True)
+        self.custom_mirror_hint.hide()
+        custom_mirror_layout.addWidget(self.custom_mirror_hint)
+        data_card.add_row(
+            "自定义镜像前缀",
+            custom_mirror_box,
+            "只在上方选择「自定义镜像前缀」时启用；填写无凭据的 https:// 代理根地址。",
+            search_keys=("自定义镜像", "镜像前缀", "gh-proxy", "ghproxy", "proxy"),
+            expand=True,
+        )
+        self.custom_mirror_edit.setAccessibleName("自定义镜像前缀")
+        self._sync_custom_mirror_state()
 
         data_card.add_row(
             "高清完整角色素材包",
@@ -732,10 +789,30 @@ class GeneralPage(SettingsPage):
         data = self.character_combo.currentData()
         return str(data) if data is not None else None
 
+    def _sync_custom_mirror_state(self) -> None:
+        is_custom = self.mirror_combo.currentData() == CUSTOM_MIRROR_POLICY
+        self.custom_mirror_edit.setEnabled(is_custom)
+        raw = self.custom_mirror_edit.text().strip()
+        if is_custom and raw and not normalize_custom_prefix(raw):
+            self.custom_mirror_hint.setText(
+                "需为合法的 https:// 镜像前缀（不含用户名/密码/查询参数），否则将自动回退官方源。"
+            )
+            self.custom_mirror_hint.show()
+        else:
+            self.custom_mirror_hint.setText("")
+            self.custom_mirror_hint.hide()
+
     def _on_mirror_changed(self, _index: int) -> None:
         """下载镜像偏好即时生效（下一次下载用新策略），取消时回滚。"""
-        value = str(self.mirror_combo.currentData() or "auto")
+        value = normalize_policy(self.mirror_combo.currentData())
         self.config().set("pack_mirror_policy", value)
+        self._sync_custom_mirror_state()
+        self.changed.emit()
+
+    def _on_custom_mirror_changed(self, text: str) -> None:
+        """自定义镜像前缀即时校验并写入配置（不合法写空串，不打断输入）。"""
+        self.config().set("pack_mirror_custom_url", normalize_custom_prefix(text))
+        self._sync_custom_mirror_state()
         self.changed.emit()
 
     def _on_auto_hide_changed(self, checked: bool) -> None:
@@ -758,6 +835,13 @@ class GeneralPage(SettingsPage):
             return True
         if self._aliases() != self._initial_aliases:
             return True
+        if normalize_policy(self.mirror_combo.currentData()) != self._initial_mirror:
+            return True
+        if (
+            normalize_custom_prefix(self.custom_mirror_edit.text())
+            != self._initial_custom_mirror
+        ):
+            return True
         if (
             self._fullscreen_hide_supported
             and self.auto_hide_fullscreen_check.isChecked()
@@ -776,6 +860,16 @@ class GeneralPage(SettingsPage):
         # 别名已经写进配置（点即生效）；这里只把基线推到落盘值，别让同一个名字
         # 在保存之后还挂着 dirty。
         self._initial_aliases = self._aliases()
+        self._initial_mirror = normalize_policy(self.mirror_combo.currentData())
+        normalized_custom = normalize_custom_prefix(self.custom_mirror_edit.text())
+        self.config().set("pack_mirror_policy", self._initial_mirror)
+        self.config().set("pack_mirror_custom_url", normalized_custom)
+        self._initial_custom_mirror = normalized_custom
+        if self.custom_mirror_edit.text() != normalized_custom:
+            self.custom_mirror_edit.blockSignals(True)
+            self.custom_mirror_edit.setText(normalized_custom)
+            self.custom_mirror_edit.blockSignals(False)
+        self._sync_custom_mirror_state()
         if (
             self._fullscreen_hide_supported
             and self.auto_hide_fullscreen_check.isChecked()
@@ -807,6 +901,11 @@ class GeneralPage(SettingsPage):
             max(0, self.mirror_combo.findData(self._initial_mirror))
         )
         self.mirror_combo.blockSignals(False)
+        self.config().set("pack_mirror_custom_url", self._initial_custom_mirror)
+        self.custom_mirror_edit.blockSignals(True)
+        self.custom_mirror_edit.setText(self._initial_custom_mirror)
+        self.custom_mirror_edit.blockSignals(False)
+        self._sync_custom_mirror_state()
         # 勾选是实时生效的，取消必须把配置与宿主状态一起回滚（同 stream_capture）。
         self.config().set("auto_hide_fullscreen", self._initial_auto_hide_fullscreen)
         self.auto_hide_fullscreen_check.blockSignals(True)
@@ -843,6 +942,12 @@ class GeneralPage(SettingsPage):
             "镜像",
             "mirror",
             "jsdelivr",
+            "gh-proxy",
+            "ghfast",
+            "ghproxy",
+            "公益镜像",
+            "自定义镜像",
+            "镜像前缀",
             "网速",
             "高清",
             "网盘",

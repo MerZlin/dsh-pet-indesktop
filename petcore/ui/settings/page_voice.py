@@ -13,6 +13,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -60,6 +61,10 @@ CONFIG_KEYS = {
     "local_model": "speech_local_model",
     "local_format": "speech_local_format",
     "local_timeout": "speech_local_timeout",
+    "local_ref_audio": "speech_local_ref_audio",
+    "local_prompt_text": "speech_local_prompt_text",
+    "local_prompt_lang": "speech_local_prompt_lang",
+    "local_text_lang": "speech_local_text_lang",
     "asr_enabled": "asr_enabled",
     "asr_engine": "asr_engine",
     "asr_endpoint": "asr_endpoint",
@@ -392,17 +397,19 @@ class VoicePage(SettingsPage):
         self.local_protocol = QComboBox(self)
         self.local_protocol.addItem("OpenAI 兼容（/v1/audio/speech）", "openai")
         self.local_protocol.addItem("通用 JSON（{text, voice, speed}）", "simple")
+        self.local_protocol.addItem("GPT-SoVITS（api_v2 POST /tts）", "gpt_sovits")
         self._select(self.local_protocol, str(self.config().get("speech_local_protocol") or "openai"))
         card.add_row(
             "协议",
             self.local_protocol,
-            "通用 JSON 适合 GPT-SoVITS / CosyVoice 等自带简单 HTTP 接口的本地服务。",
+            "通用 JSON 适合自带简单 HTTP 接口的本地服务；GPT-SoVITS 用 api_v2 的 POST /tts，"
+            "需要参考音频与对应文本。",
         )
 
         self.local_path = QLineEdit(self)
         self.local_path.setPlaceholderText("留空 = 按协议默认")
         self.local_path.setText(str(self.config().get("speech_local_path") or ""))
-        card.add_row("请求路径", self.local_path, "例如 /tts；留空时 OpenAI 兼容用 /v1/audio/speech。", expand=True)
+        card.add_row("请求路径", self.local_path, "例如 /tts；留空时 OpenAI 兼容用 /v1/audio/speech，GPT-SoVITS 用 /tts。", expand=True)
 
         self.local_model = QLineEdit(self)
         self.local_model.setPlaceholderText("tts-1 / kokoro / 你的模型名")
@@ -413,7 +420,7 @@ class VoicePage(SettingsPage):
         self.local_format.addItem("mp3", "mp3")
         self.local_format.addItem("wav", "wav")
         self._select(self.local_format, str(self.config().get("speech_local_format") or "mp3"))
-        card.add_row("音频格式", self.local_format, "按你的本地服务实际返回的格式选。")
+        card.add_row("音频格式", self.local_format, "按你的本地服务实际返回的格式选；GPT-SoVITS 固定 wav。")
 
         self.local_timeout = QSpinBox(self)
         self.local_timeout.setRange(5, 120)
@@ -421,17 +428,97 @@ class VoicePage(SettingsPage):
         self.local_timeout.setValue(int(float(self.config().get("speech_local_timeout") or 30)))
         card.add_row("超时", self.local_timeout, "本地服务首次加载模型可能较慢，按需放宽。")
 
+        # ---- GPT-SoVITS：参考音频（音色来源）与它的文本 / 语言。
+        self.local_ref_audio = QLineEdit(self)
+        self.local_ref_audio.setPlaceholderText(r"D:\voices\ref.wav")
+        self.local_ref_audio.setText(str(self.config().get("speech_local_ref_audio") or ""))
+        self.local_pick_ref = make_button("选择文件…", self)
+        self.local_pick_ref.clicked.connect(self._pick_ref_audio)
+        ref_row = QWidget(self)
+        ref_layout = QHBoxLayout(ref_row)
+        ref_layout.setContentsMargins(0, 0, 0, 0)
+        ref_layout.setSpacing(8)
+        ref_layout.addWidget(self.local_ref_audio, 1)
+        ref_layout.addWidget(self.local_pick_ref)
+        self.local_ref_row = card.add_row(
+            "参考音频",
+            ref_row,
+            "3–10 秒干净人声（无伴奏/混响）；GPT-SoVITS 用它的音色说话。",
+            expand=True,
+        )
+
+        self.local_prompt_text = QLineEdit(self)
+        self.local_prompt_text.setPlaceholderText("参考音频里说的那句话")
+        self.local_prompt_text.setText(str(self.config().get("speech_local_prompt_text") or ""))
+        self.local_prompt_row = card.add_row(
+            "参考文本",
+            self.local_prompt_text,
+            "必须与参考音频内容一致；留空时服务端按空提示处理，音色可能不稳。",
+            expand=True,
+        )
+
+        self.local_prompt_lang = QComboBox(self)
+        self.local_text_lang = QComboBox(self)
+        for label, code in (("中文", "zh"), ("English", "en"), ("日本語", "ja"), ("한국어", "ko"), ("粤语", "yue")):
+            self.local_prompt_lang.addItem(label, code)
+            self.local_text_lang.addItem(label, code)
+        self._select(self.local_prompt_lang, str(self.config().get("speech_local_prompt_lang") or "zh"))
+        self._select(self.local_text_lang, str(self.config().get("speech_local_text_lang") or "zh"))
+        lang_row = QWidget(self)
+        lang_layout = QHBoxLayout(lang_row)
+        lang_layout.setContentsMargins(0, 0, 0, 0)
+        lang_layout.setSpacing(8)
+        lang_layout.addWidget(QLabel("参考", lang_row))
+        lang_layout.addWidget(self.local_prompt_lang)
+        lang_layout.addSpacing(10)
+        lang_layout.addWidget(QLabel("合成", lang_row))
+        lang_layout.addWidget(self.local_text_lang)
+        lang_layout.addStretch(1)
+        self.local_lang_row = card.add_row(
+            "语言",
+            lang_row,
+            "参考语言对应参考音频，合成语言对应要朗读的台词；跨语种合成音色可能略有偏差。",
+            expand=True,
+        )
+        self._sync_gpt_sovits_rows()
+
         self.local_key = self._secret_row(card, "本地 API Key", "local", "api_key", "本地服务通常不需要；需要时也存系统钥匙串。")
         self.local_test_button = make_button("测试本地模型", self)
         self.local_test_button.clicked.connect(self._test_local)
         card.add_buttons([self.local_test_button])
 
         self.local_endpoint.textChanged.connect(self._on_changed)
+        self.local_protocol.currentIndexChanged.connect(self._sync_gpt_sovits_rows)
         self.local_protocol.currentIndexChanged.connect(self._on_changed)
         self.local_path.textChanged.connect(self._on_changed)
         self.local_model.textChanged.connect(self._on_changed)
         self.local_format.currentIndexChanged.connect(self._on_changed)
         self.local_timeout.valueChanged.connect(self._on_changed)
+        self.local_ref_audio.textChanged.connect(self._on_changed)
+        self.local_prompt_text.textChanged.connect(self._on_changed)
+        self.local_prompt_lang.currentIndexChanged.connect(self._on_changed)
+        self.local_text_lang.currentIndexChanged.connect(self._on_changed)
+
+    def _pick_ref_audio(self) -> None:
+        path, _filter = QFileDialog.getOpenFileName(
+            self,
+            "选择参考音频",
+            self.local_ref_audio.text().strip(),
+            "音频 (*.wav *.mp3 *.flac *.m4a *.ogg);;所有文件 (*)",
+        )
+        if path:
+            self.local_ref_audio.setText(path)
+
+    def _sync_gpt_sovits_rows(self, *_args) -> None:
+        """GPT-SoVITS 专属行只在选该协议时可编辑（值保留，切回去不丢）。"""
+        active = str(self.local_protocol.currentData() or "") == "gpt_sovits"
+        for row in (self.local_ref_row, self.local_prompt_row, self.local_lang_row):
+            row.setEnabled(active)
+        self.local_format.setEnabled(not active)
+        if active:
+            self.local_format.setToolTip("GPT-SoVITS 固定返回 wav，此选项不生效。")
+        else:
+            self.local_format.setToolTip("")
 
     def _build_asr(self) -> None:
         card = self.section("语音输入")
@@ -723,6 +810,10 @@ class VoicePage(SettingsPage):
             "local_model": str(config.get("speech_local_model") or ""),
             "local_format": str(config.get("speech_local_format") or "mp3"),
             "local_timeout": int(float(config.get("speech_local_timeout") or 30)),
+            "local_ref_audio": str(config.get("speech_local_ref_audio") or ""),
+            "local_prompt_text": str(config.get("speech_local_prompt_text") or ""),
+            "local_prompt_lang": str(config.get("speech_local_prompt_lang") or "zh"),
+            "local_text_lang": str(config.get("speech_local_text_lang") or "zh"),
             "asr_enabled": bool(config.get("asr_enabled", True)),
             "asr_engine": str(config.get("asr_engine") or "sapi"),
             "asr_endpoint": str(config.get("asr_endpoint") or ""),
@@ -759,6 +850,10 @@ class VoicePage(SettingsPage):
             "local_model": self.local_model.text().strip(),
             "local_format": str(self.local_format.currentData() or "mp3"),
             "local_timeout": int(self.local_timeout.value()),
+            "local_ref_audio": self.local_ref_audio.text().strip(),
+            "local_prompt_text": self.local_prompt_text.text().strip(),
+            "local_prompt_lang": str(self.local_prompt_lang.currentData() or "zh"),
+            "local_text_lang": str(self.local_text_lang.currentData() or "zh"),
             "asr_enabled": bool(self.asr_enabled.isChecked()),
             "asr_engine": str(self.asr_engine.currentData() or "sapi"),
             "asr_endpoint": self.asr_endpoint.text().strip(),
@@ -848,6 +943,8 @@ class VoicePage(SettingsPage):
             (self.local_endpoint, "local_endpoint"),
             (self.local_path, "local_path"),
             (self.local_model, "local_model"),
+            (self.local_ref_audio, "local_ref_audio"),
+            (self.local_prompt_text, "local_prompt_text"),
             (self.asr_endpoint, "asr_endpoint"),
             (self.asr_model, "asr_model"),
             (self.asr_language, "asr_language"),
@@ -871,13 +968,18 @@ class VoicePage(SettingsPage):
             self._select(self.fallback_combo, self._initial["fallback"])
             self._select(self.local_protocol, self._initial["local_protocol"])
             self._select(self.local_format, self._initial["local_format"])
+            self._select(self.local_prompt_lang, self._initial["local_prompt_lang"])
+            self._select(self.local_text_lang, self._initial["local_text_lang"])
             self.rate_slider.setValue(int(round(self._initial["rate"] * 100)))
             self.volume_slider.setValue(int(round(self._initial["volume"] * 100)))
             self.cache_limit_spin.setValue(int(self._initial["cache_limit"]))
             self.local_endpoint.setText(self._initial["local_endpoint"])
             self.local_path.setText(self._initial["local_path"])
             self.local_model.setText(self._initial["local_model"])
+            self.local_ref_audio.setText(self._initial["local_ref_audio"])
+            self.local_prompt_text.setText(self._initial["local_prompt_text"])
             self.local_timeout.setValue(int(self._initial["local_timeout"]))
+            self._sync_gpt_sovits_rows()
             self.asr_enabled.setChecked(bool(self._initial["asr_enabled"]))
             self.asr_device.blockSignals(True)
             index = self.asr_device.findData(int(self._initial["asr_device"]))

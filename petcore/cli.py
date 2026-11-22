@@ -421,12 +421,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         result = service.check(force=update_args.action == "check")
         if update_args.action == "download":
+            from .net.github_mirrors import read_mirror_config
+
             asset = service.select_asset(result.manifest)
             if not result.ok or asset is None:
                 print(result.message or "没有可用更新资产")
                 return 1
             try:
-                path = service.download(asset)
+                policy, custom_prefix = read_mirror_config(Config.load(root))
+                path = service.download(
+                    asset,
+                    mirror_policy=policy,
+                    custom_mirror_prefix=custom_prefix,
+                )
             except Exception as exc:  # noqa: BLE001 - CLI boundary
                 print(f"下载失败：{type(exc).__name__}")
                 return 1

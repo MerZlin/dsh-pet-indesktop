@@ -52,7 +52,7 @@ QWidget#sidebarPanel {
 QWidget#settingsPage, QWidget#settingsPageContent, QStackedWidget#settingsPages {
     background: transparent;
 }
-QLineEdit#settingsSearch, QLineEdit#valueField, QLineEdit#apiField {
+QLineEdit#settingsSearch, QLineEdit#valueField, QLineEdit#apiField, QLineEdit#customMirrorPrefix {
     background: %(input_bg)s;
     border: 1px solid %(input_border)s;
     border-radius: 7px;
@@ -60,8 +60,12 @@ QLineEdit#settingsSearch, QLineEdit#valueField, QLineEdit#apiField {
     padding: 0 8px;
     color: %(label)s;
 }
-QLineEdit#settingsSearch:focus {
+QLineEdit#settingsSearch:focus, QLineEdit#customMirrorPrefix:focus {
     border: 1px solid %(accent)s;
+}
+QLineEdit#customMirrorPrefix:disabled {
+    background: %(sidebar)s;
+    color: %(hint)s;
 }
 QListWidget#settingsNav {
     background: transparent;
@@ -322,6 +326,12 @@ QPlainTextEdit {
     border: 1px solid %(input_border)s;
     border-radius: 7px;
     color: %(label)s;
+}
+QPlainTextEdit#apiLocalGuidePrompt {
+    padding: 8px 10px;
+}
+QPlainTextEdit#apiLocalGuidePrompt:focus {
+    border: 1px solid %(accent)s;
 }
 QCheckBox {
     color: %(label)s;

@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import platform as platform_mod
+import re
 import subprocess
 import sys
 import threading
@@ -14,6 +15,11 @@ from typing import Callable
 from .. import __version__
 from .. import paths
 from ..net.errors import NetworkError
+from ..net.github_mirrors import (
+    expand_github_urls,
+    is_proxy_policy,
+    proxy_hosts_for_policy,
+)
 from ..net.http import build_request, is_allowed_https_url, urlopen
 from ..performance import runtime_metrics
 from .model import (
@@ -85,11 +91,18 @@ class UpdateService:
         self._manifest: UpdateManifest | None = None
         self._status = UpdateResult(True, "idle", version=self.current_version)
 
-    def _allowed_url(self, url: str) -> bool:
-        return is_allowed_https_url(url, self.trusted_hosts)
+    def _allowed_url(self, url: str, *, allowed_hosts=None) -> bool:
+        hosts = self.trusted_hosts if allowed_hosts is None else allowed_hosts
+        return is_allowed_https_url(url, hosts)
 
-    def _request(self, url: str, *, headers: dict[str, str] | None = None):
-        if not self._allowed_url(url):
+    def _request(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        allowed_hosts=None,
+    ):
+        if not self._allowed_url(url, allowed_hosts=allowed_hosts):
             raise ValueError("update URL is not an allowed HTTPS host")
         request = build_request(
             url,
@@ -100,7 +113,7 @@ class UpdateService:
         if self.fetcher is not None:
             response = self.fetcher(request)
             final_url = str(getattr(response, "geturl", lambda: url)() or url)
-            if not self._allowed_url(final_url):
+            if not self._allowed_url(final_url, allowed_hosts=allowed_hosts):
                 close = getattr(response, "close", None)
                 if callable(close):
                     close()
@@ -109,7 +122,7 @@ class UpdateService:
         # 更新检查是第三方 CDN 的一次性取数：它的成败不代表整个进程该固定直连。
         response = urlopen(request, timeout=15, pollute=False)
         final_url = str(getattr(response, "geturl", lambda: url)() or url)
-        if not self._allowed_url(final_url):
+        if not self._allowed_url(final_url, allowed_hosts=allowed_hosts):
             close = getattr(response, "close", None)
             if callable(close):
                 close()
@@ -174,12 +187,31 @@ class UpdateService:
         self._status = result
         return result
 
-    def download(self, asset: UpdateAsset, *, cancel=None, progress=None) -> Path:
-        candidate_urls = asset.candidate_urls()
-        if not _safe_asset_name(asset.name) or not candidate_urls or not all(self._allowed_url(url) for url in candidate_urls):
+    def download(
+        self,
+        asset: UpdateAsset,
+        *,
+        cancel=None,
+        progress=None,
+        mirror_policy: str = "auto",
+        custom_mirror_prefix: str = "",
+    ) -> Path:
+        original_urls = asset.candidate_urls()
+        if not _safe_asset_name(asset.name) or not original_urls or not all(self._allowed_url(url) for url in original_urls):
             raise ValueError("update asset URL is not an allowed HTTPS host")
         if asset.size <= 0 or asset.size > MAX_UPDATE_BYTES:
             raise ValueError("update asset size exceeds limit")
+        has_sha = bool(re.fullmatch(r"[0-9a-fA-F]{64}", str(asset.sha256 or "").strip()))
+        if has_sha and is_proxy_policy(mirror_policy):
+            candidate_urls = expand_github_urls(
+                original_urls, mirror_policy, custom_prefix=custom_mirror_prefix
+            )
+            download_hosts = self.trusted_hosts | frozenset(
+                proxy_hosts_for_policy(mirror_policy, custom_prefix=custom_mirror_prefix)
+            )
+        else:
+            candidate_urls = original_urls
+            download_hosts = self.trusted_hosts
         self.update_dir.mkdir(parents=True, exist_ok=True)
         final = self.update_dir / asset.name
         part = final.with_suffix(final.suffix + ".part")
@@ -209,7 +241,14 @@ class UpdateService:
             if self._cancel.is_set():
                 raise InterruptedError("update download cancelled")
             try:
-                self._download_from_url(asset, url, part, cancel=cancel, progress=progress)
+                self._download_from_url(
+                    asset,
+                    url,
+                    part,
+                    cancel=cancel,
+                    progress=progress,
+                    allowed_hosts=download_hosts,
+                )
                 path = self._finalize_download(asset, part, final, meta)
                 self._status = UpdateResult(
                     True,
@@ -255,12 +294,21 @@ class UpdateService:
         )
         raise ConnectionError(message)
 
-    def _download_from_url(self, asset: UpdateAsset, url: str, part: Path, *, cancel=None, progress=None) -> None:
+    def _download_from_url(
+        self,
+        asset: UpdateAsset,
+        url: str,
+        part: Path,
+        *,
+        cancel=None,
+        progress=None,
+        allowed_hosts=None,
+    ) -> None:
         offset = part.stat().st_size if part.exists() else 0
         headers = {"Accept": "application/octet-stream"}
         if offset:
             headers["Range"] = f"bytes={offset}-"
-        response = self._request(url, headers=headers)
+        response = self._request(url, headers=headers, allowed_hosts=allowed_hosts)
         try:
             status = int(getattr(response, "status", 200) or 200)
             if offset and status == 200:
@@ -274,7 +322,11 @@ class UpdateService:
                 close = getattr(response, "close", None)
                 if callable(close):
                     close()
-                response = self._request(url, headers={"Accept": "application/octet-stream"})
+                response = self._request(
+                    url,
+                    headers={"Accept": "application/octet-stream"},
+                    allowed_hosts=allowed_hosts,
+                )
                 status = int(getattr(response, "status", 200) or 200)
             if status not in (200, 206):
                 raise ValueError(f"unexpected update HTTP status {status}")

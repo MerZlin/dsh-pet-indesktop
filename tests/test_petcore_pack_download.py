@@ -732,3 +732,164 @@ def test_unknown_policy_falls_back_to_auto(loopback, tmp_path):
     packs.download_pack(_parts_entry(base), tmp_path, connections=2, policy="whatever")
 
     assert state.ranges("/ranges.bin"), "未知策略按 auto（单文件优先）处理"
+
+
+def test_proxy_policy_tries_mirror_first_skips_api_resolve_and_falls_back(
+    loopback, tmp_path, monkeypatch
+):
+    state, base = loopback
+    _serve_parts(state)
+    gh_url = "https://github.com/MerZlin/Animations/releases/download/packs-v1/blue-fish-1.0.0.zip"
+    resolved_calls: list[str] = []
+    attempted: list[tuple[str, str]] = []
+
+    def fake_resolve(url: str, *, timeout: float = 12.0) -> str:
+        resolved_calls.append(url)
+        return url
+
+    def fake_segmented(
+        url: str,
+        part_path: Path,
+        *,
+        expected_size=None,
+        expected_sha256="",
+        timeout=20.0,
+        connections=4,
+        progress=None,
+        cancel=None,
+        max_bytes=None,
+        state_url="",
+    ):
+        from petcore.net.market import SegmentedOutcome
+
+        attempted.append((url, state_url))
+        if url.startswith("https://gh-proxy.com/"):
+            part_path.write_bytes(PAYLOAD)
+            return SegmentedOutcome(
+                url=url,
+                bytes_written=TOTAL,
+                resumed_from=0,
+                redirects=0,
+                connections=2,
+                segments=1,
+            )
+        raise NetworkError("direct unreachable", reason=NETWORK)
+
+    monkeypatch.setattr(packs, "resolve_github_asset", fake_resolve)
+    monkeypatch.setattr(packs.market, "download_segmented", fake_segmented)
+
+    entry = _parts_entry(base, urls=(gh_url,))
+    result = packs.download_pack(entry, tmp_path, connections=2, policy="gh-proxy")
+    assert result.path.read_bytes() == PAYLOAD
+    assert result.url_host == "gh-proxy.com"
+    assert attempted == [(f"https://gh-proxy.com/{gh_url}", f"https://gh-proxy.com/{gh_url}")]
+    assert resolved_calls == [f"https://gh-proxy.com/{gh_url}"]
+    # 用真实 resolve_github_asset 对 proxy URL 也不应打 api.github.com。
+    assert packs.release_parts(f"https://gh-proxy.com/{gh_url}") is None
+
+
+def test_proxy_bad_digest_falls_back_to_github_and_then_parts(
+    loopback, tmp_path, monkeypatch
+):
+    state, base = loopback
+    _serve_parts(state)
+    gh_url = "https://github.com/MerZlin/Animations/releases/download/packs-v1/blue-fish-1.0.0.zip"
+    attempted: list[str] = []
+
+    def fake_segmented(
+        url: str,
+        part_path: Path,
+        *,
+        expected_size=None,
+        expected_sha256="",
+        timeout=20.0,
+        connections=4,
+        progress=None,
+        cancel=None,
+        max_bytes=None,
+        state_url="",
+    ):
+        from petcore.net.market import SegmentedOutcome
+
+        attempted.append(url)
+        if url.startswith("https://gh-proxy.com/"):
+            # 公益镜像返回篡改字节，必须被 SHA-256 拒绝并回退到官方直链。
+            part_path.write_bytes(b"tampered" + PAYLOAD[8:])
+            return SegmentedOutcome(
+                url=url,
+                bytes_written=TOTAL,
+                resumed_from=0,
+                redirects=0,
+                connections=2,
+                segments=1,
+            )
+        if url == gh_url:
+            raise NetworkError("github blocked", reason=NETWORK)
+        # jsDelivr 分片（loopback）走真实分段下载
+        return orig_segmented(
+            url,
+            part_path,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+            timeout=timeout,
+            connections=connections,
+            progress=progress,
+            cancel=cancel,
+            max_bytes=max_bytes,
+            state_url=state_url,
+        )
+
+    orig_segmented = packs.market.download_segmented
+    monkeypatch.setattr(packs, "resolve_github_asset", lambda url, **_k: url)
+    monkeypatch.setattr(packs.market, "download_segmented", fake_segmented)
+
+    entry = _parts_entry(base, urls=(gh_url,))
+    result = packs.download_pack(entry, tmp_path, connections=2, policy="gh-proxy")
+    assert result.path.read_bytes() == PAYLOAD
+    assert attempted[0] == f"https://gh-proxy.com/{gh_url}"
+    assert attempted[1] == gh_url
+    assert state.ranges("/bf.part1"), "单文件全挂后应自动落回 jsDelivr 分片"
+
+
+def test_ghproxy_auto_rotates_and_custom_prefix_works(tmp_path, monkeypatch):
+    gh_url = "https://github.com/MerZlin/Animations/releases/download/packs-v1/blue-fish-1.0.0.zip"
+    attempted: list[str] = []
+
+    def fake_segmented(url: str, part_path: Path, **_k):
+        from petcore.net.market import SegmentedOutcome
+
+        attempted.append(url)
+        if url.startswith("https://ghproxy.net/") or url.startswith("https://custom.example/"):
+            part_path.write_bytes(PAYLOAD)
+            return SegmentedOutcome(
+                url=url,
+                bytes_written=TOTAL,
+                resumed_from=0,
+                redirects=0,
+                connections=2,
+                segments=1,
+            )
+        raise NetworkError("down", reason=NETWORK)
+
+    monkeypatch.setattr(packs, "resolve_github_asset", lambda url, **_k: url)
+    monkeypatch.setattr(packs.market, "download_segmented", fake_segmented)
+
+    entry = _entry(gh_url)
+    res_auto = packs.download_pack(entry, tmp_path / "rot", connections=2, policy="ghproxy-auto")
+    assert res_auto.url_host == "ghproxy.net"
+    assert attempted == [
+        f"https://gh-proxy.com/{gh_url}",
+        f"https://ghfast.top/{gh_url}",
+        f"https://ghproxy.net/{gh_url}",
+    ]
+
+    attempted.clear()
+    res_custom = packs.download_pack(
+        entry,
+        tmp_path / "custom",
+        connections=2,
+        policy="custom",
+        custom_mirror_prefix="https://custom.example",
+    )
+    assert res_custom.url_host == "custom.example"
+    assert attempted == [f"https://custom.example/{gh_url}"]

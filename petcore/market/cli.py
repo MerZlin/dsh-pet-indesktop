@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .. import __version__, paths
 from ..config import Config
+from ..net.github_mirrors import read_mirror_config
 from ..net.market import HttpFetcher
 from ..net.market_transport import local_file_root_for_index
 from . import install, model
@@ -224,6 +225,10 @@ def _install_one(
 ) -> install.InstallOutcome:
     local_file_root = local_file_root_for_index(index_origin)
     connections, mirror_policy = _download_options(root)
+    try:
+        github_mirror, custom_prefix = read_mirror_config(Config.load(root))
+    except Exception:  # noqa: BLE001
+        github_mirror, custom_prefix = "auto", ""
     return install.install_package(
         root,
         package,
@@ -235,6 +240,8 @@ def _install_one(
         local_file_root=local_file_root,
         connections=connections,
         mirror_policy=mirror_policy,
+        github_mirror=github_mirror,
+        custom_mirror_prefix=custom_prefix,
     )
 
 

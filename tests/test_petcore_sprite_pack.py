@@ -197,3 +197,62 @@ def test_download_callback_after_page_dispose_does_not_touch_ui(app, tmp_path: P
     app.processEvents()
     page._on_download_done(False, "boom", str(temp))
     assert temp.exists() is False
+
+
+def test_aboutme_download_pack_uses_proxy_and_falls_back_on_bad_digest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import hashlib
+
+    payload = b"RIFFxxxxWEBP"
+    sha = hashlib.sha256(payload).hexdigest()
+    raw_url = "https://raw.githubusercontent.com/hunmer/aboutme-pets/main/pets/demo/manifest.json"
+    fake_pack = {
+        "id": "demo",
+        "name": "演示包",
+        "pet_dir": "pets/demo",
+        "files": [
+            {
+                "url": raw_url,
+                "path": "pets/demo/manifest.json",
+                "size": len(payload),
+                "sha256": sha,
+            }
+        ],
+    }
+    monkeypatch.setattr(aboutme_packs, "pack_for", lambda pid: fake_pack if pid == "demo" else None)
+
+    calls: list[str] = []
+
+    def fake_fetch(url: str, **_kwargs):
+        calls.append(url)
+        if url.startswith("https://gh-proxy.com/"):
+            return 200, {}, b"tamperedxxxx"
+        return 200, {}, payload
+
+    monkeypatch.setattr(aboutme_packs, "fetch_url", fake_fetch)
+    ok, _msg, out = aboutme_packs.download_pack(
+        "demo", tmp_path / "out1", mirror_policy="gh-proxy"
+    )
+    assert ok is True and out is not None
+    assert (out / "manifest.json").read_bytes() == payload
+    assert calls == [f"https://gh-proxy.com/{raw_url}", raw_url]
+
+    calls.clear()
+
+    def fake_custom_fetch(url: str, **_kwargs):
+        calls.append(url)
+        if url.startswith("https://my.mirror/prefix/"):
+            return 200, {}, payload
+        raise OSError("direct blocked")
+
+    monkeypatch.setattr(aboutme_packs, "fetch_url", fake_custom_fetch)
+    ok2, _msg2, out2 = aboutme_packs.download_pack(
+        "demo",
+        tmp_path / "out2",
+        mirror_policy="custom",
+        custom_mirror_prefix="https://my.mirror/prefix",
+    )
+    assert ok2 is True and out2 is not None
+    assert (out2 / "manifest.json").read_bytes() == payload
+    assert calls == [f"https://my.mirror/prefix/{raw_url}"]

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from ...config import MAX_PETS
 from ...content.sprite_pack import build_sprite_pack, character_id_for
 from ...engine.geometry import SCALE_MAX, SCALE_MIN
+from ...net.github_mirrors import read_mirror_config
 from .base import SettingsPage, make_button, make_checkbox, make_slider, make_spin
 
 
@@ -35,10 +36,20 @@ class _AboutmeDownloadJob(QThread):
     progress = Signal(int, int, str)
     done = Signal(bool, str, str)
 
-    def __init__(self, pack_id: str, dest: Path, parent=None) -> None:
+    def __init__(
+        self,
+        pack_id: str,
+        dest: Path,
+        parent=None,
+        *,
+        mirror_policy: str = "auto",
+        custom_mirror_prefix: str = "",
+    ) -> None:
         super().__init__(parent)
         self.pack_id = pack_id
         self.dest = Path(dest)
+        self.mirror_policy = str(mirror_policy or "auto")
+        self.custom_mirror_prefix = str(custom_mirror_prefix or "")
 
     def run(self) -> None:
         from ...net.aboutme_packs import download_pack
@@ -49,6 +60,8 @@ class _AboutmeDownloadJob(QThread):
             progress=lambda done, total, label: self.progress.emit(
                 int(done), int(total), str(label)
             ),
+            mirror_policy=self.mirror_policy,
+            custom_mirror_prefix=self.custom_mirror_prefix,
         )
         self.done.emit(bool(ok), str(message), str(path or ""))
 
@@ -354,7 +367,14 @@ class PetsPage(SettingsPage):
             shutil.rmtree(dest, ignore_errors=True)
         self.download_pack_button.setEnabled(False)
         self._set_pack_status("正在下载…")
-        job = _AboutmeDownloadJob(pack_id, dest, None)
+        policy, custom_prefix = read_mirror_config(self.config())
+        job = _AboutmeDownloadJob(
+            pack_id,
+            dest,
+            None,
+            mirror_policy=policy,
+            custom_mirror_prefix=custom_prefix,
+        )
         _ACTIVE_DOWNLOADS.add(job)
         job.finished.connect(lambda: _ACTIVE_DOWNLOADS.discard(job))
         job.finished.connect(job.deleteLater)

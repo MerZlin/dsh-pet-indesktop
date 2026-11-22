@@ -24,6 +24,7 @@ from ...market import download as market_download
 from ...market import install as market_install
 from ...market import model
 from ...market.source import MarketSource, SourceResult
+from ...net.github_mirrors import read_mirror_config
 from ...net.market import HttpFetcher
 from ...net.market_transport import local_file_root_for_index
 from ..market_jobs import MarketJobRegistry
@@ -96,6 +97,8 @@ class _InstallJob(_CancellableJob):
         local_file_root: Path | None = None,
         connections: int = 1,
         mirror_policy: str = "auto",
+        github_mirror: str = "auto",
+        custom_mirror_prefix: str = "",
     ):
         super().__init__()
         self._root = root
@@ -107,6 +110,8 @@ class _InstallJob(_CancellableJob):
         self._local_file_root = local_file_root
         self._connections = connections
         self._mirror_policy = mirror_policy
+        self._github_mirror = github_mirror
+        self._custom_mirror_prefix = custom_mirror_prefix
         self._last_emit = 0.0
 
     def _report_progress(self, done: int, total: int) -> None:
@@ -132,6 +137,8 @@ class _InstallJob(_CancellableJob):
                 progress=self._report_progress,
                 connections=self._connections,
                 mirror_policy=self._mirror_policy,
+                github_mirror=self._github_mirror,
+                custom_mirror_prefix=self._custom_mirror_prefix,
             )
         except Exception as exc:  # noqa: BLE001
             outcome = market_install.InstallOutcome(
@@ -578,6 +585,7 @@ class MarketPage(SettingsPage):
             self._set_busy(False, "先在「扩展管理」里允许功能扩展，再安装这个包。")
             return
         connections, mirror_policy = self._download_options()
+        github_mirror, custom_prefix = read_mirror_config(config)
         self._install_connections = connections
         self._install_resumed = 0
         try:
@@ -599,6 +607,8 @@ class MarketPage(SettingsPage):
                 local_file_root=self._local_file_root(),
                 connections=connections,
                 mirror_policy=mirror_policy,
+                github_mirror=github_mirror,
+                custom_mirror_prefix=custom_prefix,
             )
             self._apply_install(outcome)
             return
@@ -612,6 +622,8 @@ class MarketPage(SettingsPage):
             local_file_root=self._local_file_root(),
             connections=connections,
             mirror_policy=mirror_policy,
+            github_mirror=github_mirror,
+            custom_mirror_prefix=custom_prefix,
         )
         self._track(job)
         job.done.connect(self._apply_install)

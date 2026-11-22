@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import select
 import ssl
 import threading
 import time
@@ -999,7 +1000,7 @@ def _stream_once(
     stop_watch = threading.Event()
     watcher = _start_cancel_watcher(response, cancel, stop_watch)
     stream_deadline = time.monotonic() + max(1.0, float(timeout))
-    _set_read_timeout(response, SOCKET_POLL_SECONDS)
+    lines = _StreamLines(response, cancel, stream_deadline)
     interrupted: Exception | None = None
     try:
         event_lines: list[str] = []
@@ -1009,7 +1010,7 @@ def _stream_once(
                     cancelled = True
                     break
                 try:
-                    raw = _readline(response, cancel, stream_deadline)
+                    raw = lines.readline()
                 except ChatCancelled:
                     cancelled = True
                     break
@@ -1138,34 +1139,106 @@ def _stream_once(
 
 
 SOCKET_POLL_SECONDS = 0.5
+#: 每次 ``read1`` 最多取多少字节（够装下一批 SSE 行，又不至于一次吃掉整个响应）。
+_STREAM_CHUNK_BYTES = 65536
 
 
-def _set_read_timeout(response, seconds: float) -> bool:
-    """把底层 socket 的读超时压短：否则一次阻塞读会一直挂到全局 timeout。"""
-    try:
-        sock = response.fp.raw._sock
-    except Exception:  # noqa: BLE001 - 测试替身没有真实 socket
-        return False
-    try:
-        sock.settimeout(float(seconds))
-    except OSError:
-        return False
-    return True
+class _StreamLines:
+    """逐行读 SSE，且不把底层 BufferedReader 读超时（2026-11-15 真机实测）。
 
+    ``http.client.HTTPResponse.fp`` 是 ``_io.BufferedReader``：只要有一次读超时，
+    它此后每个 ``readline`` 都抛 ``OSError: cannot read from timed out object``。
+    之前用「0.5 秒 socket 超时 + 循环 readline」轮询取消，云端模型首字快时看不出来，
+    本地模型首字 1–20 秒时整条流必然读死（llama.cpp 实测：三次路由重试都在 1 秒内
+    失败，服务端日志是客户端主动断开）。
 
-def _readline(response, cancel, deadline: float) -> bytes:
-    """读一行；反复超时只表示「暂时没数据」，取消与总预算在这里生效。"""
-    while True:
+    这里改成「``select`` 等可读 + ``read1`` 增量 + 自建行缓冲」：socket 超时只用于
+    ``read1`` 的兜底，不会污染读缓冲。拿不到真实 socket（测试替身）时退回
+    ``response.readline()``，取消仍由 ``_start_cancel_watcher`` 关闭响应来打断。
+    """
+
+    def __init__(self, response, cancel, deadline: float) -> None:
+        self.response = response
+        self.cancel = cancel
+        self.deadline = deadline
+        self._buffer = bytearray()
+        self._read1 = getattr(response, "read1", None)
         try:
-            return response.readline()
-        except errors.NetworkError:
-            raise
-        except TimeoutError:
-            if _cancelled(cancel):
-                raise ChatCancelled("已停止") from None
-            if time.monotonic() > deadline:
+            self._sock = response.fp.raw._sock
+        except Exception:  # noqa: BLE001 - 测试替身没有真实 socket
+            self._sock = None
+        if self._read1 is None:
+            self._sock = None
+
+    def readline(self) -> bytes:
+        while True:
+            line = self._pop_line()
+            if line is not None:
+                return line
+            if _cancelled(self.cancel):
+                raise ChatCancelled("已停止")
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise errors.NetworkTimeout("连接超时")
+            if self._sock is None:
+                return self.response.readline()
+            try:
+                # TLS 可能在自己内部缓冲了已解密数据：此时 select 看不到、会白等。
+                # SSLSocket.pending() 有值就直接读。
+                buffered = self._pending()
+                ready = buffered > 0 or bool(
+                    select.select(
+                        [self._sock], [], [], min(SOCKET_POLL_SECONDS, remaining)
+                    )[0]
+                )
+            except (OSError, ValueError):
+                if _cancelled(self.cancel):
+                    raise ChatCancelled("已停止") from None
+                # 响应读完时 http.client 会关掉底层 socket：select/read1 随即报错。
+                # 缓冲里剩下的最后一截（没有换行的普通 JSON）仍然是有效正文。
+                return self._drain()
+            if not ready:
+                continue
+            try:
+                self._sock.settimeout(max(0.5, min(remaining, 5.0)))
+                chunk = self._read1(_STREAM_CHUNK_BYTES)
+            except TimeoutError:
+                if _cancelled(self.cancel):
+                    raise ChatCancelled("已停止") from None
                 raise errors.NetworkTimeout("连接超时") from None
-            continue
+            except (OSError, ValueError):
+                if _cancelled(self.cancel):
+                    raise ChatCancelled("已停止") from None
+                return self._drain()
+            if not chunk:
+                # EOF：最后一截可能没有换行（普通 JSON 响应就是这样）。
+                return self._drain()
+            self._buffer += chunk
+
+    def _pending(self) -> int:
+        """TLS 内部已解密但还没交出的字节数（普通 socket 恒为 0）。"""
+        pending = getattr(self._sock, "pending", None)
+        if not callable(pending):
+            return 0
+        try:
+            return int(pending() or 0)
+        except Exception:  # noqa: BLE001 - 取不到就当没有缓冲
+            return 0
+
+    def _drain(self) -> bytes:
+        if not self._buffer:
+            return b""
+        line = bytes(self._buffer)
+        self._buffer.clear()
+        return line
+
+    def _pop_line(self) -> bytes | None:
+        index = self._buffer.find(b"\n")
+        if index < 0:
+            return None
+        line = bytes(self._buffer[: index + 1])
+        del self._buffer[: index + 1]
+        return line
 
 
 def _raise_for_error_frame(payload: Mapping[str, Any]) -> None:

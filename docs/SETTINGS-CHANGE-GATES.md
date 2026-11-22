@@ -83,6 +83,52 @@ recovery
 
 ## 变更记录
 
+### 2026-11-21 — API 页「本地模型指南」只读子页（不新增配置键）
+
+| 项 | 本刀口径 |
+|---|---|
+| setting_id / 键 | **不新增任何持久化设置键**（`DEFAULTS`、`GLOBAL_CONFIG_KEYS` 与 `settings_schema.py` 均零变动）；属于向导与可复制指南视图 |
+| 归属 | 「API 与账户」拆分两个页内分页：`服务配置`（原有表单）与 `本地模型指南`（只读 `QPlainTextEdit#apiLocalGuidePrompt` +「复制指南给 AI」按钮） |
+| 为什么准入 | 本地部署（GGUF / llama.cpp / Ollama / LM Studio / vLLM 与 GPT-SoVITS / OpenAI 兼容 TTS）需要先启动本机 HTTP 服务再回桌宠填写多项跨页设置；提供真实路径注入 + 一键复制给 AI 可降低手工错填概率，同时不污染设置键表 |
+| 保存与回滚 | 本子页无表单状态：点击「复制指南给 AI」只写系统剪贴板并更新行内提示，`page.dirty()` 保持不变，取消设置窗无副作用 |
+| 版式与可达性 | 随包静态文案 `petcore/ui/settings/local_model_guide.py`（不读 `docs/`）；切换分页动态调整 `SettingsTabContainer.stack` 宽度策略——`服务配置` 维持 `MinimumExpanding`（720×500 下保留横向滚动条，「保存服务」可达），`本地模型指南` 切 `Ignored`（720×500 零横向滚动、`hbar_max == 0`）；补充焦点蓝框样式、`accessibleName/Description` 与明暗双色截图 |
+| 搜索 | 注册 `LOCAL_MODEL_GUIDE_KEYWORDS`（`本地模型`、`本地部署`、`GGUF`、`llama.cpp`、`Ollama`、`LM Studio`、`vLLM`、`GPT-SoVITS`、`api_v2`、`本地语音` 等）到控件与 `ApiSettingsPage.keywords()`，搜词自动切换并定位到 `local_guide` 分页 |
+| 测试 | `tests/test_petcore_api_local_guide.py`、`tests/test_petcore_api.py`、`tests/test_petcore_api_presets.py`、`tests/test_petcore_manual_page.py`、`tests/test_petcore_settings.py`、`tests/test_petcore_settings_coverage.py` |
+| 未验证 | macOS 与 Linux 真机字体下该子页渲染未测（仅验证 Windows 原生 Qt 字体 1100×760 明/暗与 720×500 窄窗）；真实设置页改动未影响后端配置读写 |
+
+### 2026-11-20 — GitHub 公益加速镜像与自定义前缀（`pack_mirror_policy` 扩展 + `pack_mirror_custom_url`）
+
+| 项 | 本刀口径 |
+|---|---|
+| setting_id / 键 | 扩展全局 `pack_mirror_policy`（默认 `"auto"`，新增 `gh-proxy`/`ghfast`/`ghproxy-net`/`ghproxy-cc`/`ghproxy-auto`/`custom`）；新增全局 `pack_mirror_custom_url`（str，默认 `""`，≤512，只接收无凭据/无 query/fragment 的 `https://` 根前缀，规范化补尾 `/`） |
+| 归属 | 「常规 → 数据 → 下载镜像」与紧邻其下的「自定义镜像前缀」 |
+| 为什么准入 | 不同地区与代理环境下官方 GitHub 与各公益反代的连通性/速率差异极大，且自建/新公益站无法靠应用自动推断；默认 `auto` 保持既有行为逐字节不变 |
+| 明确不加键 | 轮询超时、单节点健康分、是否跳过清单等不暴露（清单/索引硬编码永不走第三方反代） |
+| 作用域 | 两键均在 `GLOBAL_CONFIG_KEYS`，由 `ScopedConfig` 全局读写，对素材包、aboutme 角色包、Core 更新包、市场包体与树目录安装生效 |
+| 保存与回滚 | 下拉切换与前缀输入均实时归一化写入并触发 `changed`（无效输入在配置里落空串并展示行内提示，不打断输入）；`dirty()` 纳入两键变化，`confirm_save()` 刷回规范格式并推进基线，`discard_changes()` 全量回滚 |
+| migration / recovery | 旧配置无 `pack_mirror_custom_url` → `_normalize` 补 `""`；未知 `pack_mirror_policy` 回落 `"auto"`；公益镜像失败/被拒/摘要不符自动清 `.part` 并回退到原有官方 GitHub / jsDelivr 分片 |
+| 版式与可达性 | 「下载镜像」改 `expand=True`（720 px 下拉框最小宽降至 416 px 安全区内）；「自定义镜像前缀」仅选中 `custom` 时可编辑，切换其它选项时置灰但保留已填文本；`#customMirrorPrefix` 接入 `style.py` 的 32 px 焦点与禁用态 token |
+| 搜索 | `search_keys` 与 `GeneralPage.keywords()` 补入 `gh-proxy`/`ghfast`/`ghproxy`/`公益镜像`/`自定义镜像`/`镜像前缀`；`settings_schema.py` 枚举同步为 `ALL_MIRROR_POLICIES` |
+| 测试 | `test_petcore_github_mirrors.py`、`test_petcore_config_scope.py`、`test_petcore_settings_cli.py`、`test_petcore_pack_download.py`、`test_petcore_settings_assets_links.py`、`test_petcore_sprite_pack.py`、`test_petcore_update.py`、`test_petcore_market_install.py`、`test_petcore_url_install.py` |
+| 未验证 | 126 MiB 完整素材包经公益站全量端到端耗时、macOS/Linux 真机设置页（本机 Windows 已做 offscreen+原生字体截图与真机网络探针） |
+
+### 2026-11-15 — GPT-SoVITS 本地语音（4 个新键）
+
+| 项 | 本刀口径 |
+|---|---|
+| setting_id / 键 | `speech_local_ref_audio`（≤512，默认空）、`speech_local_prompt_text`（≤500，默认空）、`speech_local_prompt_lang`（默认 `zh`）、`speech_local_text_lang`（默认 `zh`） |
+| 归属 | 设置 →「语音」→「自定义 / 本地部署 TTS（HTTP）」；协议选「GPT-SoVITS（api_v2 POST /tts）」时可编辑，其它协议置灰但保留值 |
+| 为什么准入 | 参考音频（音色）与它的文本只有用户知道，无法由应用推断；默认空 = 现有 openai/simple 协议行为不变 |
+| 明确不加键 | 采样步数、切分方法（固定 `cut5`）、`media_type`（固定 wav）、`streaming_mode`（固定 false）都是实现参数 |
+| 作用域 | 4 个键都是全局键（与既有 `speech_local_*` 一致）；`GLOBAL_CONFIG_KEYS` 与 `settings_schema.py` 已登记 |
+| 保存语义 | 走既有差异写回（`CONFIG_KEYS` → `_on_changed`）；保存/取消/快照回滚由 `VoicePage` 统一处理，切协议不丢值 |
+| migration / recovery | 旧配置无键 → `_normalize` 补默认；语言码只做字符集/长度清洗，服务端按自身版本拒绝并给出可见错误；缺参考音频时 provider 报「未配置」并回退 |
+| 语义 | `gpt_sovits` 发 `POST /tts`（text/text_lang/ref_audio_path/prompt_text/prompt_lang/text_split_method/speed_factor/media_type/streaming_mode），产物固定 wav；缓存键含参考音频/参考文本/两种语言；请求仍 `direct_only=True` |
+| 版式与可达性 | 参考音频 = 路径框 +「选择文件…」；参考文本单行；语言是「参考 / 合成」两个下拉同一行；非该协议整行置灰 |
+| 搜索 | 行标题/提示自动进索引；页面 `keywords()` 已含「本地」「语音」 |
+| 测试 | `test_petcore_speech_local.py`（请求体/缺参考音频/wav 后缀/缓存键/归一化/全局键）、`test_petcore_settings_voice.py`（行启用/写键/取消回滚）、`test_petcore_settings_cli.py`（schema 集合） |
+| 未验证 | 真实 GPT-SoVITS api_v2 联调（缺 GPT/BERT/HuBERT/参考音频）；真实音色与 CPU 实时率 |
+
 ### 2026-11-03 — AI 表情包回复（`ai_meme_reply_enabled`）+ 提示词上限可见
 
 | 项 | 本刀口径 |

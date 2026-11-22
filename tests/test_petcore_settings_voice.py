@@ -387,3 +387,55 @@ def test_asr_settings_write_and_discard(app, tmp_path: Path, monkeypatch) -> Non
         assert page.dirty() is False
     finally:
         page.deleteLater()
+
+
+def test_gpt_sovits_rows_are_enabled_and_write_their_own_keys(app, tmp_path: Path) -> None:
+    host = FakeHost(tmp_path)
+    page = VoicePage(host)
+    try:
+        openai = page.local_protocol.findData("openai")
+        assert openai >= 0
+        assert page.local_ref_row.isEnabled() is False, "OpenAI 协议不该要求参考音频"
+        assert page.local_format.isEnabled() is True
+
+        page.local_protocol.setCurrentIndex(page.local_protocol.findData("gpt_sovits"))
+        assert page.local_ref_row.isEnabled() is True
+        assert page.local_prompt_row.isEnabled() is True
+        assert page.local_lang_row.isEnabled() is True
+        assert page.local_format.isEnabled() is False, "GPT-SoVITS 固定 wav，格式选择不生效"
+
+        page.local_ref_audio.setText(r"D:\voices\ref.wav")
+        page.local_prompt_text.setText("参考音频里说的话")
+        page.local_prompt_lang.setCurrentIndex(page.local_prompt_lang.findData("ja"))
+        page.local_text_lang.setCurrentIndex(page.local_text_lang.findData("zh"))
+
+        assert host.config.get("speech_local_ref_audio") == r"D:\voices\ref.wav"
+        assert host.config.get("speech_local_prompt_text") == "参考音频里说的话"
+        assert host.config.get("speech_local_prompt_lang") == "ja"
+        assert host.config.get("speech_local_text_lang") == "zh"
+        assert host.config.get("speech_local_protocol") == "gpt_sovits"
+    finally:
+        page.deleteLater()
+
+
+def test_discard_restores_gpt_sovits_fields(app, tmp_path: Path) -> None:
+    host = FakeHost(tmp_path)
+    page = VoicePage(host)
+    try:
+        page.local_protocol.setCurrentIndex(page.local_protocol.findData("gpt_sovits"))
+        page.local_ref_audio.setText(r"D:\voices\ref.wav")
+        page.local_prompt_text.setText("临时文本")
+        page.local_prompt_lang.setCurrentIndex(page.local_prompt_lang.findData("ja"))
+        assert page.dirty() is True
+
+        page.discard_changes()
+
+        assert page.dirty() is False
+        assert page.local_protocol.currentData() == "openai"
+        assert page.local_ref_audio.text() == ""
+        assert page.local_prompt_text.text() == ""
+        assert page.local_prompt_lang.currentData() == "zh"
+        assert host.config.get("speech_local_ref_audio") == ""
+        assert host.config.get("speech_local_prompt_lang") == "zh"
+    finally:
+        page.deleteLater()

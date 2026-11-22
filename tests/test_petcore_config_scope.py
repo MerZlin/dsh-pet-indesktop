@@ -174,3 +174,22 @@ def test_ai_meme_reply_is_a_global_bool(tmp_path: Path) -> None:
     assert config.get("ai_meme_reply_enabled") is True
     config.set("ai_meme_reply_enabled", "not-a-bool")
     assert config.get("ai_meme_reply_enabled") is False
+
+
+def test_pack_mirror_proxy_policies_and_custom_prefix(tmp_path: Path) -> None:
+    from petcore.config import GLOBAL_CONFIG_KEYS
+
+    assert "pack_mirror_custom_url" in GLOBAL_CONFIG_KEYS
+    parent = Config(tmp_path, {"pack_mirror_policy": "auto"}, filename="config-main.json")
+    child = Config(tmp_path, {"character": "kid"}, filename="config-pet-1.json")
+    scoped = ScopedConfig(parent, child)
+    for policy in ("gh-proxy", "ghfast", "ghproxy-net", "ghproxy-cc", "ghproxy-auto", "custom"):
+        scoped.set("pack_mirror_policy", policy.upper())
+        assert parent.get("pack_mirror_policy") == policy
+        assert child.get("pack_mirror_policy") == "auto"
+
+    scoped.set("pack_mirror_custom_url", "https://my.mirror.example/gh")
+    assert parent.get("pack_mirror_custom_url") == "https://my.mirror.example/gh/"
+    assert child.get("pack_mirror_custom_url") == ""
+    scoped.set("pack_mirror_custom_url", "http://insecure.example")
+    assert parent.get("pack_mirror_custom_url") == ""

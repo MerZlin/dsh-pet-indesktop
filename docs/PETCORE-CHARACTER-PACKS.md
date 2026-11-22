@@ -104,8 +104,17 @@ mods/character.shenshen/
 - aboutme-pets 单角色目录可用 `petcore/content/sprite_pack.py` 导入；应用内下载索引
   在 `petcore/content/data/aboutme_packs.json`，只含许可文件齐全的 `dsh`/`dsh1`，
   逐文件 sha256 校验，不随安装包分发。设置 → 角色素材包另有「素材来源」按钮打开
-  `https://github.com/hunmer/aboutme-pets`；也支持在「扩展管理 → 从链接安装」直接
-  粘贴该仓库角色目录的 zip 直链（`petcore/mods/url_install.py`）。
+  `https://github.com/hunmer/aboutme-pets`。
+- 「扩展管理 → 从链接安装」接受两种链接：
+  - zip 直链（功能扩展 / 内容扩展 / aboutme 单角色包，`preview_zip`）；
+  - **GitHub 角色目录** `https://github.com/<owner>/<repo>/tree/<ref>/<path>`
+    （`petcore/net/aboutme_repo.py` + `url_install.fetch_tree`）：只解析出
+    owner/repo/ref/path，自己拼 `raw.githubusercontent.com`，按 `manifest.json` /
+    `actions.json` 声明的 `sources.webp` 逐个下载（单文件 16 MB、总量 512 MB、
+    ≤400 个；不消耗 GitHub API 配额），再走 `build_sprite_pack` 的 staging/回滚。
+    默认只取 `essential_actions()` 的常用动作（待机/移动/点击/拖拽/工作 + 2 个随机，
+    ≤8 张，与 curated 下载同口径）；「下载全部动作」勾选后整包（可能上百张）。
+    设置页提供 9 个 aboutme 角色包下拉 +「打开 / 填入输入框」按钮。
 
 ## 7. 制作新角色包
 

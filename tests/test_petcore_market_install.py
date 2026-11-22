@@ -483,3 +483,50 @@ def test_lock_failure_restores_the_previous_version(tmp_path, monkeypatch):
     assert not outcome.ok
     assert "已回滚" in outcome.message
     assert install.installed_version(tmp_path, "fun.test") == "1.0.0"
+
+
+def test_market_install_supports_github_mirror_with_allowlist_and_fallback(tmp_path):
+    artifact = _make_zip(tmp_path, "v1.zip", _manifest("fun.test", "content", "1.0.0"), "one")
+    gh_url = "https://github.com/MerZlin/dsh-pet-extensions/releases/download/v1/fun.test-1.0.0.zip"
+    doc = _document("fun.test", "1.0.0", artifact)
+    doc["packages"][0]["versions"][0]["urls"] = [gh_url]
+    package, version = _package(doc)
+
+    # 1. 成功经公益镜像下载，且 allowed_hosts 含代理主机 + GitHub CDN 主机
+    fetcher_ok = FetchAwareFetcher(artifact)
+    outcome = install.install_package(
+        tmp_path / "ok",
+        package,
+        version,
+        fetcher=fetcher_ok,
+        github_mirror="gh-proxy",
+    )
+    assert outcome.ok, outcome.message
+    assert [spec.urls[0] for spec in fetcher_ok.specs] == [f"https://gh-proxy.com/{gh_url}"]
+    assert "gh-proxy.com" in fetcher_ok.specs[0].allowed_hosts
+    assert "objects.githubusercontent.com" in fetcher_ok.specs[0].allowed_hosts
+
+    # 2. 自定义前缀失败时自动回退到原始 GitHub 地址
+    class _FailFirstFetcher(FetchAwareFetcher):
+        def fetch(self, spec, dest_dir, *, limits=None, progress=None, cancel=None):
+            if spec.urls[0].startswith("https://my.mirror/"):
+                self.specs.append(spec)
+                self.limits.append(limits)
+                raise OSError("custom proxy down")
+            return super().fetch(spec, dest_dir, limits=limits, progress=progress, cancel=cancel)
+
+    fetcher_fb = _FailFirstFetcher(artifact)
+    outcome2 = install.install_package(
+        tmp_path / "fb",
+        package,
+        version,
+        fetcher=fetcher_fb,
+        github_mirror="custom",
+        custom_mirror_prefix="https://my.mirror",
+    )
+    assert outcome2.ok, outcome2.message
+    assert [spec.urls[0] for spec in fetcher_fb.specs] == [
+        f"https://my.mirror/{gh_url}",
+        gh_url,
+    ]
+    assert "my.mirror" in fetcher_fb.specs[0].allowed_hosts

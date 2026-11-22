@@ -1189,7 +1189,8 @@ system 追加彩蛋目录清单（`easter_egg_image_dir`，空 = `assets/big_blu
   `scripts/make_animation_pack.py`、`scripts/publish_animation_pack.ps1` 与压测
   `scripts/bench_pack_download.py`。
 
-- **素材包镜像策略**：全局 `pack_mirror_policy`（`auto|mirror|github`，默认 `auto`）只决定
+- **素材包与 GitHub 下载镜像策略**：全局 `pack_mirror_policy`（`auto|gh-proxy|ghfast|ghproxy-net|ghproxy-cc|ghproxy-auto|custom|mirror|github`，默认 `auto`）与全局 `pack_mirror_custom_url`（默认空串，仅接受无凭据/无查询串/无片段的 `https://` 前缀）。`auto`/`mirror`/`github` 保持原有行为不变；选用公益镜像、`ghproxy-auto` 轮询或 `custom` 时，候选清单将代理包装后的地址置前、原始官方地址一律保留在末尾作自动兜底。策略统一作用于素材包、aboutme curated 角色包、Core 更新安装包、插件市场包体与 `url_install.fetch_tree` 精灵目录；更新清单（`UpdateService.check`）、市场索引（`MarketSource`）与无固定摘要的任意 ZIP（`url_install.fetch_zip`）绝不经过第三方代理，所有下载落盘前均通过 SHA-256 或内容魔数校验；下载完成行写出实际命中主机（如 `来自 gh-proxy.com` 或 `来自 release-assets.githubusercontent.com`）。
+- 原说明保留：全局 `pack_mirror_policy` 原仅决定
   **先试哪套源**：`auto` 按索引意图（GitHub 单文件优先）、`mirror` 先分片镜像、`github`
   只用单文件；任何一套失败都会自动换另一套，所以三个取值都不会让下载彻底不可用。
   下载完成行会写出实际来源主机（`来自 release-assets.githubusercontent.com`）。

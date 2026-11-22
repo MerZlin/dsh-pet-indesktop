@@ -7465,3 +7465,131 @@ settings_cli / settings_schema / config_reload / manual_page 等）。
 - WebM 闲置动画不再降帧，静息 CPU 可能略高于旧实现；长 ASCII/代码块/表格的右侧裁切仍是
   QLabel 富文本边界。
 - B 站 names 4785 与 total 4788 差 3 是 B 站口径差异，不伪造第 4786–4788 个名字。
+
+## L201 — 本地 GGUF 对话 / GPT-SoVITS 语音协议 / aboutme 目录 URL（2026-11-15）
+
+**目标与结论**
+
+- 用户提供 `gemma-4-E4B-it-UD-IQ3_XXS.gguf`（`gemma4` 架构、7.5B、IQ3_XXS、3.71 GB）
+  与自训 SoVITS ONNX，要求实测本地对话、说明语音能否打包，并给 aboutme 角色包 URL
+  加「打开 / 一键填入」。
+- 本地对话可用：llama.cpp b12397 + `--reasoning off --jinja`，桌宠既有「llama.cpp
+  server（本地）」预设直接对接；实测解码 7.4–8.5 tok/s、3,595 token 预填充
+  17.8–21.8 s、冷首轮 8.6–22.4 s、同前缀第二轮 3.3–7.5 s、RSS 2.44–2.93 GB。
+  不随包运行时（用户确认只做实测+文档）。
+- 自训语音：262 MB ONNX 只是 SoVITS 解码器（实测 RTF 0.10），完整推理缺 GPT/BERT/
+  HuBERT/G2P 与参考音频；本轮给 `local` TTS 加 `gpt_sovits` 协议（api_v2 POST /tts），
+  不随包、不进程内推理。
+- aboutme：上游只有角色目录、没有单包 zip；安装器新增 GitHub 目录 URL 支持，设置页
+  新增角色包下拉 +「打开 / 填入输入框」。
+
+**改动范围**
+
+- 实现（9 文件）：`petcore/api/chat.py`（+97/−24，SSE 读取器改 `select`+`read1`，
+  TLS 用 `pending()` 兜底）、`petcore/net/aboutme_repo.py`（新 +230）、
+  `petcore/mods/url_install.py`（+286/−62，目录 URL 下载/安装/清理 + 常用动作筛选）、
+  `petcore/net/tts.py`（+46/−6，`gpt_sovits` 协议）、
+  `petcore/speech/service.py`（+32/−4，字段/缓存键/门控）、`petcore/config.py`
+  （+33/−1，4 个新键与归一化）、`petcore/settings_schema.py`（+4）、
+  `petcore/ui/settings/page_voice.py`（+105/−3）、`petcore/ui/settings/page_mods.py`
+  （+106/−16）。
+- 测试（4 文件，+445）：`test_petcore_api_chat_stream.py`（慢首字回归）、
+  `test_petcore_speech_local.py`（协议/缓存/配置）、`test_petcore_settings_voice.py`
+  （行启用与回滚）、`test_petcore_url_install.py`（目录 URL/安装/UI）。
+- 文档：`docs/LOCAL-MODELS.md`（新）、`docs/PR-REPORT-LOCAL-MODEL-VOICE-URL-2026-11-15.md`
+  （新）、`docs/PETCORE-CHARACTER-PACKS.md` §6a、`docs/INDEX.md`、本 log 与索引。
+
+**行为变化**
+
+- SSE 读取：本地/慢首字服务不再在 1 秒内报 `网络不可达`。根因是
+  `http.client.HTTPResponse.fp` 一次读超时后永久抛
+  `OSError: cannot read from timed out object`；旧实现每 0.5 s 轮询一次读超时，
+  等于把读缓冲读死。新实现 `select` 等可读后 `read1` 增量读取并自建行缓冲，EOF 时
+  交回没有换行的最后一截（普通 JSON 响应）。取消仍由 watcher 关闭响应兜底。
+- 本地 TTS：协议下拉新增 GPT-SoVITS；`speech_local_ref_audio` /
+  `speech_local_prompt_text` / `speech_local_prompt_lang` / `speech_local_text_lang`
+  4 个全局键；`gpt_sovits` 固定 wav 后缀与 `media_type`；缓存键含参考音频与文本；
+  缺参考音频时 provider 报「未配置」（`config`）。
+- aboutme：「从链接安装」支持 `…/tree/<ref>/<path>`：只解析出 owner/repo/ref/path，
+  自行拼 `raw.githubusercontent.com`（中文文件名按 URL 转义），取 manifest/actions
+  与声明的 `sources.webp`，再走 `build_sprite_pack` 的 staging/回滚；默认只取
+  `essential_actions()` 的常用动作（≤8 张，与 curated 同口径），「下载全部动作」
+  勾选后整包。单文件 16 MB、总量 512 MB、≤400 个；`discard` 只删除登记的临时目录。
+
+**验证**
+
+- ruff：`ruff check petcore tests` 全绿。
+- 聚焦：`test_petcore_api_chat_stream.py`（23）、speech/settings/url/pages/
+  extensions 共 139 passed；`settings_cli/settings/pages_smoke` 106 passed。
+- 先红后绿：慢首字回归在旧 `chat.py` 上失败（`NetworkError 连接超时`，21.4 s），
+  新实现 3.15 s 全绿。
+- 全量：`QT_QPA_PLATFORM=offscreen pytest -q` = **11940 passed, 22 skipped, 7 failed（27:29）**。
+  7 例均非本批：4×`test_bundle_slim` 缺 QtWebView DLL、`test_desktop_pet_features` 外部品牌
+  引用、`test_packaging_keyring_notices` 的 `build_onedir.ps1` UTF-8 BOM（三者 L200 已登记）；
+  以及 `test_chat_subsystem::test_append_message_atomic_across_store_instances`（全量负载下
+  偶发失败，单独跑 3/3 通过）。另：前一次全量在 `test_quick_chat` 触发原生 access violation，
+  该文件单独跑 9/9 通过，重跑未复现。
+- 真机：llama-server + `petcore.api.chat.stream_chat`（冷/热/第 2 轮/取消）与源码
+  桌宠对话窗各跑通一次；tools 返回 `tool_calls`；GPT-SoVITS 协议用桩服务端验证；
+  aboutme 真实直链：`pets/dsh` 8/8 张常用精灵表、8.0 MB、34.6 s，安装后
+  `mods/character.dsh` 有 8 段 clip。
+
+**未验证/风险**
+
+- 真实 GPT-SoVITS api_v2 未联调（本机缺 GPT/BERT/HuBERT/参考音频）。
+- 整包（「下载全部动作」）在本机加速代理下过慢（92 张约 130 MB）；默认只装 8 张，
+  正常网络按单文件 3–12 s 估算。
+- 本地 GGUF 的视觉（无 mmproj）、>8k 上下文与多轮记忆未验证；`--reasoning off`
+  必须由用户启动参数保证，桌宠无法替服务端关闭思考。
+
+## L202 — 2026-11-20 — GitHub 公益加速镜像与自定义前缀选项
+
+**背景**：用户实测 `gh-proxy.com` 在本机直连可达且速度快于直连官方 GitHub，希望在不影响既有可用下载方式的前提下，将 `gh-proxy.com` 等常用公益镜像以及一个自定义镜像前缀作为可选项接入设置。
+
+**改动**
+
+- 单一真值 `petcore/net/github_mirrors.py`（纯标准库，零 Qt/零 I/O）：统一定义 9 项镜像策略（`auto|gh-proxy|ghfast|ghproxy-net|ghproxy-cc|ghproxy-auto|custom|mirror|github`）、`MIRROR_POLICY_OPTIONS`、自定义前缀规范化 `normalize_custom_prefix()`（仅接受无凭据/无查询串/无片段且总长 ≤512 的 `https://` URL）、`wrap_github_url()`（仅包装 `raw.githubusercontent.com` 与 `github.com` 的 `/releases/download/`、`/archive/`、`/raw/`，拒收 `api.github.com`、签名 CDN 与已包装地址）及 `expand_github_urls()`（永远保留原地址在末尾作自动回退）。
+- 配置与 Schema：`petcore/config.py` 新增全局键 `pack_mirror_custom_url`（默认 `""`），`_normalize()` 改调 `normalize_policy` / `normalize_custom_prefix`；`petcore/settings_schema.py` 将过时的 `pack_mirror_policy` 枚举同步为 `ALL_MIRROR_POLICIES` 并补录 `pack_mirror_custom_url` 中文标签。
+- 五条下载链按安全红线统一接入：
+  1. 动画素材包（`petcore/net/packs.py`、`petcore/ui/settings/pack_download.py`）：`DEFAULT_PACK_HOSTS` 不放宽，代理地址直接跳过 `resolve_github_asset()` 并独立记录 `state_url`；摘要不符或失败回退原 GitHub 直链与 jsDelivr 分片。
+  2. aboutme curated 角色包（`petcore/net/aboutme_packs.py`、`petcore/ui/settings/page_pets.py`）：逐文件展开候选地址，保留大小与 SHA-256 校验，失败自动回退直连。
+  3. Core 更新安装包（`petcore/update/service.py`、`petcore/ui/app.py`、`petcore/cli.py`）：`check()` 检查清单绝不走公益代理；`download()` 先校验原地址属于 `TRUSTED_HOSTS`、确认资产有 64 位 SHA-256 后再按策略临时放行对应代理主机并校验重定向与摘要。
+  4. 插件市场包体（`petcore/market/download.py`、`install.py`、`cli.py`、`petcore/ui/settings/page_market.py`）：`MarketSource` 索引拉取不动；仅 `download_artifact()` 在存在 SHA-256 时通过 `github_mirror` 扩展 `TransferSpec.allowed_hosts` 并保留 `market_download_sources` 竞速语义。
+  5. 从链接安装角色目录（`petcore/mods/url_install.py`、`petcore/ui/settings/page_mods.py`）：仅 `fetch_tree()` 支持镜像展开并增加 JSON 字典 / `RIFF....WEBP` 魔数拦截与直连回退；`fetch_zip()` 不改写。
+- 设置页 UI（`petcore/ui/settings/pages_core.py`、`petcore/ui/settings/style.py`）：`GeneralPage`「常规 → 数据 → 下载镜像」改为 `expand=True` 并由 `MIRROR_POLICY_OPTIONS` 驱动；新增「自定义镜像前缀」输入行（仅 `custom` 启用、即时校验提示、`dirty()`/`confirm_save()`/`discard_changes()` 完整同步与回滚）；`style.py` 为 `#customMirrorPrefix` 补充标准 32 px 焦点与禁用态样式。
+- 测试与报告：新增 `tests/test_petcore_github_mirrors.py`，扩展 8 份现有回归测试；新增 `docs/PR-REPORT-GITHUB-MIRROR-OPTIONS-2026-11-20.md` 并在 `docs/INDEX.md`、`docs/PETCORE-SPEC.md`、`docs/SETTINGS-CHANGE-GATES.md` 登记。
+
+**验证**
+
+- 静态与格式：`.\.venv\Scripts\python.exe -m ruff check petcore tests` 全绿（`exit 0`）；`git diff --check` 无告警（`exit 0`）。
+- 聚焦与专项门：17 份受影响测试文件 **`362 passed in 119.55s`**（`NO_PROXY=127.0.0.1,localhost`、`QT_QPA_PLATFORM=offscreen`）；`test_pr_report_discipline.py` + `test_petcore_docs.py` + `test_petcore_architecture.py` **`418 passed`**（`exit 0`）。
+- 全量 `petcore` + 架构/纪律门（`tests/test_petcore_*.py` + `tests/test_architecture.py` + `tests/test_pr_report_discipline.py`）：**`3843 passed, 5 failed, 5 skipped`（`8431.47s`）**，本批及全部镜像/配置/UI/下载测试零失败；5 例均系宿主机既有环境问题——4× `test_petcore_agent_mod.py`（检查宿主机用户目录下外部 Agent 会话路径触发 `PermissionError: WinError 5`）与 1× `test_petcore_net.py::test_http_error_is_raised_without_direct_retry`（宿主机 Windows 注册表活跃系统代理使未改动的 `petcore/net/http.py` 对 HTTP 503 执行换路重试）。本批未改动遗留 `pet/`，未重跑因服务重启中断的遗留 `pet/` 套件（沿用 `L078`/`L170` 口径）。
+- 实机与 UI 证据：真实网络探针确认无系统代理直连下 `gh-proxy.com` 927.8–989.9 ms 返回有效 JSON 与 `206 Partial Content`，`ghproxy.cc` 因 TLS 证书主机名不匹配被严格拦截；Windows 原生 Qt 字体渲染截图验证 `1100×760`（亮色默认/深色自定义错误提示）与 `720×600` 窄窗布局正常（详情与增删行数见 [`PR-REPORT-GITHUB-MIRROR-OPTIONS-2026-11-20.md`](PR-REPORT-GITHUB-MIRROR-OPTIONS-2026-11-20.md)）。
+
+**未验证/风险**
+
+- `ghproxy.cc` 在本机实测抛出严格 TLS 域名不匹配错误（`SSLCertVerificationError`），按设计安全拒收并在轮询/单选模式下回退；实际 126 MiB 整包经公益站完整吞吐未跑全量下载，仅测了小索引与 `Range: bytes=0-1023` 首字节/206 能力。
+- 720 px 窄窗下 `GeneralPage` 既有「角色资源包」等行仍使卡片略宽于视口（横向滚动条最大值由 130 px 降至 50 px），新增两行自身宽度均在视口安全区内。
+
+## L203 — 2026-11-21 — API 与账户页新增「本地模型指南」只读子页
+
+**背景**：用户在接入本地 GGUF（llama.cpp）和本地语音（GPT-SoVITS 等）服务时，需要知道为什么桌宠不直接填文件路径、怎么起本地服务端、以及桌宠内各项填在哪里；把这套说明作为可复制分页放进「API 与账户」页，也方便直接粘贴给 AI 协助排障。
+
+**改动**
+
+- 新增 `petcore/ui/settings/local_model_guide.py`（156 行）：纯标准库文案与 `render_local_model_guide()`，动态填入当前程序目录、数据目录、`api.json` 与 `config.json` 路径；涵盖 `llama-server`（含 `--reasoning off` / `--jinja` 关键提示）、Ollama / LM Studio / vLLM 默认预设端口、「AI 对话」联动开关，以及 GPT-SoVITS `api_v2` / OpenAI 兼容 / 通用 JSON TTS 的前置检查（含单个 `.onnx`/`.pth` 缺 GPT/BERT/HuBERT 不能独立发声说明）与「语音」页逐项填法；不含任何外部品牌词。
+- 修改 `petcore/ui/settings/page_api.py`（+108 / −11）：用既有 `SettingsTabContainer` 将「API 与账户」拆为 `服务配置`（原有表单提取 `_build_services_panel()`，保留全部配置与保存行为）与 `本地模型指南`（只读 `QPlainTextEdit#apiLocalGuidePrompt` + 复制 状态与「复制指南给 AI」按钮同排）；在 `currentKeyChanged` 按当前分页切换 `stack` 水平尺寸策略，保证 `services` 720 px 下继续通过横向滚动保证「保存服务」可达，而 `local_guide` 720 px 零横向溢出（`hbar_max == 0`）；接入搜索词与 `reveal_text()` 自动切页。
+- 修改 `petcore/ui/settings/style.py`（+12 / −2，本批 +6 / −0）：为 `#apiLocalGuidePrompt` 增加内边距与聚焦蓝框。
+- 新增 `tests/test_petcore_api_local_guide.py`（166 行）覆盖 5 项行为/布局回归；同步更新 `docs/SETTINGS-CHANGE-GATES.md`、`docs/INDEX.md`、本 log 与索引，并新增 `docs/PR-REPORT-API-LOCAL-MODEL-GUIDE-2026-11-21.md`。
+
+**验证**
+
+- 静态与格式：`.\.venv\Scripts\python.exe -m ruff check petcore tests` 全绿（`exit 0`）；`git diff --check` 退出 0。
+- 聚焦与门禁（沙盒）：`tests/test_petcore_api_local_guide.py` + `test_petcore_api_presets.py` + `test_petcore_manual_page.py` + 文档/架构/PR 纪律门 **`456 passed in 14.38s`**（`exit 0`），最终文档回填后复跑文档/架构/纪律四文件全绿。
+- 既有 API 与设置窗（非沙盒，因沙盒拒绝访问主目录 `.dsh` 状态触发 `WinError 5`）：`tests/test_petcore_api.py` + `test_petcore_settings.py` + `test_petcore_settings_coverage.py` **`102 passed in 28.56s`**（`exit 0`）。
+- 跳过说明：本批仅为 `petcore/ui/settings/` 内孤立只读 UI 子页与文案扩展，零配置键、零迁移/生命周期/平台分发改动，故按 `AGENTS.md` 跳过约 12,000 例遗留 `pet/` 全量套件。
+- 性能与视觉：`render_local_model_guide` 均值 **18.913 µs/call**（`N=10,000`，Windows / Python 3.12.10）；Windows 原生 Qt 字体渲染截取 `1100×760` 明/暗色与 `720×500` 窄窗，三组均 `hbar_max = 0`、无裁切或多余分隔线（详情见 [`PR-REPORT-API-LOCAL-MODEL-GUIDE-2026-11-21.md`](PR-REPORT-API-LOCAL-MODEL-GUIDE-2026-11-21.md)）。
+
+**未验证/风险**
+
+- macOS 与 Linux 真机渲染效果未验证（本机仅测 Windows 原生 Qt 字体 1100×760 明/暗与 720×500 窄窗截图）。

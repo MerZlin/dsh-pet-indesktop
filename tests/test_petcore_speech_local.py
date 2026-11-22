@@ -348,3 +348,121 @@ def test_local_is_a_global_key(tmp_path: Path) -> None:
     assert "speech_local_endpoint" in GLOBAL_CONFIG_KEYS
     assert "speech_local_protocol" in GLOBAL_CONFIG_KEYS
     assert "speech_local_format" in GLOBAL_CONFIG_KEYS
+
+
+# ---------------------------------------------------------------- GPT-SoVITS
+
+
+def _gpt_sovits_config(**overrides):
+    values = {
+        "speech_backend": "local",
+        "speech_fallback": "",
+        "speech_local_endpoint": "http://127.0.0.1:9880",
+        "speech_local_protocol": "gpt_sovits",
+        "speech_local_path": "",
+        "speech_local_model": "",
+        "speech_local_voice": "",
+        "speech_local_format": "mp3",
+        "speech_local_timeout": 60.0,
+        "speech_local_ref_audio": r"D:\voices\ref.wav",
+        "speech_local_prompt_text": "参考音频里说的话",
+        "speech_local_prompt_lang": "zh",
+        "speech_local_text_lang": "zh",
+    }
+    values.update(overrides)
+    return FakeConfig(**values)
+
+
+def test_gpt_sovits_protocol_posts_api_v2_fields(monkeypatch, tmp_path: Path) -> None:
+    """api_v2 的 POST /tts 要的是 ref/prompt/lang，不是 OpenAI 的 voice/input。"""
+    calls = _fake_fetch(monkeypatch, b"RIFF-gpt", "audio/wav")
+    out = tmp_path / "out.wav"
+
+    net_tts.local_synthesize(
+        "今天也要开心",
+        endpoint="http://127.0.0.1:9880",
+        protocol="gpt_sovits",
+        path="",
+        model="ignored",
+        voice="ignored",
+        format="mp3",
+        api_key="",
+        rate=1.2,
+        volume=1.0,
+        ref_audio=r"D:\voices\ref.wav",
+        prompt_text="参考音频里说的话",
+        prompt_lang="zh",
+        text_lang="ja",
+        out_path=out,
+    )
+
+    assert out.read_bytes() == b"RIFF-gpt"
+    url, kwargs = calls[0]
+    assert url == "http://127.0.0.1:9880/tts"
+    body = json.loads(kwargs["body"])
+    assert body["text"] == "今天也要开心"
+    assert body["text_lang"] == "ja"
+    assert body["ref_audio_path"] == r"D:\voices\ref.wav"
+    assert body["prompt_text"] == "参考音频里说的话"
+    assert body["prompt_lang"] == "zh"
+    assert body["media_type"] == "wav"
+    assert body["streaming_mode"] is False
+    assert body["text_split_method"] == "cut5"
+    assert body["speed_factor"] == pytest.approx(1.2)
+    assert "voice" not in body and "model" not in body
+    # 本地服务只直连；参考音频路径与台词都不该被系统代理带走
+    assert kwargs["direct_only"] is True
+
+
+def test_gpt_sovits_needs_reference_audio(tmp_path: Path) -> None:
+    service = _service(tmp_path, _gpt_sovits_config(speech_local_ref_audio=""))
+    infos = {info.id: info for info in service.providers()}
+    assert infos["local"].available is False
+    assert infos["local"].reason == "config"
+
+
+def test_gpt_sovits_forces_wav_suffix(tmp_path: Path) -> None:
+    service = _service(tmp_path, _gpt_sovits_config(speech_local_format="mp3"))
+    result = service.synthesize(SpeechRequest(text="hi", provider="local"))
+    # api_v2 只产出 wav：缓存后缀不能按配置里的 mp3，否则播放器解不出来。
+    assert result.path.suffix == ".wav"
+
+
+def test_cache_key_changes_with_reference_audio(tmp_path: Path) -> None:
+    first = _service(tmp_path, _gpt_sovits_config()).synthesize(
+        SpeechRequest(text="同一句", provider="local")
+    )
+    second = _service(
+        tmp_path, _gpt_sovits_config(speech_local_ref_audio=r"D:\voices\other.wav")
+    ).synthesize(SpeechRequest(text="同一句", provider="local"))
+    assert first.path != second.path
+
+
+def test_local_config_normalizes_gpt_sovits_fields(tmp_path: Path) -> None:
+    config = Config(
+        tmp_path,
+        data={
+            "speech_local_protocol": "gpt_sovits",
+            "speech_local_ref_audio": "  D:/voices/ref.wav  ",
+            "speech_local_prompt_text": "x" * 600,
+            "speech_local_prompt_lang": "zh-CN",
+            "speech_local_text_lang": "",
+        },
+    )
+    assert config.get("speech_local_protocol") == "gpt_sovits"
+    assert config.get("speech_local_ref_audio") == "D:/voices/ref.wav"
+    assert len(config.get("speech_local_prompt_text")) == 500
+    assert config.get("speech_local_prompt_lang") == "zh"
+    assert config.get("speech_local_text_lang") == "zh"
+
+
+def test_gpt_sovits_keys_are_global() -> None:
+    from petcore.config import GLOBAL_CONFIG_KEYS
+
+    for key in (
+        "speech_local_ref_audio",
+        "speech_local_prompt_text",
+        "speech_local_prompt_lang",
+        "speech_local_text_lang",
+    ):
+        assert key in GLOBAL_CONFIG_KEYS

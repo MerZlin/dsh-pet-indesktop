@@ -149,3 +149,27 @@ def test_export_writes_a_schema_file(capsys, tmp_path: Path) -> None:
     data = json.loads(target.read_text(encoding="utf-8"))
     assert data["count"] == len(DEFAULTS)
     assert any(item["key"] == "drag_lean_strength" for item in data["settings"])
+
+
+def test_mirror_policy_and_custom_prefix_schema_and_cli_round_trip(capsys, tmp_path: Path) -> None:
+    from petcore.net.github_mirrors import ALL_MIRROR_POLICIES
+
+    policy_spec = spec_for("pack_mirror_policy")
+    custom_spec = spec_for("pack_mirror_custom_url")
+    assert policy_spec is not None and policy_spec.choices == ALL_MIRROR_POLICIES
+    assert custom_spec is not None and custom_spec.scope == "global" and custom_spec.type == "str"
+
+    code, payload = _run(
+        capsys, "set", "pack_mirror_policy", "gh-proxy", "--root", str(tmp_path)
+    )
+    assert code == 0 and payload["applied"] == "gh-proxy"
+
+    code, payload = _run(
+        capsys,
+        "set",
+        "pack_mirror_custom_url",
+        "https://mirror.example.com/proxy",
+        "--root",
+        str(tmp_path),
+    )
+    assert code == 0 and payload["applied"] == "https://mirror.example.com/proxy/"

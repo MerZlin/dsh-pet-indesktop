@@ -429,16 +429,68 @@ def test_legacy_cache_with_empty_part_urls_is_dropped(tmp_path):
 
 
 def test_mirror_policy_row_writes_and_rolls_back(app, tmp_path: Path) -> None:
+    from petcore.net.github_mirrors import ALL_MIRROR_POLICIES
+
     page = _general_page(app, tmp_path)
     try:
         combo = page.mirror_combo
-        assert [combo.itemData(i) for i in range(combo.count())] == ["auto", "mirror", "github"]
+        assert [combo.itemData(i) for i in range(combo.count())] == list(ALL_MIRROR_POLICIES)
         assert combo.currentData() == "auto"
-        combo.setCurrentIndex(combo.findData("mirror"))
-        assert page.config().get("pack_mirror_policy") == "mirror", "切换即时生效"
+        assert page.dirty() is False
+        combo.setCurrentIndex(combo.findData("gh-proxy"))
+        assert page.config().get("pack_mirror_policy") == "gh-proxy", "切换即时生效"
+        assert page.dirty() is True
         page.discard_changes()
         assert page.config().get("pack_mirror_policy") == "auto", "取消要回滚"
         assert combo.currentData() == "auto"
+        assert page.dirty() is False
+    finally:
+        page.dispose()
+        page.deleteLater()
+
+
+def test_custom_mirror_prefix_row_enable_validate_save_and_rollback(app, tmp_path: Path) -> None:
+    page = _general_page(app, tmp_path)
+    try:
+        combo = page.mirror_combo
+        edit = page.custom_mirror_edit
+        assert edit.isEnabled() is False
+        assert page.dirty() is False
+
+        combo.setCurrentIndex(combo.findData("gh-proxy"))
+        assert edit.isEnabled() is False
+        assert page.dirty() is True
+
+        combo.setCurrentIndex(combo.findData("custom"))
+        assert edit.isEnabled() is True
+
+        edit.setText("http://insecure.example")
+        assert page.config().get("pack_mirror_custom_url") == ""
+        assert page.custom_mirror_hint.isHidden() is False
+
+        edit.setText("https://mirror.example.com/gh")
+        assert page.config().get("pack_mirror_custom_url") == "https://mirror.example.com/gh/"
+        assert page.custom_mirror_hint.isHidden() is True
+        assert page.dirty() is True
+
+        combo.setCurrentIndex(combo.findData("mirror"))
+        assert edit.isEnabled() is False
+        assert edit.text() == "https://mirror.example.com/gh", "切走策略时保留已填前缀"
+
+        page.discard_changes()
+        assert page.config().get("pack_mirror_policy") == "auto"
+        assert page.config().get("pack_mirror_custom_url") == ""
+        assert edit.text() == ""
+        assert edit.isEnabled() is False
+        assert page.dirty() is False
+
+        combo.setCurrentIndex(combo.findData("custom"))
+        edit.setText("https://mirror.example.com/gh")
+        page.draft()
+        page.confirm_save()
+        assert page.dirty() is False
+        assert edit.text() == "https://mirror.example.com/gh/"
+        assert page.config().get("pack_mirror_custom_url") == "https://mirror.example.com/gh/"
     finally:
         page.dispose()
         page.deleteLater()
@@ -448,9 +500,66 @@ def test_mirror_policy_row_is_searchable(app, tmp_path: Path) -> None:
     page = _general_page(app, tmp_path)
     try:
         haystack = " ".join(page_search_texts(page))
-        for needle in ("下载镜像", "jsDelivr", "镜像"):
+        for needle in ("下载镜像", "jsDelivr", "镜像", "gh-proxy", "ghfast", "公益镜像", "自定义镜像"):
             assert needle in haystack, needle
         assert "下载镜像" in " ".join(page.keywords())
+        assert "gh-proxy" in " ".join(page.keywords())
     finally:
         page.dispose()
         page.deleteLater()
+
+
+def test_general_page_mirror_rows_fit_compact_720px_dialog(app, tmp_path: Path) -> None:
+    from petcore.ui.settings.dialog import SettingsDialog
+
+    dialog = SettingsDialog(_host(tmp_path))
+    try:
+        dialog.resize(720, 560)
+        dialog.show()
+        app.processEvents()
+        page = dialog.page_for_key("general")
+        assert page is not None
+        viewport_w = page.scroll.viewport().width()
+        # 下载镜像下拉框与自定义输入框自身宽度必须放得进 720px 窄窗内容区（含卡片边距）。
+        assert page.mirror_combo.minimumWidth() <= viewport_w - 90
+        assert page.custom_mirror_edit.minimumSizeHint().width() <= viewport_w - 90
+        assert page.mirror_combo.isVisible() and page.mirror_combo.height() >= 26
+        assert page.custom_mirror_edit.isVisible() and page.custom_mirror_edit.height() >= 26
+        assert page.mirror_combo.width() <= page.content.width()
+        assert page.custom_mirror_edit.width() <= page.content.width()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
+def test_fetch_first_index_tries_proxy_and_falls_back_without_caching_bad_payload(
+    tmp_path, monkeypatch
+):
+    import json
+
+    from petcore.ui.settings import pack_download
+
+    seen: list[str] = []
+
+    def fake_fetch(url, timeout=15.0):
+        seen.append(url)
+        if url.startswith("https://gh-proxy.com/"):
+            # 模拟公益站返回被拦截/未信任主机索引，绝不能写进缓存。
+            return b"<html>blocked</html>"
+        return json.dumps(_GOOD_INDEX).encode()
+
+    monkeypatch.setattr(pack_download, "fetch_index_payload", fake_fetch)
+    cache = tmp_path / "index.json"
+    index = pack_download.fetch_first_index(
+        ("https://github.com/a/b/releases/download/v1/i.json",),
+        cache,
+        attempts=1,
+        policy="gh-proxy",
+    )
+    assert [p.id for p in index.packs] == ["blue-fish"]
+    assert seen == [
+        "https://gh-proxy.com/https://github.com/a/b/releases/download/v1/i.json",
+        "https://github.com/a/b/releases/download/v1/i.json",
+    ]
+    assert json.loads(cache.read_text(encoding="utf-8")) == _GOOD_INDEX

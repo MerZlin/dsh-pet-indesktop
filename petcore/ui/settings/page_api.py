@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -32,7 +35,14 @@ from ...api.spec import ApiService, endpoint_host
 from ...api.store import ApiStore
 from ...net.errors import describe
 from ..external_links import DEEPSEEK_API_URL
-from .base import SettingsPage, make_button, make_checkbox, value_field
+from .base import (
+    SettingsPage,
+    make_button,
+    make_checkbox,
+    register_search_terms,
+    value_field,
+)
+from .local_model_guide import LOCAL_MODEL_GUIDE_KEYWORDS, render_local_model_guide
 
 logger = logging.getLogger("petcore.ui.settings.api")
 
@@ -163,13 +173,25 @@ class ApiSettingsPage(SettingsPage):
         self._disposed = False
         self._refreshing = False
 
-        self.add_note(
-            "API Key 只写入系统钥匙串，不写 config.json，也不写 api.json；"
-            "页面只记住「已保存 / 未保存」，不会回显密钥。"
-        )
-        self._keyring_note = self.add_note("")
+        with self.tab("services", "服务配置"):
+            self.add_note(
+                "API Key 只写入系统钥匙串，不写 config.json，也不写 api.json；"
+                "页面只记住「已保存 / 未保存」，不会回显密钥。"
+            )
+            self._keyring_note = self.add_note("")
 
-        card = self.section("服务")
+            card = self.section("服务")
+            self._build_services_panel(card)
+
+        self._build_local_guide()
+        if self.tab_container is not None:
+            self.tab_container.currentKeyChanged.connect(self._sync_tab_width_policy)
+            self._sync_tab_width_policy(self.tab_container.currentKey())
+
+        self._refresh_list()
+        self._refresh_keyring_note()
+
+    def _build_services_panel(self, card) -> None:
         panel = QWidget(self)
         layout = QHBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -327,9 +349,6 @@ class ApiSettingsPage(SettingsPage):
         right.addStretch(1)
         layout.addLayout(right, 1)
         card.add_widget(panel)
-
-        self._refresh_list()
-        self._refresh_keyring_note()
 
     def _line(self, placeholder: str, *, password: bool = False) -> QLineEdit:
         field = QLineEdit(self)
@@ -818,8 +837,82 @@ class ApiSettingsPage(SettingsPage):
         if unsubscribe is not None:
             unsubscribe()
 
+    def _sync_tab_width_policy(self, key: str) -> None:
+        """切换分页时避免「服务配置」窄窗超宽撑出「本地模型指南」的横向滚动条。"""
+        container = self.tab_container
+        if container is None:
+            return
+        policy = (
+            QSizePolicy.Policy.MinimumExpanding
+            if key == "services"
+            else QSizePolicy.Policy.Ignored
+        )
+        container.stack.setSizePolicy(policy, QSizePolicy.Policy.Preferred)
+        container.stack.updateGeometry()
+        container.updateGeometry()
+        self.content.adjustSize()
+
+    def _local_guide_program_dir(self) -> str:
+        if getattr(sys, "frozen", False):
+            return str(Path(sys.executable).resolve().parent)
+        try:
+            return str(paths.repo_root())
+        except Exception:  # noqa: BLE001
+            return str(Path.cwd())
+
+    def _local_guide_text(self) -> str:
+        return render_local_model_guide(
+            self.root, program_dir=self._local_guide_program_dir()
+        )
+
+    def _build_local_guide(self) -> None:
+        with self.tab("local_guide", "本地模型指南"):
+            self.add_note(
+                "桌宠通过本机 HTTP 连接本地部署的对话与语音服务。下面整理了启动命令、"
+                "端口预设与桌宠设置填法，你可以直接照着配置，或一键复制给任意 AI 助手"
+                "帮你一步步跑通。"
+            )
+            card = self.section("本地部署模型使用与启动指南（可复制给 AI）")
+            self.local_guide_edit = QPlainTextEdit(self)
+            self.local_guide_edit.setObjectName("apiLocalGuidePrompt")
+            self.local_guide_edit.setAccessibleName("本地部署模型使用与启动指南")
+            self.local_guide_edit.setAccessibleDescription(
+                "包含 llama.cpp、Ollama、LM Studio、vLLM 与 GPT-SoVITS "
+                "的启动命令和桌宠设置填写方式，可直接复制给 AI。"
+            )
+            self.local_guide_edit.setReadOnly(True)
+            self.local_guide_edit.setMinimumHeight(320)
+            self.local_guide_edit.setPlainText(self._local_guide_text())
+            register_search_terms(self.local_guide_edit, *LOCAL_MODEL_GUIDE_KEYWORDS)
+            card.add_widget(self.local_guide_edit)
+
+            action_row = QWidget(self)
+            action_layout = QHBoxLayout(action_row)
+            action_layout.setContentsMargins(0, 0, 0, 0)
+            action_layout.setSpacing(8)
+            self.local_guide_status = QLabel("", action_row)
+            self.local_guide_status.setObjectName("settingHint")
+            self.local_guide_status.setWordWrap(True)
+            self.copy_local_guide_button = make_button(
+                "复制指南给 AI", action_row, primary=True
+            )
+            self.copy_local_guide_button.setAccessibleDescription(
+                "将完整的本地模型部署与设置说明复制到剪贴板，方便粘贴给 AI 协助配置。"
+            )
+            self.copy_local_guide_button.clicked.connect(self.copy_local_guide)
+            action_layout.addWidget(self.local_guide_status, 1)
+            action_layout.addWidget(self.copy_local_guide_button)
+            card.add_widget(action_row)
+
+    def copy_local_guide(self, *_args) -> None:
+        text = self.local_guide_edit.toPlainText()
+        QApplication.clipboard().setText(text)
+        self.local_guide_status.setText(
+            f"已复制 {len(text)} 个字符到剪贴板，可直接粘贴给 AI 协助启动与配置。"
+        )
+
     def keywords(self) -> list[str]:
-        return [
+        base = [
             "API",
             "密钥",
             "钥匙串",
@@ -842,6 +935,10 @@ class ApiSettingsPage(SettingsPage):
             "model",
             "endpoint",
         ]
+        for term in LOCAL_MODEL_GUIDE_KEYWORDS:
+            if term not in base:
+                base.append(term)
+        return base
 
 
 def _error_text(exc: ValueError) -> str:

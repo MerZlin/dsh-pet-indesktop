@@ -63,9 +63,11 @@ MIMO_MAX_BYTES = 8_000_000
 
 LOCAL_TIMEOUT_S = 30.0
 LOCAL_MAX_BYTES = 8_000_000
-#: 本地服务两种形状：OpenAI 兼容 / 可配置路径的简单 JSON。
-LOCAL_PROTOCOLS = ("openai", "simple")
-LOCAL_DEFAULT_PATHS = {"openai": "/v1/audio/speech", "simple": "/tts"}
+#: 本地服务三种形状：OpenAI 兼容 / 可配置路径的简单 JSON / GPT-SoVITS api_v2。
+LOCAL_PROTOCOLS = ("openai", "simple", "gpt_sovits")
+LOCAL_DEFAULT_PATHS = {"openai": "/v1/audio/speech", "simple": "/tts", "gpt_sovits": "/tts"}
+#: GPT-SoVITS api_v2 只接受这几种 media_type；本项目固定要 wav。
+GPT_SOVITS_MEDIA_TYPE = "wav"
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,7 +202,20 @@ PROVIDER_SPECS: dict[str, TtsProviderSpec] = {
             id="local",
             label="本地部署模型（HTTP）",
             online=False,
-            fields=("endpoint", "protocol", "path", "model", "voice", "format", "timeout", "api_key"),
+            fields=(
+                "endpoint",
+                "protocol",
+                "path",
+                "model",
+                "voice",
+                "format",
+                "timeout",
+                "ref_audio",
+                "prompt_text",
+                "prompt_lang",
+                "text_lang",
+                "api_key",
+            ),
             default_voice="",
             suffix="mp3",
             secret_fields=("api_key",),
@@ -600,18 +615,27 @@ def local_synthesize(
     api_key: str = "",
     rate: float = 1.0,
     volume: float = 1.0,
+    ref_audio: str = "",
+    prompt_text: str = "",
+    prompt_lang: str = "zh",
+    text_lang: str = "zh",
     out_path: Path | str,
     timeout: float = LOCAL_TIMEOUT_S,
 ) -> None:
-    """本地部署模型合成到 ``out_path``（OpenAI 兼容 / 简单 JSON 两种协议）。
+    """本地部署模型合成到 ``out_path``（OpenAI 兼容 / 简单 JSON / GPT-SoVITS）。
 
     本地请求**必须直连**：系统代理经常把 127.0.0.1 也带走，表现成「服务明明起着却
     连不上」。响应既可以是音频字节，也可以是 JSON 里的 base64（``audio/data/
     audio_base64``）。
+
+    ``gpt_sovits`` 走 GPT-SoVITS ``api_v2.py`` 的 ``POST /tts``：每次请求都要带
+    ``text_lang`` / ``ref_audio_path`` / ``prompt_lang``，参考音频是音色来源，
+    ``prompt_text`` 必须与参考音频内容一致（服务端按它对齐）。该协议只返回 wav，
+    所以不理会 ``format``——缓存后缀跟着用 wav，否则播放器按 mp3 解 wav 会静音。
     """
     del volume  # 本地服务没有统一的音量字段；音量在播放端控制
     protocol = _local_protocol(protocol)
-    suffix = _local_format(format)
+    suffix = "wav" if protocol == "gpt_sovits" else _local_format(format)
     url = local_url(endpoint, path, protocol)
     speed = _clamp(rate, 0.25, 4.0, 1.0)
 
@@ -624,6 +648,18 @@ def local_synthesize(
         }
         if abs(speed - 1.0) > 0.01:
             body["speed"] = speed
+    elif protocol == "gpt_sovits":
+        body = {
+            "text": str(text or ""),
+            "text_lang": str(text_lang or "zh").strip() or "zh",
+            "ref_audio_path": str(ref_audio or "").strip(),
+            "prompt_text": str(prompt_text or "").strip(),
+            "prompt_lang": str(prompt_lang or "zh").strip() or "zh",
+            "text_split_method": "cut5",
+            "speed_factor": speed,
+            "media_type": GPT_SOVITS_MEDIA_TYPE,
+            "streaming_mode": False,
+        }
     else:
         body = {
             "text": str(text or ""),
@@ -760,6 +796,10 @@ def synthesize(
             api_key=str(settings.get("api_key") or ""),
             rate=request.rate,
             volume=request.volume,
+            ref_audio=str(settings.get("ref_audio") or ""),
+            prompt_text=str(settings.get("prompt_text") or ""),
+            prompt_lang=str(settings.get("prompt_lang") or "zh"),
+            text_lang=str(settings.get("text_lang") or "zh"),
             out_path=out_path,
             timeout=float(settings.get("timeout") or LOCAL_TIMEOUT_S),
         )

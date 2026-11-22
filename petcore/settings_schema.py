@@ -12,6 +12,7 @@ from typing import Any
 
 from .config import DEFAULTS, GLOBAL_CONFIG_KEYS, ISLAND_ACCENTS
 from .contracts.bubble_styles import STYLE_IDS
+from .net.github_mirrors import ALL_MIRROR_POLICIES
 from .settings_schema_ranges import CHOICES as _GENERATED_CHOICES
 from .settings_schema_ranges import KINDS as _GENERATED_KINDS
 from .settings_schema_ranges import RANGES as _GENERATED_RANGES
@@ -277,6 +278,10 @@ _LABELS = {
     "speech_local_voice": "本地 TTS 音色",
     "speech_local_format": "本地 TTS 格式",
     "speech_local_timeout": "本地 TTS 超时",
+    "speech_local_ref_audio": "GPT-SoVITS 参考音频",
+    "speech_local_prompt_text": "GPT-SoVITS 参考文本",
+    "speech_local_prompt_lang": "GPT-SoVITS 参考语言",
+    "speech_local_text_lang": "GPT-SoVITS 合成语言",
     "speech_sapi_voice": "SAPI 音色",
     "asr_enabled": "语音输入",
     "asr_engine": "语音识别引擎",
@@ -295,6 +300,7 @@ _LABELS = {
     "market_download_connections": "下载连接数",
     "market_download_sources": "下载源",
     "pack_mirror_policy": "镜像策略",
+    "pack_mirror_custom_url": "自定义镜像前缀",
     "market_index_url": "市场索引地址",
     "allow_feature_mods": "允许第三方扩展",
 }
@@ -314,7 +320,7 @@ _CHOICES = {
     "chat_layout": ("desktop", "phone"),
     "frameseq": ("auto", "off", "only"),
     "market_download_sources": ("auto", "ordered", "race"),
-    "pack_mirror_policy": ("auto", "github", "jsdelivr", "gitee"),
+    "pack_mirror_policy": ALL_MIRROR_POLICIES,
     "speech_backend": ("edge", "sapi", "doubao", "mimo", "local"),
     "speech_fallback": ("", "edge", "sapi", "doubao", "mimo", "local"),
     "speech_local_protocol": ("openai", "simple"),

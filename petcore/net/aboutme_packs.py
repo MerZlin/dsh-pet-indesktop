@@ -9,6 +9,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from .github_mirrors import expand_github_urls
 from .http import fetch_url
 
 _INDEX = Path(__file__).resolve().parents[1] / "content" / "data" / "aboutme_packs.json"
@@ -58,6 +59,8 @@ def download_pack(
     dest: Path,
     *,
     progress=None,
+    mirror_policy: str = "auto",
+    custom_mirror_prefix: str = "",
 ) -> tuple[bool, str, Path | None]:
     """下载一个 curated 包到 ``dest``；返回 (ok, message, path)。"""
     pack = pack_for(pack_id)
@@ -84,22 +87,41 @@ def download_pack(
             target = _target_path(temp, str(pack.get("pet_dir") or ""), relative)
             if target is None:
                 return False, f"索引路径越界：{relative}", None
-            status, _headers, body = fetch_url(
-                url,
-                timeout=60,
-                prefer_direct=False,
-                max_bytes=MAX_FILE_BYTES,
+            candidates = expand_github_urls(
+                (url,), mirror_policy, custom_prefix=custom_mirror_prefix
             )
-            payload = bytes(body)
-            if getattr(body, "truncated", False):
-                return False, f"下载被截断：{relative}", None
-            if int(status) != 200:
-                return False, f"下载失败（HTTP {status}）：{url.split('/')[2]}", None
-            if expected_size and len(payload) != expected_size:
-                return False, f"文件大小不符：{relative}", None
-            digest = hashlib.sha256(payload).hexdigest()
-            if digest != expected_sha:
-                return False, f"文件摘要不符：{relative}", None
+            payload: bytes | None = None
+            last_error = "下载失败"
+            for candidate in candidates:
+                try:
+                    status, _headers, body = fetch_url(
+                        candidate,
+                        timeout=60,
+                        prefer_direct=False,
+                        max_bytes=MAX_FILE_BYTES,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 只暴露类型，不带完整 URL
+                    last_error = f"下载失败：{type(exc).__name__}"
+                    continue
+                candidate_bytes = bytes(body)
+                if getattr(body, "truncated", False):
+                    last_error = f"下载被截断：{relative}"
+                    continue
+                if int(status) != 200:
+                    host = candidate.split("/")[2] if candidate.count("/") >= 2 else "-"
+                    last_error = f"下载失败（HTTP {status}）：{host}"
+                    continue
+                if expected_size and len(candidate_bytes) != expected_size:
+                    last_error = f"文件大小不符：{relative}"
+                    continue
+                digest = hashlib.sha256(candidate_bytes).hexdigest()
+                if digest != expected_sha:
+                    last_error = f"文件摘要不符：{relative}"
+                    continue
+                payload = candidate_bytes
+                break
+            if payload is None:
+                return False, last_error, None
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(payload)
             done += len(payload)

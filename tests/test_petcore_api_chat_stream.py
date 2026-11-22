@@ -84,12 +84,15 @@ class _RawServer:
         stall_after: float | None = None,
         accepts: int = 1,
         failures: int = 0,
+        delay_before_payload: float = 0.0,
     ) -> None:
         self.payload = payload
         self.stall_after = stall_after
         self.accepts = max(1, int(accepts))
         #: 前 ``failures`` 个连接在发出任何字节之前被 RST（真机上的连接重置）。
         self.failures = max(0, int(failures))
+        #: 发出响应头之后等多久再发正文（本地大模型首字慢就是这个形状）。
+        self.delay_before_payload = max(0.0, float(delay_before_payload))
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("127.0.0.1", 0))
@@ -114,7 +117,13 @@ class _RawServer:
                     continue
                 try:
                     _drain_request(conn)
-                    conn.sendall(self.payload)
+                    if self.delay_before_payload:
+                        head, separator, body = self.payload.partition(b"\r\n\r\n")
+                        conn.sendall(head + separator)
+                        time.sleep(self.delay_before_payload)
+                        conn.sendall(body)
+                    else:
+                        conn.sendall(self.payload)
                 except OSError:
                     continue
                 if self.stall_after is None:
@@ -173,9 +182,14 @@ def server_factory():
         stall_after: float | None = None,
         accepts: int = 1,
         failures: int = 0,
+        delay_before_payload: float = 0.0,
     ) -> _RawServer:
         server = _RawServer(
-            payload, stall_after=stall_after, accepts=accepts, failures=failures
+            payload,
+            stall_after=stall_after,
+            accepts=accepts,
+            failures=failures,
+            delay_before_payload=delay_before_payload,
         )
         servers.append(server)
         return server
@@ -238,6 +252,25 @@ def test_plain_json_body_is_complete(server_factory) -> None:
     result = stream_chat(_request(server.port), [{"role": "user", "content": "hi"}], timeout=5.0)
     assert result.text == "whole"
     assert result.incomplete is False
+
+
+def test_slow_first_byte_is_not_treated_as_a_dead_stream(server_factory) -> None:
+    """本地大模型首字要 1–20 秒：短读超时轮询不能让读缓冲永久失效。
+
+    真实故障：``http.client.HTTPResponse.fp`` 一次读超时后，后续每个
+    ``readline`` 都抛 ``OSError: cannot read from timed out object``，
+    三次路由重试全在 1 秒内失败（llama.cpp 本机实测）。
+    """
+    body = _chunk(b'data: {"choices":[{"delta":{"content":"\xe6\205\xa2"}}]}\n\n') + _chunk(
+        b"data: [DONE]\n\n"
+    )
+    server = server_factory(_sse(body), delay_before_payload=1.2)
+    result = stream_chat(
+        _request(server.port), [{"role": "user", "content": "hi"}], timeout=10.0
+    )
+    assert result.text == "慢"
+    assert result.end_reason == "done"
+    assert result.cancelled is False
 
 
 def test_cancel_interrupts_a_stalled_stream(server_factory) -> None:

@@ -29,6 +29,7 @@ from ..log import setup_logging
 from ..media.audio_output import AudioOutputRouter
 from .memory_service import MemoryService
 from ..net.errors import describe as describe_net_error
+from ..net.github_mirrors import read_mirror_config
 from ..platform import hotkey_spec
 from ..platform.hotkeys import GlobalHotkeyService
 from ..platform.session import SessionWatcher
@@ -653,7 +654,13 @@ class CoreHost:
             )
         )
         service.reset_cancel()
-        self._update_future = self._update_executor.submit(service.download, asset)
+        policy, custom_prefix = read_mirror_config(getattr(self, "config", None))
+        self._update_future = self._update_executor.submit(
+            service.download,
+            asset,
+            mirror_policy=policy,
+            custom_mirror_prefix=custom_prefix,
+        )
         self._update_future.add_done_callback(
             lambda future, token=generation: QTimer.singleShot(
                 0, self.app, lambda: self._finish_update_download(token, future)
