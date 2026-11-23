@@ -843,6 +843,19 @@ def _ensure_session_probe() -> None:
     thread.start()
 
 
+def ensure_session_probe() -> None:
+    """拉起并续活 SMTC 会话探针（**主线程安全**，幂等）。
+
+    只读 ``_session_facts`` 缓存的消费方（悬浮条的播放态就是这样一个读者）必须
+    每拍调用一次：探针线程在 :data:`SESSION_PROBE_IDLE_EXIT_SECONDS` 内无人询问
+    就自行退出并清空缓存，此后缓存会一直是 ``None``，读者只能读到"没在播"。
+    """
+    global _last_asked
+    with _probe_lock:
+        _last_asked = time.monotonic()
+    _ensure_session_probe()
+
+
 def song_session_accepted(allow_browser: bool = True) -> bool | None:
     """当前 SMTC 会话是否被唱歌链路接受（**主线程安全**，只读缓存）。
 
