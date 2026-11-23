@@ -368,6 +368,15 @@ def _spectrum_class():
 
 def _is_anything_playing() -> bool:
     np = _now_playing()
+    # 会话事实由后台探针线程产出，而探针无人询问时会自行退出并清空缓存；
+    # 只读缓存的读者（本函数跑在 Qt 主线程，不能直接查 SMTC）必须先续活它，
+    # 否则缓存永远是 None——灯效、频谱、圆环全部读成"没在播"。
+    keep_alive = getattr(np, "ensure_session_probe", None)
+    if keep_alive is not None:
+        try:
+            keep_alive()
+        except Exception as exc:
+            _log_error("session_probe", exc)
     facts = getattr(np, "_session_facts", None)
     if not facts:
         return False

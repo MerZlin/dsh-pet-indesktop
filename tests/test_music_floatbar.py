@@ -1049,3 +1049,26 @@ def test_viz_settings_persist(bar, monkeypatch):
     bar.set_viz_alpha(180)
     assert bar._viz_alpha == 100
     assert saved.get("viz_alpha") == 100
+
+
+def test_playing_state_keeps_session_probe_alive(monkeypatch):
+    """读会话事实前必须先续活探针：探针闲置 8s 会退出并清空缓存，只读缓存的读者会永远读到"没在播"。"""
+    calls = []
+
+    class _FakeNowPlaying:
+        _session_facts = ((1, False, True),)
+
+        @staticmethod
+        def ensure_session_probe():
+            calls.append(1)
+
+    monkeypatch.setattr(fb, "_now_playing", lambda: _FakeNowPlaying)
+    assert fb._is_anything_playing() is True
+    assert calls == [1]                      # 每读一次就续活一次
+
+    _FakeNowPlaying._session_facts = ((1, False, False),)
+    assert fb._is_anything_playing() is False
+    _FakeNowPlaying._session_facts = None
+    assert fb._is_anything_playing() is False
+    assert calls == [1, 1, 1]
+

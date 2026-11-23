@@ -14,7 +14,8 @@
 | `pet/music/floatbar.py` | +1692 / -0 | 新增网易云悬浮控制器：四形态（胶囊 / 圆盘 / 贴边长条 / 贴边控制面板）、两套面板皮肤、播放控制、贴边吸附与开合动画、悬停自动展开、四类灯效、外框单色与两色渐变；后续迭代加入彩虹接缝修复、曲名循环滚动、真实频谱可视化、五档线条粗细、渐变配色、黑胶圆环频谱（圆点 / 声波 / 射线三种可选风格）、频谱幅度三档、三风格密度语义改造与菜单整合、键帽背景、图标对齐与三个独立开关（第二~十一轮合计 `+930 / -26`，全文件 2596 行） |
 | `pet/music/spectrum.py` | +321 / -0 | 新增系统音频频谱采集：ctypes WASAPI 回环 + numpy FFT，只依赖标准库与已随包分发的 numpy（不引入 soundcard / PyAudio 这类新二进制依赖），采到的是用户此刻听到的输出混音 |
 | `pet/app.py` | +8 / -0 | 在 `main()` 事件循环启动前创建悬浮条，仅在 Windows 且 music 功能已激活时接管 |
-| `tests/test_music_floatbar.py` | +377 / -0 | 覆盖灯效取色、两套皮肤的四边几何与按钮落位、皮肤持久化与非法值回落、悬停开合、外框笔刷、贴边拖动（含从控制键上拖）、平台分支；后续迭代补彩虹角度连续性、曲名循环滚动、频谱几何/配色/采集启停、五档粗细、黑胶圆环、图标对齐与三个开关、圆环三种风格状态切换与分派实画、幅度三档、三风格密度语义与菜单整合（第二~十一轮合计 `+674 / -0`，共 61 个用例） |
+| `pet/music/now_playing.py` | +14 / -0 | 新增公共 `ensure_session_probe()`：拉起并续活 SMTC 会话探针（主线程安全、幂等）。悬浮条只读会话事实缓存，而探针闲置 8 s 会自行退出并清空缓存，缺了这道续活就会永远读成「没在播」 |
+| `tests/test_music_floatbar.py` | +377 / -0 | 覆盖灯效取色、两套皮肤的四边几何与按钮落位、皮肤持久化与非法值回落、悬停开合、外框笔刷、贴边拖动（含从控制键上拖）、平台分支；后续迭代补彩虹角度连续性、曲名循环滚动、频谱几何/配色/采集启停、五档粗细、黑胶圆环、图标对齐与三个开关、圆环三种风格状态切换与分派实画、幅度三档、三风格密度语义与菜单整合、探针续活（第二~十二轮合计 `+694 / -0`，共 62 个用例） |
 | `docs/INDEX.md` | +1 / -0 | 按新文档入场规则登记本报告 |
 
 形态与交互（本次新增，均走 300 ms 几何动画）：
@@ -211,6 +212,18 @@
 
 **23）声波流线笔宽减半。** `_paint_ring_wave` 是「柔光 + 实线」两层描边，旧值 2.3 px / 0.9 px，在 160×64 的黑胶面板上（盘半径约 31 px）三条波线会糊成一条粗带。两层同比例减半为 **1.15 px / 0.45 px**，其余参数（层距 0.08r、振幅、alpha 46/165、圆形滑动平均、38% 时间跟随）一律不动，因此波形形状与响应速度不变，只是描边变细。离屏对照（`render_wave_thin.py`，3 层、3× 放大）：`ring_wave_thin_3x.png` 里三条流线彼此分离、盘面纹槽清晰可见；改动前的 `ring2_wave_3.png` 同一位置是一条并起来的粗红带。
 
+### 第十三轮迭代（2026-11-23）：播放状态读不到
+
+**24）悬浮条必须先续活 SMTC 探针，再读会话事实。** 症状：标题能显示当前曲名，但播放/暂停键一直显示「播放」、灯效不亮、频谱与黑胶圆环不起。根因是两条数据源分工不同：曲名走常驻采样线程里的 `get_now_playing()`（每次真查一次 SMTC），而播放态只读 `now_playing._session_facts` 缓存；该缓存由 `smtc-session-probe` 后台线程产出，而这条线程**只在有人询问时活着**——`_probe_loop` 在 `SESSION_PROBE_IDLE_EXIT_SECONDS`（8 s）内无人询问就自行退出并清空缓存。此前唯一会问它的是唱歌判定（`music/detect.py` 的 `song_session_accepted`），一旦唱歌链路没被触发，缓存永远是 `None`，`_is_anything_playing()` 就恒为 `False`。修复：
+
+- `now_playing.py` 新增公共 `ensure_session_probe()`（主线程安全、幂等）：刷新 `_last_asked` 后复用 `_ensure_session_probe()` 拉起线程；
+- `floatbar._is_anything_playing()` 每次读缓存前先 `getattr(np, "ensure_session_probe")` 续活一次（旧构建没有该函数时跳过，保持兼容），再按 `facts` 判定；
+- 新增用例 `test_playing_state_keeps_session_probe_alive`：连续三次读取分别续活一次，`(1, False, True)` → True、`(1, False, False)` / `None` → False。
+
+实测证据（源码运行，Python 3.13 venv）：故意先 `reset_session_probe()`，`_session_facts` 为 `None`、`_is_anything_playing()` 为 `False`；问一声后缓存变成 `((1, False, True),)`、判定变 `True`——证明「不续活就永远读不到」这条因果。
+
+同时发现这台机器的源码环境缺 SMTC 依赖：`.venv` 里没有 `winrt`（`ModuleNotFoundError: No module named 'winrt'`，补丁式 `sys.path` 指向安装包的 `_internal` 也只能看到空壳 `winrt`，无 `winrt.windows`），所以 `_import_winrt()` 返回 `None`、曲名也读不到。按 `requirements.txt` 装齐 `winrt-Windows.Media.Control` / `-Foundation` / `-Foundation.Collections` / `-Storage.Streams` / `-Media`（`winrt-runtime 4.2.0`, cp313）后，`get_now_playing()` 立即返回正在播放的曲目（`app_id='cloudmusic.exe'`, `playing=True`）。
+
 ## 性能分析
 
 新增开销共五处，均为定频轻量调用。测量环境：Windows 11 x64、Python 3.11.9、单次进程枚举 20 次取平均。
@@ -256,6 +269,7 @@
 20. **实机安装验证 v28（幅度三档 + 密度语义改造）**：`dsh-pet-patched-v28.exe`（16 869 043 字节、`pyvers 311`），模块符号校验 `install` / `_shim_create_bar` / `_SHIM_INSTALLED` / `v27-shim` / `create_bar: begin` 全部为 True；杀掉旧实例（pid 22460）、备份为 `dsh-pet-installed-pre-v28-backup.exe` 后覆盖安装，WMI 启动 `pid 48268`，日志 `install: QApplication.__init__ wrapped (v27-shim)` → `create_bar: visible=True size=12x96 form=edge_bar edge=left`（18:02:17），左缘截屏确认贴边长条与灯带正常。**踩坑记录**：v27 曾静默不显示悬浮条，根因是重打包脚本误用了仓库原版 `floatbar.py`（无 shim——仓库走 `pet/app.py main()` 接线，而 exe 的 PYZ 里是 v16 基线的 `pet.app`，没有该接线）；修复为向打包用模块尾部追加 v27-shim（包装 `QApplication.__init__`，`QTimer.singleShot(800ms)` 建条）后再打包。重打包链路必须保证注入 PYZ 的副本带 shim，直接拿仓库文件打包会得到「模块存在但从不安装」的静默失败。
 21. **实机安装验证 v30（修复真实频谱回落到程序化波形）**：v28 上 `_viz_levels` 恒走程序化正弦。根因是重打包链路漏注入采集模块：`repack_exe.py`（v27/v28 使用）只写 `pet_music_floatbar`，exe 的 PYZ 里查不到 `pet.music.spectrum`（1893 个条目，music 族只有 `detect/foobar/lyric/lyric_controller/now_playing/players/settings/title/floatbar`），`_spectrum_class()` 抛 `ImportError` 后 `_spectrum_failed=True`，该实例此后永不重试采集。修复改用 `repack_v12.py`（一次注入 `pet_music_floatbar` / `pet.music.floatbar` / `pet.music.spectrum`），以 v28 安装版为源重打包 `dsh-pet-patched-v30.exe`（17 155 656 字节、`pyvers 311`、PYZ 1894 个条目），校验 `pet.music.spectrum` 与 shim 的 `_shim_setup_logging` 均在包内。同时给打包副本 `install()` 补 `pet_music_floatbar` logger 的 `FileHandler`——此前 v27-shim 不配置 logging，`_log`/`_log_error` 不落盘，导致「采集失败」只能靠肉眼观察。覆盖安装后 WMI 启动 `pid 44648`，日志 `create_bar: visible=True size=12x96 form=edge_bar edge=left`；鼠标悬停贴边条 → 拖离 → 点击展开胶囊，18:24:58 日志出现 `spectrum: capture started`（首证采集线程真正起来），间隔 2 s 的两帧截图 `v29_viz_c/d.png` 显示胶囊内 30 根彩虹频谱在变化。
 22. **实机安装验证 v31（声波环线宽减半）**：`dsh-pet-patched-v31.exe`（17 299 255 字节、`pyvers 311`），以 v30 安装版为源重打包；`ruff check` 全通过、`pytest tests/test_music_floatbar.py` `61 passed in 4.90s`。覆盖安装后 WMI 启动 `pid 8124`，日志 `create_bar: visible=True size=12x96 form=edge_bar edge=right`；右缘贴边条悬停展开黑胶面板（`1548,190 159×64`），播放时连续 4 帧抓图（间隔 0.4 s）第 4 帧捕获到 `spectrum` 电平驱动的三条橙色声波流线（`v31b_4.png`，8× 放大 `v31b_4_8x.png`）：三条波线彼此分离、线宽明显细于改动前，盘面纹槽不再被粗带遮住。
+23. **实机验证 v13 轮（源码运行，2026-11-23）**：本机改为源码运行（`.venv` Python 3.13.9 + `%TEMP%\run_pet_source_venv.py`，pid 49392/38076）。修前：曲名能滚动但播放键恒为「播放」、无频谱——`.venv` 缺 `winrt`（`winrt.WINDOWS` 不可导入），补装 `requirements.txt` 里的五个 winrt 包后 `get_now_playing()` 立刻返回 `app_id='cloudmusic.exe' playing=True`（曲名恢复）。播放态仍不亮，用「先 `reset_session_probe()` 再读」的探针实测复现缓存 `None → _is_anything_playing()=False`，问一声后 `((1, False, True)) → True`（根因见第十三轮第 24 条）。改后续活探针重启（pid 2696/53232），胶囊截屏 `play_state_after_fix.png`：暂停双竖线（播放态）、40 条彩虹频谱随音乐起伏、标题显示「云顶之弈S10赛季『强音争霸』混音…」，与 SMTC 会话一致。`pytest tests/test_music_floatbar.py` `62 passed`、`ruff check` 通过、`pytest -k "session_probe or song_session or now_playing"` `73 passed / 1 skipped`。
 
 ## 测试门
 
@@ -263,8 +277,8 @@
 | --- | --- | --- |
 | 语法编译 | `python -m py_compile pet/music/floatbar.py pet/app.py` | PASS |
 | 静态检查（全仓） | `ruff check .` | PASS —— `All checks passed!` |
-| 新增单测 | `pytest tests/test_music_floatbar.py -q` | PASS —— `61 passed in 5.94s`（`QT_QPA_PLATFORM=offscreen`；第二~十一轮共补 38 个用例） |
-| 交付纪律 + 架构守卫 | `pytest tests/test_pr_report_discipline.py tests/test_architecture.py tests/test_music_floatbar.py -q` | PASS —— `308 passed` |
+| 新增单测 | `pytest tests/test_music_floatbar.py -q` | PASS —— `62 passed in 3.93s`（`QT_QPA_PLATFORM=offscreen`；第二~十二轮共补 39 个用例） |
+| 交付纪律 + 架构守卫 | `pytest tests/test_pr_report_discipline.py tests/test_architecture.py tests/test_music_floatbar.py -q` | PASS —— `308 passed`（第十一轮口径；第十二/十三轮改动后单测 62 passed，会话探针相关族 `73 passed / 1 skipped`） |
 | 全量单测 | `pytest -q` | **8884 passed / 169 failed / 32 skipped**（1562 s）。169 个失败全部来自本机环境，与本次改动无关，见下。**注**：该次全量跑在第一轮；后续迭代只改了 `pet/music/floatbar.py`、新增 `pet/music/spectrum.py` 与对应测试，已重跑 `py_compile`、`ruff check .` 与上面三行门禁（第十一轮后 `308 passed`），未再跑全量（改动不触及共享模型 / 生命周期 / 打包 / 平台分支之外的面） |
 
 全量失败归因（已做基线对照：`git stash push -- pet/app.py` 后复跑同族，失败数逐项相同）：
